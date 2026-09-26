@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -153,23 +154,42 @@ func TestAChainOfInvisibleItemsIsLinear(t *testing.T) {
 // stretch's text a leaf at a time with +=, which copies the whole of it for
 // every leaf.
 //
-// The pass is timed on its own, over a paragraph built beforehand, in a
+// The pass is measured on its own, over a paragraph built beforehand, in a
 // language with no phrase model: the stretch is still gathered — auto-phrase
 // asks for it — and nothing else the pass does is large enough to hide it.
+//
+// What is measured is the bytes the pass allocates, because the defect is a
+// copy: the += allocated the stretch again for every leaf, n²/2 bytes, where
+// the pass otherwise allocates a list of the leaves and the stretch's text once.
+// It was timed, over the same twenty thousand leaves and eighty thousand, and
+// read 4.4 on a workstation and 8.0 to 9.9 on every GitHub runner. The work
+// was linear; the tree of eighty thousand boxes is twenty-five megabytes, and
+// the runner's cache held the smaller tree and not the larger, so each leaf
+// cost twice as much at the larger size. The same timing reads 8.3 to 11.1 on
+// a workstation at five thousand leaves and twenty thousand, which is where
+// its cache sits. The bytes are the same number on every machine.
+//
+// The sizes are the large ones on purpose. A list grown by append allocates
+// about twice its length while it is small and about five times once the
+// runtime grows it by a quarter at a time, so below some tens of thousands of
+// leaves the bytes of linear work grow faster than the leaves: five thousand
+// against twenty thousand reads 6.5. Here it reads about four and a half, and
+// the += planted back reads sixteen.
 func TestTheSeparatorPassIsLinear(t *testing.T) {
-	built := map[int]*Box{}
-	requireLinear(t, "the phrase separator pass", 20000, func(n int) {
-		p, ok := built[n]
-		if !ok {
-			b := Build(Input{
-				HTML: `<p id="p" lang="en">` + strings.Repeat("<b>a</b>", n) + `</p>`,
-				CSS:  []Stylesheet{{Source: `p { word-space-transform: ideographic-space auto-phrase }`}},
-			})
-			p = findBox(t, b.Root, "p")
-			built[n] = p
-		}
-		(&boxBuilder{rec: NewRecorder(nil)}).phraseSeparatorsAtABoxEdge(p)
-	})
+	pass := func(n int) func() {
+		b := Build(Input{
+			HTML: `<p id="p" lang="en">` + strings.Repeat("<b>a</b>", n) + `</p>`,
+			CSS:  []Stylesheet{{Source: `p { word-space-transform: ideographic-space auto-phrase }`}},
+		})
+		p := findBox(t, b.Root, "p")
+		return func() { (&boxBuilder{rec: NewRecorder(nil)}).phraseSeparatorsAtABoxEdge(p) }
+	}
+	const n = 20000
+	if r := costtest.Allocated(t, "the phrase separator pass", pass(n), pass(4*n)); r > 8 {
+		t.Errorf("the phrase separator pass over %d leaves allocated %.1f times what it "+
+			"did over %d; linear is about four, and a copy of the stretch per leaf "+
+			"is sixteen", 4*n, r, n)
+	}
 }
 
 // TestTheCommonBoxOfNeighboursIsNear: two boxes side by side deep in a tree
@@ -211,25 +231,38 @@ func TestTheCommonBoxOfNeighboursIsNear(t *testing.T) {
 // TestABreakAtTheFarEndOfAChainIsFoundOnce: whether two runs may share a glyph
 // asks whether a break opportunity lies between them, and it walked every item
 // between them to find out — for every run of a chain of invisible ones, each
-// of which has the same neighbour at the far end, where the break is.
+// of which has the same neighbour at the far end, where the break is. Planted,
+// the walk reads as 14.4.
+//
+// Timed through costtest.TimeCopies. An item is half a kilobyte, so the chain
+// of eight thousand is four megabytes and the chain of two thousand one, and
+// with memory being streamed on the machine's other cores — which is what a
+// shared runner is — the smaller chain stayed in the cache and the larger did
+// not, and the linear walk read as 7.5 to 12.3 at this size and smaller ones
+// alike. Four chains of the smaller size are the larger's memory.
 func TestABreakAtTheFarEndOfAChainIsFoundOnce(t *testing.T) {
 	face := joiningFace(t)
-	made := map[int][]inlineItem{}
-	requireLinear(t, "a break at the end of a chain", 2000, func(n int) {
-		items, ok := made[n]
-		if !ok {
-			items = append(items, inlineItem{Text: "a", Face: face, Width: 100})
-			for k := 0; k < n; k++ {
-				items = append(items, inlineItem{Text: "⁠", Face: face})
+	chain := func(n int) func() {
+		var items []inlineItem
+		items = append(items, inlineItem{Text: "a", Face: face, Width: 100})
+		for k := 0; k < n; k++ {
+			items = append(items, inlineItem{Text: "⁠", Face: face})
+		}
+		items = append(items, inlineItem{Text: "b", Face: face, Width: 100, BreakBefore: true})
+		return func() {
+			g := mergeGroupTexts(items, contextNeighbours(items), func() runText { return newRunText(items) })
+			if !g.empty() {
+				t.Fatal("runs with a break between them were grouped")
 			}
-			items = append(items, inlineItem{Text: "b", Face: face, Width: 100, BreakBefore: true})
-			made[n] = items
 		}
-		g := mergeGroupTexts(items, contextNeighbours(items), func() runText { return newRunText(items) })
-		if !g.empty() {
-			t.Fatal("runs with a break between them were grouped")
-		}
-	})
+	}
+	const n = 2000
+	c := costtest.TimeCopies(t, "a break at the end of a chain",
+		func(int) func() { return chain(n) }, chain(4*n))
+	if c.Ratio > 8 {
+		t.Errorf("a break at the end of a chain: four times the input took %v; linear "+
+			"work is about four, and quadratic is about sixteen", c)
+	}
 }
 
 // neighbourByWalk is the neighbour walk as it was, one run at a time: the

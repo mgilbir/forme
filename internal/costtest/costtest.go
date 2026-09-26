@@ -15,8 +15,10 @@
 //     does — a work budget charged per step, a matcher's steps, a font's
 //     budget — the count is the same number on a laptop, on a shared CI runner
 //     and under the race detector, and nothing the machine is doing can move
-//     it. A test that can count should. The engine is not instrumented for its
-//     tests, though: work nothing counts is timed.
+//     it. A test that can count should. The heap counts one thing for every
+//     test, the bytes allocated (Allocated), and that is the count for a
+//     defect that copies. The engine is not instrumented for its tests,
+//     though: other work nothing counts is timed.
 //   - Timed (Time). A time is spoiled by whatever else the machine is doing,
 //     and every way a busy machine spoils one reads as a steeper curve — the
 //     rest of the suite runs beside these tests, and a CI runner is shared. A
@@ -24,6 +26,20 @@
 //     running beside it, when it was the least of three single calls of a
 //     few milliseconds each. Time closes each of the ways that happened; see
 //     its comment.
+//
+// One way a time is spoiled is not the machine's load, and Time cannot close
+// it: the cache. Work whose input fits in the processor's cache at n and not
+// at 4n pays more for each step at the larger size although it does no more
+// steps, and linear work reads as eight. Where that happens depends on the
+// machine's cache, and on how much of it the machine's other work is using,
+// and not on the code: the phrase separator pass read as 4.4 on a workstation
+// and 8.0 to 9.9 on every GitHub runner. So a timed test does one of three
+// things. It counts instead, where what the defect grows can be counted
+// (Allocated, for a copy). It times an input it reads and keeps with
+// TimeCopies, which gives the smaller side the larger's memory. Or, where each
+// call makes its memory afresh, it keeps the larger size to a few hundred
+// kilobytes, which the level-two cache of every processor these tests run on
+// holds.
 package costtest
 
 import (
@@ -156,6 +172,51 @@ func Time(t testing.TB, what string, small, large func()) Result {
 	return r
 }
 
+// Copies is how many inputs of the smaller size TimeCopies goes through: the
+// larger input is four times the smaller, so four of the smaller are as much
+// memory as one of the larger.
+const Copies = 4
+
+// TimeCopies is Time for work whose input is too large for the processor's
+// cache to hold four times over. small(k) makes the k-th of Copies distinct
+// inputs of the smaller size and returns the work on it; each call of the
+// smaller side does the work on the next of them in turn. large is the work on
+// the one input of the larger size.
+//
+// A time is a count of steps multiplied by what a step costs, and what a step
+// costs depends on whether what it reads is still in the cache. Measured on
+// one input, the smaller side reads the same memory call after call, and an
+// input that fits the cache at n and not at 4n pays less for each step at the
+// smaller size: linear work reads as eight, where the cache happens to end,
+// which depends on the machine and on what else is running and not on the
+// code. Four inputs of the smaller size are the larger's memory, gone through
+// one after another, so each call of either side finds the cache holding what
+// the calls before it read and not its own input, and the two sides pay alike
+// for a step. Nested bordered spans, a line of a thousand against one of two
+// hundred and fifty, read as 5.5 to 8.6 timed on one input with memory being
+// streamed on the machine's other cores, and 3.3 to 4.5 through this. It
+// narrows what the machine can do to a ratio and does not end it: the same
+// streaming still moves a chain of eight thousand items as far as 8.0.
+//
+// What it does not equalise is memory the work makes for itself: a map built
+// afresh by every call is the call's own size at either side.
+//
+// It is for inputs that are read and kept. Work whose memory is made fresh by
+// every call — a document laid out from its markup — cannot be given copies,
+// and keeps its sizes small instead; see the package comment.
+func TimeCopies(t testing.TB, what string, small func(k int) func(), large func()) Result {
+	t.Helper()
+	var work [Copies]func()
+	for k := range work {
+		work[k] = small(k)
+	}
+	next := 0
+	return Time(t, what, func() {
+		work[next]()
+		next = (next + 1) % Copies
+	}, large)
+}
+
 // calls is how many calls of f make one measurement at least Window long,
 // found as testing.B finds its N, by growing it towards what the last
 // measurement predicts; and how long that measurement took.
@@ -205,4 +266,70 @@ func Count(t testing.TB, what string, small, large int64) float64 {
 	t.Logf("%s: %.1f times (%d units of work at the smaller size, %d at the larger)",
 		what, ratio, small, large)
 	return ratio
+}
+
+// Allocations is how many times each side of an allocated comparison is
+// measured, and the least of them is the one kept. See Allocated.
+const Allocations = 3
+
+// Allocated compares the bytes that one call of small and one call of large
+// allocate — the same work at two sizes — and returns the ratio, large to
+// small, logged under what.
+//
+// It is the count for work whose defect is copying. A string grown a piece at
+// a time with +=, a slice copied whole to add one element to it, a prefix
+// taken again for every position: each of those is quadratic in the bytes it
+// allocates before it is quadratic in anything else, and the bytes a call
+// allocates are the same number on any machine, under the race detector, and
+// however large the input is beside the processor's cache. That last is what
+// a time cannot promise. Linear work over a tree of tens of megabytes costs
+// twice as much a node once the tree no longer fits in the cache, so a timed
+// ratio of four becomes eight exactly where the larger input crosses the
+// cache's size, and where that is depends on the machine: the separator pass
+// over twenty thousand leaves and eighty thousand read 4.4 on a workstation and
+// 8.0 to 9.9 on every GitHub runner.
+//
+// It says nothing about work that allocates nothing, so it is only the right
+// measure where the defect being guarded allocates; a walk done twice over is
+// not seen by it at all.
+//
+// The sizes want to be large enough that the linear work's own allocation is
+// proportional to its input, which below some tens of thousands of elements it
+// is not: append doubles a small slice and grows a large one by a quarter, so
+// a list grown an element at a time allocates about twice its length while it
+// is small and five times once it is large, and linear work read as 6.5 at five
+// thousand elements and twenty thousand.
+//
+// The count is the heap's cumulative allocation (runtime.MemStats.TotalAlloc)
+// before and after one call, which is exact for the goroutine making it and is
+// spoiled only by what another goroutine allocates in the meantime: the least of
+// Allocations measurements is kept, because that can only add. Both are called
+// once before anything is measured, as Time does, so that a table built lazily
+// on the first call is not counted as the work.
+func Allocated(t testing.TB, what string, small, large func()) float64 {
+	t.Helper()
+	small()
+	large()
+	a, b := uint64(math.MaxUint64), uint64(math.MaxUint64)
+	for range Allocations {
+		a = min(a, allocatedBy(small))
+		b = min(b, allocatedBy(large))
+	}
+	if a == 0 {
+		t.Fatalf("%s: a call at the smaller size allocated nothing, so there is "+
+			"nothing to compare the larger with", what)
+	}
+	ratio := float64(b) / float64(a)
+	t.Logf("%s: %.1f times (%d bytes allocated at the smaller size, %d at the larger)",
+		what, ratio, a, b)
+	return ratio
+}
+
+// allocatedBy is the bytes the heap allocated while f ran.
+func allocatedBy(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
 }

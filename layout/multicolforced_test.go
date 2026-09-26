@@ -336,6 +336,15 @@ func TestForcedBreaksPourInLinearTime(t *testing.T) {
 // TestBalancingWithForcedBreaksIsLinear is the balancing alone, over n
 // breakpoints and a forced break at every other one, into as many columns as
 // that takes: each fit walks the forced breaks beside the breakpoints, once.
+// Planted, a fit asking whether each breakpoint is among the forced breaks by
+// looking through them reads as 17.9.
+//
+// A thousand breakpoints and four thousand, and not four thousand and sixteen
+// thousand. The larger pair is 190 kilobytes at the larger size and several
+// times that under the race detector, which keeps a shadow of every word the
+// test touches, and the race job on a GitHub runner read the linear walk over
+// it as 8.3: a cache that held the smaller input and not the larger. At these
+// sizes both are a few tens of kilobytes, which every cache holds.
 func TestBalancingWithForcedBreaksIsLinear(t *testing.T) {
 	content := func(n int) ([]style.Unit, []style.Unit) {
 		breaks := make([]style.Unit, n)
@@ -348,8 +357,8 @@ func TestBalancingWithForcedBreaksIsLinear(t *testing.T) {
 		}
 		return breaks, forced
 	}
-	sb, sf := content(4000)
-	lb, lf := content(16000)
+	sb, sf := content(1000)
+	lb, lf := content(4000)
 	var hs, hl style.Unit
 	c := costtest.Time(t, "balancing n breakpoints with forced breaks",
 		func() { hs, _ = balancedHeight(sb, sf, len(sf)+1) },

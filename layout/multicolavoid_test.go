@@ -240,25 +240,47 @@ func TestTheEndOfTheContentIsAlwaysABreak(t *testing.T) {
 	}
 }
 
-// TestAvoidZonesAreLinearInTheContent is the cost of the three questions the
-// pour asks: the zones collected from the laid-out content, the breakpoints
-// they leave, and where a column may end, asked once per column. Every box may
-// ask to be kept whole, so none of it may be the breakpoints times the boxes.
-// Measured on the machinery alone, over content laid out once, because at these
-// sizes the layout around it would hide a quadratic term; the boxes are held
-// apart by a margin so that their zones stay separate rather than merging into
-// one.
+// TestAvoidZonesAreLinearInTheContent is the cost of the questions the pour
+// asks of the zones: the breakpoints they leave, and where a column may end,
+// asked once per column. Every box may ask to be kept whole, so none of it may
+// be the breakpoints times the boxes. Planted, a zone looked for by walking the
+// zones rather than by a search reads as 11.5: a walk of a short list costs a
+// step what a search costs, and the plants were 11.4 and 9.9 when this test was
+// written at twice the size.
+//
+// The breakpoints and the zones are collected from content laid out once,
+// before anything is timed, and the questions are timed on their own. They
+// were timed with the collection, which walks the laid-out content: the walk
+// was most of the time, and the fragment tree of two thousand boxes is
+// megabytes where the zones are kilobytes. The collection is one walk of the
+// content, and a fixture of sibling boxes one level deep could not show it
+// walking anything twice; what this fixture can show is the questions.
+//
+// Two hundred and fifty boxes and a thousand, where it was five hundred and two
+// thousand, which read 8.2 on a GitHub runner and 8.6 here with nothing else
+// running. The questions are binary searches asked in order down the content,
+// and a processor learns the branches of a search over a few hundred zones and
+// not over a few thousand: each search took 12ns at a thousand zones and 23ns at
+// two thousand, although it made one more comparison. That is linear work
+// read as eight by the branch predictor, where the sizes fall and not what
+// the code does. A thousand zones are sixteen kilobytes, and a search over them
+// costs what one over two hundred and fifty does. The boxes are held apart by
+// a margin so that their zones stay separate rather than merging into one.
 func TestAvoidZonesAreLinearInTheContent(t *testing.T) {
 	content := func(n int) *Fragment {
 		doc := `<div id="d">` + strings.Repeat(`<div class="k">a<br>b<br>c</div>`, n) + `</div>`
 		return find(t, layoutOf(t, 400, doc, colCSS+`.k { break-inside: avoid; margin-bottom: 10px }`), "d")
 	}
-	ask := func(f *Fragment) func() {
+	ask := func(n int) func() {
+		f := content(n)
+		breaks := sortedBreaks(columnBreaks(f, 0, nil))
+		z := avoidZonesOf(f, func(b *Box) bool { _, ok := columnCount(b); return ok })
+		if z == nil || len(z.zones) != n {
+			t.Fatalf("%d boxes asking not to be broken made zones %v; want %d", n, z, n)
+		}
+		step := upx(t, 50)
 		return func() {
-			breaks := sortedBreaks(columnBreaks(f, 0, nil))
-			z := avoidZonesOf(f, func(b *Box) bool { _, ok := columnCount(b); return ok })
 			allowed := z.allowed(breaks, nil)
-			step := upx(t, 50)
 			for start := style.Unit(0); start < allowed[len(allowed)-1]; start = start.Add(step) {
 				if z.forbids(start.Add(step)) {
 					z.lastAllowed(start, start.Add(step))
@@ -266,8 +288,7 @@ func TestAvoidZonesAreLinearInTheContent(t *testing.T) {
 			}
 		}
 	}
-	small, large := content(500), content(2000)
-	c := costtest.Time(t, "the avoid zones of n boxes", ask(small), ask(large))
+	c := costtest.Time(t, "the avoid zones of n boxes", ask(250), ask(1000))
 	if c.Ratio > 8 {
 		t.Errorf("four times the boxes took %.1f times as long (%v against %v); "+
 			"linear is about four", c.Ratio, c.Large, c.Small)

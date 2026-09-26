@@ -53,9 +53,20 @@ func nestedPaintingLine(depth int) (*layouter, []inlineItem, []style.Unit, []sty
 	return l, items, xs, widths
 }
 
+// TestInlineDecorationsAreLinearInTheNesting records a line and finds its inset
+// carriers, nested and side by side. Planted, the walks this replaced read as
+// 16.6 nested and 11.0 side by side, where recording is linear either way and
+// only the carriers' walk is left to show.
+//
+// Timed through costtest.TimeCopies. A line of a thousand nested spans is three
+// thousand items of half a kilobyte, and with memory being streamed on the
+// machine's other cores — which is what a shared runner is — the linear
+// recording of one line read as 5.5 to 8.6, and the side-by-side one as 6.5
+// to 9.3: the smaller line stayed in the cache between calls and the larger
+// did not. Four lines of the smaller size are the larger's memory.
 func TestInlineDecorationsAreLinearInTheNesting(t *testing.T) {
-	record := func(depth int) func() {
-		l, items, xs, widths := nestedPaintingLine(depth)
+	record := func(line func(int) (*layouter, []inlineItem, []style.Unit, []style.Unit), n int) func() {
+		l, items, xs, widths := line(n)
 		return func() {
 			l.inlineDecorations = 0
 			d := &inlineDecor{l: l}
@@ -63,7 +74,8 @@ func TestInlineDecorationsAreLinearInTheNesting(t *testing.T) {
 			d.insetCarriers()
 		}
 	}
-	c := costtest.Time(t, "a line of nested bordered spans", record(250), record(1000))
+	c := costtest.TimeCopies(t, "a line of nested bordered spans",
+		func(int) func() { return record(nestedPaintingLine, 250) }, record(nestedPaintingLine, 1000))
 	if c.Ratio > 8 {
 		t.Errorf("recording 250 nested painting spans took %v and 1000 took %v, a factor "+
 			"of %.1f: linear is four and a walk of the chain per item is sixteen",
@@ -72,16 +84,8 @@ func TestInlineDecorationsAreLinearInTheNesting(t *testing.T) {
 	// Side by side rather than nested: the chains are one box long, so
 	// recording is linear however it is done, and what is left is giving each
 	// box its insets — which walked every piece for every box.
-	siblings := func(n int) func() {
-		l, items, xs, widths := sideBySidePaintingLine(n)
-		return func() {
-			l.inlineDecorations = 0
-			d := &inlineDecor{l: l}
-			d.addLine(0, items, xs, widths, 0, 0, nil, 1)
-			d.insetCarriers()
-		}
-	}
-	c = costtest.Time(t, "a line of bordered spans side by side", siblings(1000), siblings(4000))
+	c = costtest.TimeCopies(t, "a line of bordered spans side by side",
+		func(int) func() { return record(sideBySidePaintingLine, 1000) }, record(sideBySidePaintingLine, 4000))
 	if c.Ratio > 8 {
 		t.Errorf("1000 painting spans side by side took %v and 4000 took %v, a factor of "+
 			"%.1f: linear is four and a walk of every piece for every box is sixteen",

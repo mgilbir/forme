@@ -289,6 +289,13 @@ func TestSpreadingIsLinearInTheTracksSpanned(t *testing.T) {
 // or two of free space among many tracks shares out as nothing, and every pass
 // after the one that gave nothing is the same pass again. It ran one per
 // track, which is the tracks squared to hand out nothing.
+//
+// Five hundred tracks and two thousand. At two thousand and eight thousand the
+// fixed walk is one pass of a few microseconds over three hundred kilobytes of
+// tracks, and a machine streaming memory on its other cores read that as 9.6 to
+// 14.6: the smaller set of tracks stayed in the cache and the larger did not.
+// Two thousand are eighty kilobytes. Planted — the passes run on after one
+// gave nothing — it reads as 16.3.
 func TestGrowingToLimitsStopsWhenNothingGrows(t *testing.T) {
 	setup := func(n int) ([]gridTrack, []style.Unit) {
 		tracks := make([]gridTrack, n)
@@ -299,13 +306,13 @@ func TestGrowingToLimitsStopsWhenNothingGrows(t *testing.T) {
 		}
 		return tracks, limits
 	}
-	st, sl := setup(2000)
-	lt, ll := setup(8000)
+	st, sl := setup(500)
+	lt, ll := setup(2000)
 	var sf, lf style.Unit
 	c := costtest.Time(t, "growing n tracks to their limits",
 		func() { sf = growToLimits(st, sl, 7) },
 		func() { lf = growToLimits(lt, ll, 7) })
-	wantS, _ := setup(2000)
+	wantS, _ := setup(500)
 	if want := growToLimitsByScan(wantS, sl, 7); sf != want || lf != want {
 		t.Fatalf("the free space left is %d and %d; the full passes leave %d", sf, lf, want)
 	}

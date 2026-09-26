@@ -58,7 +58,15 @@ func TestLangIsAnsweredOncePerElement(t *testing.T) {
 	// Timed, not counted: the matcher's steps count what it compares, and the
 	// walk this is about was a question the matcher asked of the tree, which
 	// nothing counts. See costtest.Time.
-	c := costtest.Time(t, ":lang(tr) on every element of a chain", match(500), match(2000))
+	//
+	// Through costtest.TimeCopies, over four chains at the smaller size: a
+	// chain of two thousand elements of thirty attributes each is a few
+	// megabytes, and with memory being streamed on the machine's other cores a
+	// cache that held the smaller chain and not the larger read the linear
+	// matching as 6.9. Planted — every element's language found by walking to
+	// the root — it reads as 17.7.
+	c := costtest.TimeCopies(t, ":lang(tr) on every element of a chain",
+		func(int) func() { return match(500) }, match(2000))
 	if c.Ratio > 8 {
 		t.Errorf(":lang(tr) on every element of a chain of 500 took %v and of 2000 "+
 			"took %v, a factor of %.1f: linear is four and a walk to the root per "+
