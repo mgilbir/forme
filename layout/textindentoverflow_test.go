@@ -102,3 +102,40 @@ func TestAnOverfullLineWithNoIndentStillHangsOffTheStart(t *testing.T) {
 			"the start", got.Px())
 	}
 }
+
+// TestAnIndentIsNotRoomTheAlignmentCanTakeBackRightToLeft is the rule on a
+// right-to-left line, where the start edge is the right one and so is the
+// margin the indent makes. An indent as wide as the block leaves the content to
+// end at the block's left edge and overflow past it; it may not be pushed back
+// into the indent on the right.
+//
+// The left-to-right rule was applied to both, and on this side it reads the
+// wrong sign: a right-to-left line overflowing to the left has a negative shift,
+// which that rule took for a pull into the margin and zeroed — so the box was
+// drawn from the left edge rightwards, across the indent.
+func TestAnIndentIsNotRoomTheAlignmentCanTakeBackRightToLeft(t *testing.T) {
+	edge := indentedBoxAt(t, `text-align: left`)
+	for _, tc := range []struct {
+		what string
+		css  string
+		want style.Unit
+	}{
+		{"an indent as wide as the block, start-aligned",
+			`direction: rtl; text-indent: 200px`, bgpx(-50)},
+		{"and aligned to the far side, which has no room to give either",
+			`direction: rtl; text-indent: 200px; text-align: left`, bgpx(-50)},
+		{"an indent wider than the block",
+			`direction: rtl; text-indent: 250px`, bgpx(-100)},
+		// With room left the alignment is untouched: the box ends an indent
+		// in from the right, or sits at the left.
+		{"an indent leaving room, start-aligned",
+			`direction: rtl; text-indent: 100px`, bgpx(50)},
+		{"an indent leaving room, left-aligned",
+			`direction: rtl; text-indent: 100px; text-align: left`, bgpx(0)},
+	} {
+		if got := indentedBoxAt(t, tc.css).Sub(edge); got != tc.want {
+			t.Errorf("%s: the box is %v past the content edge, want %v",
+				tc.what, got.Px(), tc.want.Px())
+		}
+	}
+}

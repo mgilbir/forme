@@ -939,7 +939,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// pre-wrap-align tests measure. It is invisible in a left-to-right
 				// document, where the hang follows the content and moves nothing.
 				shift := l.alignLine(b, align, rtl, avail, used)
-				if lineIndent > 0 && shift < 0 {
+				if lineIndent > 0 {
 					// §7.1 makes the indent "a margin applied to the start edge
 					// of the line box", and content is not pulled back into a
 					// margin. An indent that takes the whole width leaves the
@@ -952,7 +952,21 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// hundred pixels set a fifty-pixel box at 150, which is
 					// where no indent at all would have put it, and the suite
 					// writes that document as text-indent-overflow.
-					shift = 0
+					//
+					// The margin is on the start side, which on a right-to-left
+					// line is the right: there the content may end no further
+					// right than avail, and an overfull line runs off to the
+					// left. The left-to-right rule used to be applied to both,
+					// and on this side it reads the wrong sign — a negative
+					// shift is the line correctly overflowing leftwards, and
+					// zeroing it drew a word too wide for an indented
+					// right-to-left first line from the left edge rightwards,
+					// across the indent.
+					if rtl {
+						shift = style.Min(shift, avail.Sub(used))
+					} else {
+						shift = style.Max(shift, 0)
+					}
 				}
 				if !rtl {
 					// §16.1's indent is measured from the line's *start* edge,

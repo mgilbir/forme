@@ -1374,7 +1374,18 @@ const wptEnv = "WPT_TESTS"
 // the whole declaration was dropped as unreadable and the boxes were bare. The
 // slots now ask the value grammar's colour term, which is what the colour
 // longhands were already judged by.
-const wptCleanPassBaseline = 5983
+//
+// **5983 to 5984, for an indent on a right-to-left line**.
+// text-indent/text-indent-with-absolute-pos-child writes its eleven cases twice,
+// the second time in a dir=rtl block, and that half needed two fixes. The
+// first is the static position of an inline-written absolutely positioned
+// box, which was found as though every right-to-left line began at the block's
+// right edge (it moved no reftest on its own). The second is this one: an
+// indent is a margin on the start edge, and the rule that keeps an overfull
+// line out of it was the left-to-right rule on both sides, so it pushed a word
+// too wide for an indented right-to-left line back across the indent.
+// wpt.fyi: Chrome and Safari pass, Firefox fails.
+const wptCleanPassBaseline = 5984
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
