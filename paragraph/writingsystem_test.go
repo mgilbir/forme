@@ -23,6 +23,9 @@ func TestTheScriptSubtagDecidesTheWritingSystem(t *testing.T) {
 		// And the other way, which is why the language alone will not do.
 		{"ja-Latn", WritingSystemOther, "Japanese romanised is written with spaces"},
 		{"ja", WritingSystemJapanese, "no script subtag, so the language answers"},
+		// Hrkt is hiragana and katakana together, and writing-system-line-break-002
+		// tags English text in it and asks for it to be broken as Japanese.
+		{"en-Hrkt", WritingSystemJapanese, "the Japanese syllabaries"},
 		{"ja-JP", WritingSystemJapanese, "a region is not a script"},
 		{"JA", WritingSystemJapanese, "a tag is not case sensitive"},
 		{"zh", WritingSystemChinese, ""},

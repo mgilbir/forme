@@ -108,18 +108,21 @@ func TestTheHoldIsOnlyOnTheCharacterBesideIt(t *testing.T) {
 // TestOnlyAPicturesOwnOpportunityIsHeld.
 //
 // The rule is about the boundary between an atomic inline and a character. An
-// opportunity from anywhere else — a space, most of all — is not one a word
-// joiner after it may take away: UAX #14's LB12a is "[^SP BA HY] × GL", and the
-// space is exactly the exception in it.
+// opportunity from anywhere else — a space, most of all — is not one a no-break
+// character after it may take away: UAX #14's LB12a is "[^SP BA HY] × GL", and
+// the space is exactly the exception in it. (A word joiner is not GL but WJ,
+// and LB11's "× WJ" is an earlier rule than the space's LB18: a word joiner
+// after a space does take the space's opportunity away, which is why the
+// character here is U+202F.)
 //
 // It needs the opportunity to cross a box boundary to be visible, because
 // within one text node the opportunity belongs to the piece rather than to the
 // state, and only the state is what the rule reads.
 func TestOnlyAPicturesOwnOpportunityIsHeld(t *testing.T) {
 	css := widthCSS(2, "")
-	// A backtick string would put the six characters "\u2060" on the page; the
+	// A backtick string would put the six characters "\u202F" on the page; the
 	// character has to arrive as itself.
-	root := layoutOf(t, 10000, "<p id=\"p\">AA <span>\u2060BB</span></p>", css)
+	root := layoutOf(t, 10000, "<p id=\"p\">AA <span>\u202FBB</span></p>", css)
 	got := lineTexts(linesOf(t, root, "p"))
 	if len(got) != 2 {
 		t.Errorf("%d lines, want 2: %q — the break after the space is not the "+

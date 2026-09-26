@@ -88,18 +88,23 @@ func TestTheStrictnessValuesTailorTheDefault(t *testing.T) {
 		{0xFF01, N, N, N, Y, "a fullwidth exclamation mark"},
 		{0xFF1F, N, N, N, Y, "a fullwidth question mark"},
 
-		// Class IN, the inseparable characters, which §5.3 names whole.
-		{0x2025, N, N, N, Y, "a two dot leader"},
-		{0x2026, N, N, N, Y, "a horizontal ellipsis"},
+		// Class IN, the inseparable characters. §5.3's loose allows a break
+		// *between* two of them and nothing more, so a line still may not begin
+		// with one after an ideograph (LB22) under any value; see
+		// inseparable_test.go for the break between two.
+		{0x2025, N, N, N, N, "a two dot leader"},
+		{0x2026, N, N, N, N, "a horizontal ellipsis"},
 
-		// Class PO, the postfixes. UAX #14 has no unconditional rule about them,
-		// so this is the one part of the tailoring that *adds* a prohibition —
-		// and auto, which is untailored, keeps allowing the break.
-		{0x00B0, Y, N, N, Y, "a degree sign"},
-		{0x2030, Y, N, N, Y, "a per mille sign"},
-		{0x2103, Y, N, N, Y, "degrees Celsius"},
-		{0xFF05, Y, N, N, Y, "a fullwidth per cent sign"},
-		{0xFFE0, Y, N, N, Y, "a fullwidth cent sign"},
+		// Class PO, the postfixes. UAX #14's LB23a keeps one with the ideograph
+		// before it — "(ID | EB | EM) × PO" — and loose relaxes that for the
+		// ones of East Asian Width A, F or W in Chinese and Japanese. auto is
+		// UAX #14's answer; it used to allow the break, on the belief that
+		// nothing in UAX #14 forbade it.
+		{0x00B0, N, N, N, Y, "a degree sign"},
+		{0x2030, N, N, N, Y, "a per mille sign"},
+		{0x2103, N, N, N, Y, "degrees Celsius"},
+		{0xFF05, N, N, N, Y, "a fullwidth per cent sign"},
+		{0xFFE0, N, N, N, Y, "a fullwidth cent sign"},
 
 		// Class PR, the prefixes. Nothing forbids a line beginning with one; what
 		// §5.3 says about them is about the other side, and is below.
@@ -159,9 +164,11 @@ func TestAutoIsNotNormal(t *testing.T) {
 
 // TestLooseLetsALineEndAfterAPrefix, which is §5.3's one rule stated the other
 // way round: a currency sign belongs to the figure that follows it, and no
-// other value lets a line come between them.
+// other value lets a line come between them. The text is Chinese, which is
+// what the rule is conditioned on — see breaksBefore.
 func TestLooseLetsALineEndAfterAPrefix(t *testing.T) {
 	breaksAfter := func(r rune, lb LineBreak) bool {
+		lb.ChineseOrJapanese = true
 		text := "中中" + string(r) + "文"
 		pieces, _ := SplitAtBreaks(text, WhiteSpace{Collapse: true, Wrap: true},
 			WordBreak{}, lb, Hyphens{}, WritingSystemOther)

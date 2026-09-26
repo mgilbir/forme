@@ -152,17 +152,18 @@ func TestLineBreakAnywhereOverrulesIt(t *testing.T) {
 // TestAnOpportunityASpaceAlreadyOfferedIsNotWithdrawn.
 //
 // This is LB15c — "SP ÷ IS NU", break before a decimal mark that follows a
-// space, so that "subtract .5" may wrap before the number — and it needs no
-// code. The prohibition is applied where an opportunity is *offered*, and a
-// space offers its own; what this withholds is the one the character before
-// would otherwise have deferred.
+// space, so that "subtract .5" may wrap before the number — which is the one
+// place UAX #14 lets a line begin with an infix separator.
 //
-// It is a test rather than a comment because the two are one line apart in
-// SplitAtBreaks and a later edit could easily make the check cover both.
+// A closing bracket after a space is the other side of it: LB13's "× CP" is an
+// earlier rule than LB18's "SP ÷", so the space's opportunity is not there in
+// front of a bracket. It used to be, because the prohibitions were applied only
+// to an opportunity an ideograph offered; LineBreakTest.txt's "× 0020 × 0029"
+// is the case, 148 times over.
 func TestAnOpportunityASpaceAlreadyOfferedIsNotWithdrawn(t *testing.T) {
 	for _, tc := range []struct{ what, text, want string }{
 		{"a decimal mark after a space", "subtract .5", "subtract |.5"},
-		{"a bracket after a space", "see (a) or )b", "see |(a) |or |)b"},
+		{"a bracket after a space, which LB13 refuses", "see (a) or )b", "see |(a) |or )b"},
 	} {
 		if got := marks(t, tc.text, WordBreak{}, LineBreak{}); got != tc.want {
 			t.Errorf("%s: %s, want %s", tc.what, got, tc.want)

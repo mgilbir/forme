@@ -1,6 +1,9 @@
 package paragraph
 
-import "testing"
+import (
+	"testing"
+	"unicode/utf8"
+)
 
 // Breaking between inseparable characters, CSS Text §5.3.
 //
@@ -49,9 +52,15 @@ func TestLooseBreaksBetweenTwoEllipses(t *testing.T) {
 		{"中中……中", "horizontal ellipses"},
 		{"中中‥…中", "one of each"},
 	} {
-		if got, want := splitLoose(t, tc.text, "loose"), "中|中|"; len(got) < len(want) ||
-			got[:len(want)] != want {
-			t.Errorf("%s under loose: %q", tc.what, got)
+		// Between the two, and nowhere else the other values do not break:
+		// §5.2 relaxes LB22 for "breaks between inseparable characters", so a
+		// line still may not begin with the first of them, and UAX #14's LB31
+		// breaks after the pair under every value.
+		pair := tc.text[len("中中") : len(tc.text)-len("中")]
+		first, _ := utf8.DecodeRuneInString(pair)
+		want := "中|中" + string(first) + "|" + pair[utf8.RuneLen(first):] + "|中"
+		if got := splitLoose(t, tc.text, "loose"); got != want {
+			t.Errorf("%s under loose: %q, want %q", tc.what, got, want)
 		}
 		// The pair is one piece under everything else.
 		for _, v := range []string{"auto", "normal", "strict"} {
@@ -73,7 +82,7 @@ func TestEveryInseparableCharacterIsOne(t *testing.T) {
 			t.Errorf("%#04X is class IN and this engine does not think so", r)
 		}
 		pair := "中中" + string(r) + string(r) + "中"
-		if got := splitLoose(t, pair, "loose"); got != "中|中|"+string(r)+"|"+string(r)+"中" {
+		if got := splitLoose(t, pair, "loose"); got != "中|中"+string(r)+"|"+string(r)+"|中" {
 			t.Errorf("%#04X under loose: %q, want a break between the two", r, got)
 		}
 	}

@@ -418,6 +418,17 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// code that sees the next character decides.
 			state.AfterAtomic = true
 			state.AfterBinding = false
+			// It is CSS's opportunity and not UAX #14's, so it is not left
+			// marked as one the next character decides — which the text before
+			// the picture may have left it as.
+			state.AfterDeferred, state.AfterHeld, state.AfterDecided = false, false, false
+			// And UAX #14's rules begin again after it, as they do at the start
+			// of the paragraph: see paragraph.BreakContext.AfterObject. The
+			// character before the boundary is not the one before the picture
+			// either — there is none, and the next box's scan would otherwise
+			// rebuild the context from it.
+			state.AfterContext = state.AfterContext.AfterObject()
+			state.AfterRune, state.AfterBase = 0, 0
 			continue
 		}
 		if child.IsText() {
@@ -494,7 +505,7 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			state.AfterBox = child
 			state.AfterAtomic = false
 			state.AfterBinding = false
-			state.AfterDeferred = false
+			state.AfterDeferred, state.AfterHeld = false, false
 			continue
 		}
 		if child.Outer == OuterInline {
@@ -556,6 +567,10 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 				// on the boundary does not make two spaces into one space each.
 				lead.BreakBefore = state.BreakOpportunity
 				state.BreakOpportunity = false
+				// And the boundary is spent: the text inside the box would
+				// otherwise ask UAX #14 about it again from AfterContext, and put
+				// the break back between the margin and the word.
+				state.AfterDecided = true
 				out = append(out, lead)
 			}
 			before := len(out)
@@ -882,12 +897,21 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	orthography := l.orthographyAt(boxElement(b))
 	boundaryNoWrap, boundaryBreakSpaces := l.boundaryWhiteSpace(b, ws, in)
 	carried := paragraph.Carried{
+		Context: in.AfterContext, Decided: in.AfterDecided, Orthography: orthography,
 		Offered: in.BreakOpportunity, Deferred: in.AfterDeferred,
 		Held: in.AfterHeld, Taken: in.AfterTaken, Prev: in.AfterRune,
 		PrevBase:       in.AfterBase,
 		Before:         in.AfterText,
 		PhraseBefore:   in.AfterPhrase,
 		SpaceMayTakeIt: boundaryBreakSpaces,
+	}
+	// And what follows this box, where UAX #14's rules at its last characters
+	// read past its end: "× QU_Pf" asks what follows a quotation mark, "PR × OP
+	// NU" what follows a bracket. Asked only where one of the last two units
+	// begins with a character those rules are asked in front of, which is
+	// almost never. See paragraph.NeedsLookahead.
+	if paragraph.NeedsLookahead(b.Text) {
+		carried.Ahead = l.lookaheadAfter(b)
 	}
 	// And the other direction, which is read off the tree rather than carried:
 	// what follows this box has not been walked yet, so there is nothing to have
@@ -900,10 +924,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if n := dictionaryLookahead(lastRuneOf(b.Text)); n > 0 {
 		carried.After = l.textAfter(b, n)
 	}
-	// And the one character three of the scan's own arms need, which is the
-	// same walk for a different question: a hyphen at the end of a box takes an
-	// opportunity unless white space follows it, and the white space is in the
-	// next box. Asked only of the characters whose arms look — see
+	// And the one character the scan's soft hyphen arm needs, which is the same
+	// walk for a different question: a soft hyphen at the end of a box marks
+	// its piece for a hyphen unless white space follows it, and the white space
+	// is in the next box. Asked only where the box ends in one — see
 	// NeedsFollowingCharacter — so the walk does not happen for a document
 	// without one.
 	if needsFollowingCharacter(lastRuneOf(b.Text), lb, hy) {
@@ -991,99 +1015,6 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// the span.
 	noWrap := !ws.Wrap
 	for i, p := range pieces {
-		// §5.2's break-all treats every alphabetic, numeric and ideographic
-		// character in this box as ID — and that includes the first one. UAX #14
-		// allows a line to end between whatever precedes an ID and the ID itself,
-		// so "aaaaaaa<span style='word-break: break-all'>bbb</span>" may break at
-		// the span even though the run before it may not be broken inside.
-		//
-		// SplitAtBreaks cannot see that boundary: it is given one box's text, and
-		// this boundary has a character on each side of it in two different
-		// boxes. So the box that changed the class is the one that says so, which
-		// is also the right place for it — the value is the *later* character's,
-		// and the later character is this one.
-		//
-		// line-break: anywhere used to be here for the same reason and a
-		// stronger one — §5.3 puts an opportunity around every typographic
-		// character unit, and the edge of an inline box is not an exception it
-		// carves out — and it has gone, because the scan now does it. Handing
-		// SplitAtBreaks the boundary gave it a first character with text in
-		// front of it, and its own "anywhere" arm offers the opportunity there
-		// like anywhere else. Measured rather than reasoned: removing the value
-		// from this branch moves no test and no reftest, and
-		// TestBreakAllAtABoxEdgeAsksBothPairRules holds the three shapes it is
-		// about.
-		//
-		// A line still may not *begin* with a closing bracket or a non-starter,
-		// which is the rule the branch above applies to an opportunity arriving
-		// from another box — so it is applied to this one too.
-		//
-		// Nor may it *end* after a word joiner, a non-break space or a zero
-		// width joiner, which is the other half of the same paragraph of UAX #14
-		// and was missing. The opportunity this branch makes is between two
-		// characters in different boxes, so both rules have to be asked here or
-		// neither is asked at all: "a&#x200D;b" under break-all is one
-		// unbreakable run — LB8a is "ZWJ ×" — and
-		// "<span>a&#x200D;</span><span>b</span>" was two lines in a box narrower
-		// than a character.
-		//
-		// The index test is the correct reading of the rule and has no test,
-		// which is a different thing from being covered. The rule is about one
-		// boundary — the box's leading edge, the only one SplitAtBreaks could not
-		// see — and every piece after the first already carries the opportunity
-		// from the split itself, so dropping it moves nothing: 5556 clean passes
-		// either way, and no reftest changes its answer. That is recorded here
-		// rather than left as an implied claim.
-		//
-		// The *far* edge is not done, and the reason is that the suite does not
-		// agree with itself about it. UAX #14 allows a line to end after an ID
-		// whatever follows, so the symmetric rule would offer an opportunity
-		// after the last character of a break-all box, and
-		// word-break-break-all-inline-009 asks for exactly that. But
-		// word-break-break-all-inline-007 asks for the opposite over the same
-		// shape — "<span class=test>bbbbbbb</span>cccccc", whose reference puts
-		// the span's last b on the line with "cccccc" and lets it overflow — and
-		// there is no reading of §5.2 that gives both. Implemented with the
-		// non-starter rule applied on the far side, the two trade one for one:
-		// 009 goes clean, 007 goes red, and 5556 stays 5556. So the question is
-		// left where the working group left it — 004, 007 and 010 are all marked
-		// tentative — rather than settled by picking the fixture that suits this
-		// engine.
-		if i == 0 && wb.BreakAll && !p.Space &&
-			!mayNotBeginLine(p.Text, lb) &&
-			!gluedPair(in.AfterRune, firstRuneOf(p.Text)) {
-			state.BreakOpportunity = true
-		}
-		// An ideograph that begins a box, which is the ideograph rule's other
-		// half arriving at a boundary. UAX #14 allows a line to end between a
-		// letter or a number and an ideograph, and SplitAtBreaks offers that
-		// opportunity inside a run — but it is given one box's text, and this
-		// boundary has a character on each side of it in two different boxes.
-		//
-		// So the box holding the *later* character says so, which is the same
-		// place and the same argument as break-all's rule above. What travels is
-		// only what the earlier character was, which no amount of looking at
-		// this box could recover.
-		//
-		// And glued the same way break-all's rule is, which is the conjunct the
-		// sentence above already implies and this did not have. UAX #14's LB8a,
-		// LB11 and LB12 forbid a break beside a zero width joiner, a word joiner
-		// or a non-breaking glue character wherever one falls, and a box
-		// boundary is nowhere special. "<span>0&#x200d;</span><span>逭</span>"
-		// is the shape: the letter unit in front of the ideograph is the digit,
-		// the character *at* the boundary is a joiner, and a line may not end
-		// after one.
-		//
-		// It was unreachable while endsLetterUnit read the last character,
-		// because a joiner is not a letter unit and the rule declined for the
-		// wrong reason. Reading the last base made the rule right about the
-		// letter unit and left this exposed — FuzzRunTiling found it in the six
-		// minutes after that change.
-		if i == 0 && !state.AfterAtomic && !wb.KeepAll &&
-			state.AfterLetterUnit && startsIdeographic(p.Text) &&
-			!gluedPair(in.AfterRune, firstRuneOf(p.Text)) {
-			state.BreakOpportunity = true
-		}
 		pieceNoWrap := noWrap
 		if i == 0 {
 			pieceNoWrap = boundaryNoWrap
@@ -1121,9 +1052,12 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// §4.1.1's fourth rule: a collapsible space following another
 			// collapses to zero advance width, across an inline boundary as
 			// readily as within one — so "a <span> </span> b" sets one space
-			// and not three. It keeps its break opportunity, which is what the
-			// rule's parenthesis is for.
-			state.BreakOpportunity = true
+			// and not three. It keeps its break opportunity, "if any", which is
+			// what the rule's parenthesis is for — and whether there is one is
+			// UAX #14's LB18 and the character after it, which the scan has
+			// already asked: the piece after the space carries the answer.
+			// Setting one here as well put a break in "a <span> )</span>" that
+			// "a )" does not have.
 			continue
 		}
 
@@ -1279,6 +1213,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		AfterDeferred: trailing.Deferred,
 		AfterHeld:     trailing.Held,
 		AfterTaken:    trailing.Taken,
+		AfterContext:  trailing.Context,
 		AfterRune:     lastRuneOf(b.Text),
 		// What the *next* box's first character has to be segmented with, for
 		// the scripts a dictionary finds the words of. The scan says it, because
@@ -1306,18 +1241,9 @@ func endsBinding(text string) bool {
 	return r != utf8.RuneError && paragraph.BindsToAtomicInline(r)
 }
 
-// startsIdeographic reports whether a piece begins with an ideograph, which is a
-// character a line may begin with and may end in front of — or with a Hangul
-// jamo, which breaks as one between syllables. See
-// paragraph.BreaksLikeAnIdeograph.
-func startsIdeographic(text string) bool {
-	r, _ := utf8.DecodeRuneInString(text)
-	return r != utf8.RuneError && paragraph.BreaksLikeAnIdeograph(r)
-}
-
 // endsLetterUnit reports whether the character before the next boundary is a
-// typographic letter unit that is not itself an ideograph, which is the far side
-// of the boundary startsIdeographic asks about. See inlineState.AfterLetterUnit.
+// typographic letter unit that is not itself an ideograph. See
+// inlineState.AfterLetterUnit.
 //
 // The last *base* character and not the last character, which is the same
 // correction breaks.go's prevBase makes on its side of the boundary and for the
@@ -1707,6 +1633,45 @@ func (l *layouter) textAfter(b *Box, n int) string {
 				// one-byte character further on could still be appended with
 				// the Thai one before it missing from the middle of the text.
 				return out.String()
+			}
+		}
+	}
+	return out.String()
+}
+
+// lookaheadAfter is the text after b as far as UAX #14's rules read past b's
+// last characters.
+//
+// The rules read two units at most — "PR × OP IS NU" is the furthest — and a
+// unit is a character and the combining marks after it, so the walk stops at
+// the second character that is not a mark. The marks are not counted and are
+// not bounded: a unit is as long as the document writes it, and stopping inside
+// one would read its marks as the next unit. The walk is still linear over a
+// paragraph, because the rules ask it only after a character of a few classes
+// and each unit it crosses is crossed on behalf of the two units before it at
+// most.
+//
+// It stops at an atomic inline, which is not text — the rules begin again after
+// one, see paragraph.BreakContext.AfterObject — and at a forced break, which
+// ends the text as far as every rule that looks ahead is concerned: each of
+// them lists the break classes with the end of the text, or neither.
+func (l *layouter) lookaheadAfter(b *Box) string {
+	var out strings.Builder
+	bases := 0
+	for cur := l.nextInContext(b); cur != nil; cur = l.nextInContext(cur) {
+		switch {
+		case cur.Position.outOfFlow() || cur.Float != FloatNone:
+		case cur.Replaced != nil || isAtomicInline(cur) || isForcedBreak(cur):
+			return out.String()
+		case cur.IsText():
+			for _, r := range cur.Text {
+				if !paragraph.ContinuesUnit(r) {
+					if bases == 2 {
+						return out.String()
+					}
+					bases++
+				}
+				out.WriteRune(r)
 			}
 		}
 	}

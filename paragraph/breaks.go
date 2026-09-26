@@ -131,9 +131,10 @@ type Piece struct {
 
 // SplitAtBreaks cuts text at the break opportunities this engine implements.
 //
-// The subset is stated in the file comment. Each rule below is one of UAX #14's,
-// named by what it does rather than by its class letters, and the ones left out
-// are left out loudly — checkScript reports text that needs them.
+// They are UAX #14's, all of it — see uax14.go — with what CSS Text changes
+// about them applied on top, each change named where it is made. The one place
+// the engine knows it gives a poorer answer than it should is the scripts a
+// dictionary breaks, and checkScript reports text that needs one it lacks.
 //
 // It takes the white-space value because two of the rules depend on it: a
 // preserved space is a Piece of its own rather than a collapsed one, and
@@ -165,32 +166,62 @@ func SplitAtBreaks(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, hy Hy
 // here rather than being corrected there. boundarybreak_test.go holds the five
 // defects that made the case.
 type Carried struct {
+	// Context is what UAX #14's rules need of the text before the boundary,
+	// as that text left it: see Trailing.Context. The rules at this text's
+	// first character are asked with it, so the boundary is decided exactly
+	// as it would be inside one run.
+	//
+	// A caller that has no context to give and says only which character came
+	// before — Prev and PrevBase — gets the context of that character alone.
+	Context BreakContext
+	// Ahead is the text after this one, as far as UAX #14's rules look past a
+	// character: "× QU_Pf" asks what follows the quotation mark and "PR × OP
+	// NU" what follows the bracket, and where the character is this text's
+	// last, what follows is in another box. NeedsLookahead says when it is
+	// wanted. Two units are enough, and a unit is a character and the marks
+	// after it — see ContinuesUnit — so it is the text up to the third
+	// character that begins one, however many marks come between.
+	//
+	// Where it ends short of that, the text ends there as far as the rules
+	// are concerned: at the end of the paragraph, at a forced break — which
+	// every rule that looks ahead reads as it reads the end of the text — or
+	// at an atomic inline, which is not text. See BreakContext.AfterObject.
+	Ahead string
+	// Orthography is the language's rules for a word hyphenated inside it,
+	// which decide what a line broken at a soft hyphen begins with. See the
+	// scan, and Orthography.HyphenateBetween.
+	Orthography Orthography
+	// Decided says the caller has already placed the opportunity in front of
+	// this text somewhere else — at the margin edge of an inline box, where
+	// CSS Text §5 puts a break before the first character of a box — so the
+	// rules are not to offer it again between the margin and the text.
+	Decided bool
 	// Offered says the text before left an opportunity at the boundary at all.
 	// The two below say which kind, and are meaningless without it.
 	Offered bool
-	// Deferred says the opportunity has not been through the prohibitions yet:
-	// it was offered by the character before the boundary, and whether a line
-	// may actually begin here is a question about the character after it, which
-	// is this text's first. word-break still gets to suppress it.
+	// Deferred says the opportunity is UAX #14's, which the character after
+	// the boundary — this text's first — decides with Context. The flag is
+	// then only what the text before could say without that character, and
+	// the rules here answer instead of it.
 	Deferred bool
-	// Held says it has been through them once and was *moved* rather than
-	// refused — a prohibition shifts an opportunity past the character a line
-	// may not begin with rather than deleting it. word-break does not get a
-	// second say on the far side of the character that displaced it, which is
-	// what word-break-keep-all-006 asks for.
+	// Held is what Deferred used to be split from, when a prohibition moved
+	// an opportunity one character on rather than refusing it: the rules now
+	// decide each boundary as UAX #14 does, and nothing is moved. It is read as
+	// Deferred is.
 	//
-	// Neither set means the opportunity was *taken*: a space left it, the rules
-	// have had their say, and only LB7 still applies.
+	// Neither set means the opportunity is not UAX #14's to decide — an atomic
+	// inline left it, or a <wbr>, or a hyphenation point — and it is taken here
+	// unless LB7 moves it past a space.
 	Held bool
-	// Prev is the last character before the boundary, for the pair rules and
-	// for the rules that need to know there is any text in front of this at all.
-	// It is zero at the start of a paragraph and nowhere else.
+	// Prev is the last character before the boundary, for the grapheme cluster
+	// rules at it and for a caller that gives no Context. It is zero at the start
+	// of a paragraph, and after an atomic inline, which is not a character.
 	Prev rune
 	// PrevBase is the last *base* character before the boundary: Prev with the
 	// marks and the invisibles stepped over, which is what the rules stated over
-	// typographic character units read — see prevBase in SplitAtBreaksAfter. It
-	// is zero at the start of a paragraph, and where nothing before the boundary
-	// has a base.
+	// typographic character units read, and what a caller that gives no Context
+	// has its context built from. It is zero at the start of a paragraph, and
+	// where nothing before the boundary has a base.
 	//
 	// Prev cannot stand in for it where Prev is a mark, and a box's text may end
 	// in one. "aࠩ踢" under keep-all has an opportunity in front of the
@@ -246,8 +277,8 @@ type Carried struct {
 	// withheld, and written "日本語を勉<a>強します</a>" it was a full opportunity.
 	// Audit C122.
 	PhraseBefore, PhraseAfter string
-	// Taken says the text before this one ended at an opportunity it *took*,
-	// which the rules have had their say over. See Trailing.Taken.
+	// Taken says the text before this one ended at an opportunity CSS gives
+	// whatever the rules say. See Trailing.Taken.
 	Taken bool
 	// Next is the first character of the text that follows this one, or zero
 	// where nothing does.
@@ -314,11 +345,13 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	// Grapheme cluster boundaries, walked in lockstep with the scan.
 	//
 	// It runs for every value of word-break and not only for break-all, because
-	// the rule it enforces is not break-all's: CSS Text §2 puts a soft wrap
-	// opportunity *between* typographic character units, so no opportunity this
-	// function produces may fall inside a cluster. The ideograph rule below used
-	// to produce one — a Hangul syllable followed by its own trailing jamo was
-	// cut in two, which put half a syllable at the end of a line.
+	// the rule it enforces is not break-all's: CSS Text §5's line breaking
+	// details say "CSS never allows soft wrap opportunities within typographic
+	// character units", so no opportunity this function produces may fall
+	// inside a cluster. UAX #14 alone would produce some — it breaks between a
+	// space and a combining mark after it, which LB10 makes a letter of its own —
+	// and the ideograph rule this package had before it cut a Hangul syllable
+	// from its own trailing jamo.
 	//
 	// A Scanner rather than a list of offsets: the scan is already linear, and a
 	// list would allocate one int per character for Latin text, where every
@@ -335,96 +368,48 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	// invalid byte would begin a piece of its own, and a line would be allowed
 	// to start with it.
 	var clusters segment.Scanner
-	// deferBreak says the previous character allows a line to end after it, and
-	// the opportunity has not been taken yet.
-	//
-	// It is deferred because whether the cut is legal depends on the character
-	// that *follows*: only that one says whether the cluster ended. Taking the
-	// opportunity where it is offered is what cut the syllable open.
-	deferBreak := at.Offered && at.Deferred
-	// heldBreak is an opportunity that was offered and moved rather than
-	// refused: the character in front of it is one a line may not begin with, so
-	// the break belongs after that character instead. It is kept apart from
-	// deferBreak because it has already been through the rules once — word-break
-	// does not get to suppress it a second time on the far side of the character
-	// that displaced it.
-	heldBreak := at.Offered && at.Held
-	carried := deferBreak || heldBreak
-	// The character before this one, for the pair rules. See gluedPair.
-	prev := at.Prev
-	// And the same character with the marks and the invisibles stepped over,
-	// for the rules stated over *typographic character units* rather than over
-	// characters. UAX #14's LB9 is the statement of it — "X CM* → X", a
-	// combining sequence takes the class of its base — and §5.1's opportunity
-	// before an ideograph is asked in those terms.
-	//
-	// Asked of prev alone it was not. "0逭" broke between the digit and the
-	// ideograph and "0\u200f逭" did not: a right-to-left mark sets no paper,
-	// takes no room and is not a letter or a number, so the test for what was in
-	// front of the ideograph found a format character and refused. One invisible
-	// character deleted the only opportunity in the text.
-	//
-	// The predicate is autospace.go's, which is the same question — "the
-	// character a boundary is judged by when combining marks stand next to it" —
-	// asked by §8.1 about a gap where this asks by §5.1 about a break. The two
-	// gave different answers to it, which is why it is one function.
-	//
-	// Where the carried character is itself a mark or an invisible this scan
-	// cannot see past the boundary to find the base, so the text before says
-	// what it was. See Carried.PrevBase.
-	prevBase := prev
-	if !AutospaceBase(prevBase) {
-		prevBase = at.PrevBase
-	}
-	if !AutospaceBase(prevBase) {
-		prevBase = 0
-	}
-	// An opportunity the text before this one *took* rather than offered — a
-	// space left it — which the rules have already had their say over. It marks
-	// the first Piece rather than going through the scan, which is what the
-	// switch below does for a space inside a run.
-	//
-	// Taken at the first character rather than here, because LB7 still applies
-	// to it: a line may not end in front of a space, so an opportunity arriving
-	// at one is withheld unless break-spaces says otherwise. Setting it here
-	// broke a run of preserved spaces in two — white-space-mixed-001, whose
-	// spans hand a pre div a space apiece.
-	takenAtStart := at.Offered && (at.Taken || (!at.Deferred && !at.Held))
-	// Whether there is text in front of this one at all, which is what decides
-	// that an opportunity falling at the very first character is a real one.
-	//
-	// The opportunities above travel forward: the previous box says what it
-	// left, and carried is that. This one is made by the *next* box's own first
-	// character and nothing before it knows about it — the rules that put a
-	// break in front of a character rather than after one, which are the
-	// ideograph's, the aksara's, the dictionary's, and break-all's and
-	// anywhere's every-character pair.
-	//
-	// "0ᦤ" is the shape. New Tai Lue is a script this engine has no dictionary
-	// for, so §5.1's fallback puts an opportunity at every typographic character
-	// unit, and the text breaks between the two. Written as
-	// "<span>0</span><span>ᦤ</span>" the opportunity is at the second box's
-	// first character, where cur is empty and the box before left nothing — so
-	// it was dropped, the two spans were one unbreakable run, and a ligature was
-	// free to cross a boundary a line may fall on.
-	//
-	// The paragraph's own first character is excluded by the same test rather
-	// than by a special case: a break in front of the first thing on the first
-	// line is not a break, and Prev is zero exactly there.
-	afterText := carried || at.Prev != 0
 
+	// UAX #14, with what CSS makes of it for this box's values. See uax14.go.
+	//
+	// The context is what the text before this one left, so a rule that looks
+	// back — "OP SP* ×", a number, a pair of regional indicators — looks back
+	// across the boundary as it would inside a run. A caller that says only
+	// which character came before gets the context of that one character, which
+	// is what every rule that reads one unit back needs.
+	tl := lbTailoring{lb: lb, wb: wb}
+	ctx := at.Context
+	if !ctx.Started() && at.Prev != 0 {
+		ctx = contextOf(tl, at.PrevBase, at.Prev, hy)
+	}
+	ctx = ctx.under(tl)
+	// An opportunity the text before this one left that is not UAX #14's to
+	// decide: an atomic inline's, a <wbr>'s, a hyphenation point's, a preserved
+	// space's under break-spaces. It is taken at the first character rather
+	// than here, because LB7 still applies to it — see below.
+	explicit := at.Offered && (at.Taken || (!at.Deferred && !at.Held))
+	// Whether there is text in front of this one at all, which is what decides
+	// that an opportunity falling at the very first character is a real one:
+	// a break in front of the first thing on the first line is not a break.
+	afterText := explicit || ctx.Started()
+
+	// explicitNext says breakNext is an opportunity CSS gives rather than one
+	// the rules found at this boundary — an atomic inline's, a <wbr>'s, a
+	// hyphenation point's, a preserved space's under break-spaces — which is
+	// what the text hands on as Trailing.Taken when it ends there. keepNext says it survives a
+	// white-space piece, which is LB7 moving it past a space: see emit.
+	explicitNext, keepNext := false, false
 	flush := func() {
 		if cur.Len() == 0 {
 			return
 		}
 		out = append(out, Piece{Text: cur.String(), BreakBefore: breakNext, LastResort: giveUpNext})
 		cur.Reset()
-		breakNext, giveUpNext = false, false
+		breakNext, giveUpNext, explicitNext, keepNext = false, false, false, false
 	}
 	// flushHyphen is flush for a piece that ends at a soft hyphen. It is
 	// separate rather than a parameter because every other caller passes false
-	// and a bare boolean argument at nine call sites says nothing about which
-	// end of the line it is about.
+	// and a bare boolean argument says nothing about which end of the line it
+	// is about.
 	flushHyphen := func() {
 		if cur.Len() == 0 {
 			return
@@ -432,15 +417,21 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 		out = append(out, Piece{Text: cur.String(), BreakBefore: breakNext,
 			LastResort: giveUpNext, Hyphen: true})
 		cur.Reset()
-		breakNext, giveUpNext = false, false
+		breakNext, giveUpNext, explicitNext, keepNext = false, false, false, false
 	}
-	// A white-space Piece takes the pending opportunity but does not consume
-	// it: what follows a space may begin a line whatever came before it, and an
-	// earlier version that cleared the flag here lost the opportunity after
-	// "a- b" entirely.
+	// A white-space piece takes the pending opportunity. It consumes one the
+	// rules found, because the boundary after the space is a boundary of its
+	// own and the rules decide it when they reach it: "ab-\u2007cd" may break
+	// after the hyphen, and a no-break space glues the letters after it to
+	// itself. It does not consume one CSS gave: that one belongs after the
+	// space, LB7 being an earlier rule than whatever made it — an earlier
+	// version that cleared the flag here lost the opportunity after "a<img> b".
 	emit := func(p Piece) {
 		p.BreakBefore, p.LastResort = breakNext, giveUpNext
 		out = append(out, p)
+		if !keepNext {
+			breakNext, giveUpNext, explicitNext = false, false, false
+		}
 	}
 
 	for i := 0; i < len(text); {
@@ -461,188 +452,142 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 		if start == 0 && at.Prev != 0 {
 			atBoundary = !clusterContinues(at.Prev, r)
 		}
-
-		// The opportunity that may fall before this character: one deferred from
-		// the character before, or — under break-all, CSS Text §5.2 — one at
-		// every typographic character unit boundary inside a word.
-		//
-		// White space is excluded from break-all's half, and that exclusion is
-		// UAX #14's LB7 rather than a simplification: a line may not end between
-		// a word and the space after it, so the space stays on its word's line.
-		// Without it, "X XX X" in four characters of room breaks after the
-		// fourth — which fits more text and is the wrong answer. The other
-		// separators are excluded with it, which errs towards fewer
-		// opportunities and so overflows a line rather than breaking it in a
-		// place the algorithm did not sanction.
-		// line-break: anywhere is the third source and the widest: §5.3 puts an
-		// opportunity around *every* typographic character unit, so it needs
-		// neither break-all's exclusion of white space nor anything deferred. It
-		// is what makes "X XX X" in four characters of room break after the
-		// fourth — the answer break-all must not give, and the one the suite's
-		// break-spaces-before-first-char-007 asks for by name.
-		// word-break: keep-all withholds the deferred one, and only where the
-		// character it is offered to is a letter.
-		//
-		// §5.2: "implicit soft wrap opportunities between typographic letter
-		// units (or other typographic character units belonging to the NU, AL,
-		// AI, or ID Line Breaking Classes) are suppressed". Both sides have to
-		// be one, which is why this reads the character rather than the value
-		// alone: the opportunity between an ideograph and the comma after it is
-		// not between letter units and is not keep-all's to take. It is not
-		// taken by anyone else either — LB13 moves it past the comma — and what
-		// arrives on the far side is a held one, which is the second term above
-		// and is not offered to keep-all a second time.
-		//
-		// The suite tests each half: word-break-keep-all-005 asks for the break
-		// after U+3000 to survive, -006 for the one after an ideographic comma,
-		// and -011 for every implicit one inside "中文english中文english" to go.
-		// The fourth source is the ideograph rule's other half. An ideograph
-		// defers an opportunity to the character *after* it, and UAX #14 allows
-		// one before it as well: nothing prohibits a break between a letter or a
-		// number and an ideograph, so "abc永" may break either side of the 永.
-		//
-		// It fires only where the character before is a letter unit and is not
-		// itself an ideograph, which is the boundary the deferred half cannot
-		// reach: between two ideographs the deferred opportunity is already
-		// there, and offering a second one at the same place answers nothing and
-		// — measured — costs 63 clean passes, because every opportunity this
-		// grants that a prohibition then refuses is *held* and reappears one
-		// character further on.
-		//
-		// It is here as well as in layout's boundary rule so that the two agree.
-		// The same text has to break the same way whether or not the author
-		// wrote a <span> between the letter and the ideograph.
-		// keep-all used to be a conjunct here and is now handled with the rest
-		// of its prohibition, below: the value relaxes, so what it forbids has
-		// to be *demoted* rather than deleted, and an opportunity deleted at
-		// this line could not be.
-		beforeIdeograph := BreaksLikeAnIdeograph(r) && prevBase != 0 &&
-			!BreaksLikeAnIdeograph(prevBase) && isLetterUnit(prevBase)
-		// And the same shape for the Brahmic scripts, which write without
-		// spaces and whose only opportunity is the boundary between two aksara
-		// clusters. See isAksara: LB28a is a set of prohibitions inside a
-		// cluster and LB31 allows the break between them.
-		//
-		// Offered before rather than deferred after, because a cluster is
-		// several characters and a deferred opportunity survives one: the
-		// boundary wanted is the one in front of the next cluster, and asking
-		// there is asking for it directly. "keep-all" suppresses it for the
-		// reason it suppresses the ideograph's — §5.2 forbids the implicit
-		// opportunities between typographic letter units.
-		beforeAksara := isAksara(r) && prev != 0 && !wb.KeepAll
-		// §5.1's lexical breaking, for the scripts that write no spaces between
-		// their words. Where this engine has the language's vocabulary the
-		// opportunity is at a word boundary and nowhere else — see
-		// DictionaryBreaks — and where it has not, the fallback the section
-		// allows is every typographic character unit, which is the same
-		// boundary for a different reason and is known to be in the wrong
-		// place. UnsupportedScript is what says which of the two a document got.
-		beforeDictionary := NeedsDictionaryBreaking(r) && prev != 0 &&
-			!wb.KeepAll && !wb.Manual
-		if beforeDictionary && HasDictionary(r) {
-			beforeDictionary = dictBreaks[dictAt+start]
+		// After a space, a combining mark or a joiner begins a unit of its own
+		// for line breaking, though UAX #29 puts it in the space's cluster
+		// (GB9). CSS Text lets the typographic character unit be tailored "as
+		// required by typographic tradition ... differently depending on the
+		// operation", and UAX #14 is the tradition for this one: LB9 does not
+		// attach a mark to a space and LB10 makes it a letter of its own, so
+		// the space is where the line ends. white-space-vs-joiners-002 is the
+		// case: "&#x200d;is&#x200d;" between spaces, whose words must wrap as
+		// if the joiners were not there.
+		if ctx.lastRune == ' ' {
+			atBoundary = true
 		}
-		// §5.3's "breaks are allowed ... between inseparable characters (such as
-		// U+2025 and U+2026)", which is an opportunity nothing else here makes.
-		//
-		// It is the other half of a sentence whose first half was already
-		// implemented, and the two are easy to mistake for one. A line may
-		// *begin* with an ellipsis under loose, which is UAX #14's LB22 relaxed
-		// and lives in looseBreakRanges — but a relaxed prohibition still needs
-		// an opportunity to relax, and between two ellipses there is none: the
-		// ideograph rule makes one beside 中 and nothing makes one between "‥"
-		// and "‥". So "中中‥‥中" broke in front of the pair and never inside it.
-		//
-		// line-break-loose-015 is the suite's statement of it, and its assert
-		// names the two characters.
-		//
-		// The "loose" test is the rule §5.3 states and no document can see it,
-		// which is worth saying rather than leaving to be rediscovered. Class IN
-		// is in looseBreakRanges, so noBreakBefore forbids a line to begin with
-		// an ellipsis at every other value — an opportunity offered here would be
-		// refused there, and held to the same place it was already held. A
-		// planted defect that dropped the conjunct moved no test and no reftest.
-		// It stays because the two facts come from one table and a rule that
-		// depends on that coincidence is a rule nobody can check.
-		betweenInseparable := lb.Loose && isInseparable(prev) && isInseparable(r)
-		// keep-all's own prohibition, which §5.2 makes a preference rather than
-		// a rule. It is the only one here that is written down as relaxable:
-		//
-		//	In this style, sequences of NU, AL, AI, and ID characters [...] are
-		//	not broken. [...] Note: this value may be relaxed by the UA if there
-		//	are no otherwise-acceptable break points in the line.
-		//
-		// §6.2 says the same from the other side, and the suite's
-		// overflow-wrap-normal-keep-all-001 asserts it with eight ideographs in
-		// a box of no width at all: nowhere else on the line can the break go,
-		// so keep-all gives way and the column comes out one character wide.
-		//
-		// "Relaxed if there is nothing else" is what Piece.LastResort already
-		// means, so this is offered rather than withheld and demoted below —
-		// which is the same two steps the auto-phrase value takes, in the same
-		// order and for the same reason.
-		spaceStops := startsSpacePiece(r, ws)
-		if start == 0 {
-			// LB7 at the boundary, which is a rule about the two characters on
-			// either side of it rather than about the one after — see
-			// betweenTwoSpaces. break-spaces overrules it, which is §3's
-			// sentence: "there is a soft wrap opportunity after every preserved
-			// white space character, including between white space characters".
-			//
-			// It is the only thing SpaceMayTakeIt does. It used to clear
-			// spaceStops as well, so that *any* opportunity reaching the
-			// boundary could be taken in front of a space — and that is more
-			// than §3 says, because §3 is about the opportunity a space leaves.
-			// An ideograph's is not one: "ああ␣" keeps its space on the second
-			// ideograph's line, and written as
-			// "<span>ああ</span><span>␣</span>" it put the space on a line of
-			// its own. Narrowing the clearing to an opportunity a space left
-			// made it dead — no test and no reftest moved either way — so it is
-			// gone rather than kept as a rule that cannot fire.
-			endsInFrontOfASpace := betweenTwoSpaces(at.Prev, r) && !at.SpaceMayTakeIt
-			if takenAtStart && !endsInFrontOfASpace {
-				breakNext = true
+
+		c := tl.char(r)
+		brk, rule := ctx.decide(c, lbAhead{t: tl, rest: text[i:], more: at.Ahead})
+		// A break at a soft hyphen is a hyphenation, and CSS Text's hyphens
+		// says a UA "should apply any appropriate spelling changes just as for
+		// automatic hyphenation at the same point". Where the language takes
+		// the characters after the hyphen off the next line — pinyin's
+		// syllable apostrophe, "tú’àn" as "tú‐" and "àn" — the line would
+		// begin with what follows them, and that is what the rules are asked
+		// about: UAX #14 keeps a quotation mark with what precedes it, and the
+		// apostrophe is not there to be kept (hyphens-i18n-manual-003).
+		if brk == lbProhibited && ctx.lastRune == 0x00AD && hy.Soft() {
+			if drop := at.Orthography.HyphenateBetween("", text[start:]).Dropped; drop > 0 &&
+				start+drop < len(text) {
+				after, _ := utf8.DecodeRuneInString(text[start+drop:])
+				rest := text[start+drop+utf8.RuneLen(after):]
+				probe := ctx
+				brk, rule = probe.decide(tl.char(after), lbAhead{t: tl, rest: rest, more: at.Ahead})
 			}
 		}
-		keptAll := wb.KeepAll &&
-			((deferBreak && isLetterUnit(r) && !spaceStops) || beforeIdeograph)
-		offered := (deferBreak && !(wb.KeepAll && isLetterUnit(r)) && !spaceStops) ||
-			(heldBreak && !spaceStops) ||
-			(wb.BreakAll && !spaceStops) || lb.Anywhere ||
-			beforeIdeograph || beforeAksara || beforeDictionary ||
-			betweenInseparable || keptAll
-		// UAX #14 forbids a line beginning with a closing bracket, a hyphen or
-		// a non-starter, and an opportunity offered in front of one is not one.
-		// See linebreak.go for which rules that is and which it is not.
-		//
-		// line-break: anywhere is exempt, and by name: §5.3 puts an opportunity
-		// around every typographic character unit "including around any
-		// punctuation character or preserved white space", which is a value
-		// whose whole purpose is to overrule this.
-		//
-		// A prohibition *moves* an opportunity rather than deleting one, which is
-		// the whole shape of a pair rule: "× CL" says a line may not begin with a
-		// closing bracket, and says nothing against a line beginning with what
-		// comes after it. So the deferred opportunity is held rather than
-		// dropped, and the next character is asked in its turn.
-		//
-		// Without that, "字字、字字" had a break between the two ideographs and
-		// none after the comma, so a four-character box set it as three
-		// characters and one. word-break-keep-all-006 asks for the two-by-two
-		// square, and the same text answers it at every value of word-break: the
-		// opportunity the comma stands in front of is the one after it.
-		held := false
-		if offered && !lb.Anywhere && noBreakBefore(r, lb) {
-			offered, held = false, true
+		// The boundary in front of this text was already given to a box's
+		// margin edge by the caller — CSS Text §5's "the break occurs
+		// immediately before/after the box (at its margin edge)" — and a
+		// second one here would put a break between the margin and the word it
+		// pushes along.
+		if start == 0 && at.Decided && brk == lbAllowed {
+			brk = lbProhibited
 		}
-		// And the pair rules, which are the other half of the same paragraph of
-		// UAX #14 and are not held: a rule that says a line may not *end* after
-		// this character has nothing to say about the next boundary, so an
-		// opportunity it refuses is gone rather than moved. Holding one forward
-		// would put a break after a no-break space one character further along,
-		// which is the answer the rule exists to prevent.
-		if offered && !lb.Anywhere && gluedPair(prev, r) {
+		offered := brk != lbProhibited
+		// The opportunities a space and a zero width space make, LB18 and LB8,
+		// and the mandatory ones. They are not *implicit*: word-break's keep-all
+		// suppresses only "implicit soft wrap opportunities", and auto-phrase
+		// "must not suppress wrapping opportunities introduced by wbr or ZWSP".
+		separator := brk == lbMandatory || rule == ruleAfterSpace || rule == ruleAfterZW
+		if brk == lbAllowed {
+			offered = !cssRefuses(ctx, c)
+		} else if brk == lbProhibited && rule == ruleHyphenNumber {
+			offered = cssAllowsHyphenNumber(ctx)
+		}
+		// A soft hyphen under "hyphens: none" is not an opportunity. CSS Text
+		// §5.4: "Words are not hyphenated, even if characters inside the word
+		// explicitly define hyphenation opportunities". UAX #14 makes it class
+		// BA, which breaks after; the property of the box the hyphen is in is
+		// the one that decides, and the context carries it.
+		if offered && brk != lbMandatory && ctx.noBreakAfter {
 			offered = false
+		}
+		// §5's lexical breaking, for the scripts that write no spaces between
+		// their words: UAX #14 resolves SA to AL, which never breaks, and CSS
+		// Text says "a lexical resource is needed to correctly identify soft
+		// wrap opportunities in such texts". Where this engine has the
+		// language's vocabulary the opportunity is at a word boundary and
+		// nowhere else — see DictionaryBreaks — and where it has not it is the
+		// fallback §5.1 requires, "a soft wrap opportunity between pairs of
+		// typographic letter units in that writing system", which is known to
+		// be in the wrong place. UnsupportedScript is what says which of the two
+		// a document got.
+		//
+		// Between two such letters and nowhere else. A digit or a Latin letter
+		// in front of Thai is not a pair "in that writing system", and UAX #14's
+		// answer there — AL × AL, NU × AL — stands.
+		if !wb.KeepAll && !wb.Manual && !wb.BreakAll && brk == lbProhibited &&
+			saLetter(ctx.unit.lbChar) && saLetter(c) {
+			offered = true
+			if HasDictionary(r) {
+				offered = dictBreaks[dictAt+start]
+			}
+		}
+		// line-break: anywhere, which is the widest: §5.3 puts an opportunity
+		// around *every* typographic character unit, "disregarding any
+		// prohibition against line breaks", so it needs nothing UAX #14 says.
+		if lb.Anywhere {
+			offered = true
+		}
+		if start == 0 {
+			// LB7 at the boundary, for an opportunity that is not UAX #14's to
+			// decide: a line may not end in front of a space, so the one an
+			// atomic inline or a <wbr> leaves is taken after the space rather
+			// than before it — unless break-spaces overrules LB7, which is §3's
+			// sentence: "there is a soft wrap opportunity after every preserved
+			// white space character, including between white space characters".
+			// See betweenTwoSpaces.
+			endsInFrontOfASpace := betweenTwoSpaces(at.Prev, r) && !at.SpaceMayTakeIt
+			if explicit && !endsInFrontOfASpace {
+				// Past a space, which LB7 says a line may not end in front of;
+				// in front of anything else, here — a no-break space included,
+				// which is content and goes to the next line with what follows.
+				breakNext, explicitNext, keepNext = true, true, r == ' ' || r == '\t'
+			}
+		}
+		// word-break: keep-all, which §5.2 makes a preference rather than a
+		// rule:
+		//
+		//	Breaking is forbidden within "words": implicit soft wrap
+		//	opportunities between typographic letter units (or other
+		//	typographic character units belonging to the NU, AL, AI, or ID
+		//	Unicode line breaking classes) are suppressed [...] Note: this
+		//	value may be relaxed by the UA if there are no otherwise-acceptable
+		//	break points in the line.
+		//
+		// The suite's overflow-wrap-normal-keep-all-001 asserts the note with
+		// eight ideographs in a box of no width at all: nowhere else on the line
+		// can the break go, so keep-all gives way and the column comes out one
+		// character wide. "Relaxed if there is nothing else" is what
+		// Piece.LastResort already means, so the opportunity is demoted rather
+		// than withheld — the same two steps auto-phrase takes below.
+		//
+		// Both sides of the boundary are asked, and both are the typographic
+		// character unit's base: the opportunity between an ideograph and the
+		// comma after it is not between letter units and is not keep-all's to
+		// take (word-break-keep-all-006), and a mark after a letter is part of
+		// the letter.
+		//
+		// Demoted where the text is CJK — where either side breaks like an
+		// ideograph, which is where the value is used and where the suite tests
+		// the relaxation — and withheld outright elsewhere: between two aksara
+		// clusters of Javanese, or a Latin letter and one, keep-all is the
+		// author asking for the word to stay whole, and there is a word
+		// boundary to break at instead.
+		giveUp := false
+		if offered && !separator && !lb.Anywhere && wb.KeepAll &&
+			keepAllUnit(ctx.unit.lbChar) && keepAllUnit(c) {
+			offered = false
+			giveUp = breaksLikeAnIdeographClass(ctx.unit.lbChar) || breaksLikeAnIdeographClass(c)
 		}
 		// §5.2's "auto-phrase", which is keep-all with the phrase boundaries let
 		// back in: the implicit opportunities inside a phrase are withheld and
@@ -653,46 +598,26 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 		// happens here is a demotion: the opportunity stands and every other
 		// opportunity on the line is preferred to it. See Piece.LastResort.
 		//
-		// After the prohibitions, and that is not tidiness. A prohibition moves
-		// an opportunity rather than deleting one, so the place a break may fall
-		// is not always the place it was offered — and it is the place it falls
-		// that a phrase boundary is or is not at. "ドライブ、楽しい" is the shape:
-		// the opportunity after "ブ" is inside a phrase and would be withheld,
-		// UAX #14 will not let a line begin with the comma so it moves past it,
-		// and where it lands is exactly where the model says the next phrase
-		// starts. Ranking it before the move suppressed it, and the line then
-		// broke three characters early.
-		//
 		// line-break: anywhere is exempt, as it is from every other rule here:
 		// §5.3 puts an opportunity around every typographic character unit and
-		// says so in a sentence written to overrule the rest of §5.
-		//
-		// A space, a zero width space and a <wbr> never reach this at all —
-		// they set the opportunity in the switch below rather than offering one
-		// here, which is what word-break-auto-phrase-007 asks for: "UAs must not
-		// suppress wrapping opportunities introduced by wbr or ZWSP".
-		giveUp := false
-		// keep-all's, demoted after the prohibitions for the reason the phrase
-		// demotion below is: a prohibition moves an opportunity rather than
-		// deleting one, and what is being ranked is where the break may fall.
-		if keptAll && offered && !lb.Anywhere {
-			offered, giveUp = false, true
-		}
+		// says so in a sentence written to overrule the rest of §5. So is a
+		// space and a zero width space — word-break-auto-phrase-007: "UAs must
+		// not suppress wrapping opportunities introduced by wbr or ZWSP".
 		if boundary, scored := phrases[start]; scored && !boundary &&
-			offered && !lb.Anywhere {
+			offered && !separator && !lb.Anywhere {
 			offered, giveUp = false, true
 		}
-		if (offered || giveUp) && atBoundary && (cur.Len() > 0 || (start == 0 && afterText)) {
-			if cur.Len() > 0 {
+		if (offered || giveUp) && atBoundary && (start > 0 || afterText) {
+			// A piece that ends at a soft hyphen is marked so, which is what
+			// prints the hyphen when the line ends here. See Piece.Hyphen.
+			if offered && ctx.lastRune == 0x00AD && hy.Soft() {
+				flushHyphen()
+			} else {
 				flush()
 			}
-			breakNext, giveUpNext = true, giveUp
+			breakNext, giveUpNext = true, giveUp && !breakNext
 		}
-		deferBreak, heldBreak = false, held
-		prev = r
-		if AutospaceBase(r) {
-			prevBase = r
-		}
+		ctx.advance(c, hy)
 
 		switch {
 		case IsMandatoryBreak(r):
@@ -700,30 +625,17 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 			// appears, which is not the same thing as a segment break. A
 			// segment break is collapsible — a newline under "white-space:
 			// normal" becomes a space and the line goes on — and these are not:
-			// LB4 and LB5 make the break mandatory, and no value of white-space
-			// is written over them.
+			// LB4 and LB5 make the break mandatory, and CSS Text says so in as
+			// many words: "any Unicode character with the BK and NL line
+			// breaking class, must be treated as forced line breaks".
 			//
 			// They reached here as ordinary characters and were set as ordinary
 			// characters, so "1<FF>2" came out on one line with a notdef box
 			// between the digits. line-breaking-022 writes all five between
 			// spans in a column one character wide and asks for six lines.
 			//
-			// The character is written into the piece that ends the line and
-			// the break is emitted after it, rather than the character being
-			// swallowed the way a newline is. §5.1's note asks for both:
-			//
-			//	Control characters other than [tab, newline] ... are ignored
-			//	for the purpose of ... but are otherwise rendered as a visible
-			//	glyph
-			//
-			// and the suite asks for it twice over, by the same author. Three
-			// of the white-space/control-chars-0XX documents are mismatch
-			// references against a blank page — "U+000C, which is in the
-			// unicode category CC, must be visible" — and line-breaking-022
-			// wants the same character to end a line. Swallowing it satisfies
-			// the second and fails the first three.
-			// Where the character goes, which is the difference between a
-			// control character and a separator.
+			// Where the character goes is the difference between a control
+			// character and a separator.
 			//
 			// §5.1's note is written about the first — "control characters other
 			// than [tab, newline] ... are otherwise rendered as a visible glyph"
@@ -763,9 +675,11 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 			// collapsible one into a space. A CR is folded with the LF that may
 			// follow it, so that text which reached this stage without going
 			// through Phase I — a caller measuring raw content — still counts
-			// one break rather than two.
+			// one break rather than two. The LF goes through the rules too,
+			// which is LB5's "CR × LF": the break is after the pair.
 			if r == '\r' && i < len(text) && text[i] == '\n' {
 				i++
+				ctx.advance(tl.char('\n'), hy)
 			}
 			flush()
 			emit(Piece{Text: "\n", Space: true, Segment: true, EndsBidiParagraph: true})
@@ -774,9 +688,16 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 		case r == '\t' && !ws.Collapse:
 			// A preserved tab is its own Piece because each one advances to its
 			// own tab stop, so two of them are not one run of a doubled width.
+			//
+			// A line may end after it where UAX #14 says so — a tab is class
+			// BA — and after every one under break-spaces, whose opportunity
+			// "after every preserved white space character" is CSS's and not
+			// the rules'.
 			flush()
 			emit(Piece{Text: "\t", Space: true, Tab: true})
-			breakNext = true
+			if ws.BreakSpaces {
+				breakNext, explicitNext, keepNext = true, true, true
+			}
 
 		case IsOtherSpaceSeparator(r):
 			// §4.1's "other space separators". Phase I never saw them — it is
@@ -797,32 +718,28 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 			// rather than hung, which is trimAtEnd. It is still not collapsible —
 			// a run of ogham space marks is a run of stemlines and folding them
 			// into one would shorten the line.
+			//
+			// Whether a line may end after one is UAX #14's — most are class BA
+			// and U+2007 and U+202F are GL, which glues what follows to what
+			// precedes — except under break-spaces, which puts "a soft wrap
+			// opportunity ... after every other space separator (including
+			// between adjacent spaces)". UAX #14 would keep two ideographic
+			// spaces together (× BA), and trailing-ideographic-space-break-spaces
+			// asks for a run of them to wrap one at a time.
+			//
+			// The two GL separators are the exception, and it is the suite's
+			// rather than the sentence's: trailing-other-space-separators-
+			// break-spaces-009 and -013 are those two, the only two of the
+			// fifteen where the answers part company, and both keep what follows
+			// on the line.
 			flush()
 			emit(Piece{
 				Text: text[start:i], Space: true,
 				TrimAtEnd: r == 0x1680 && ws.Collapse,
 			})
-			// §5.3 again, and it is the value's whole purpose: line-break:
-			// anywhere puts an opportunity around every typographic character
-			// unit "including around any punctuation character or preserved
-			// white space", so the classes that would refuse one after this
-			// separator do not get to. U+202F NARROW NO-BREAK SPACE is class GL
-			// and glues what follows it to what precedes it — which is the right
-			// answer everywhere else and is exactly what the value overrules.
-			//
-			// break-spaces is *not* beside it, and used to be. That value puts a
-			// soft wrap opportunity "after every preserved white space
-			// character", and CSS Text means its own term by that: white space
-			// is U+0020, the tab and the segment breaks, and these are the
-			// characters §4.1.2 has to name separately as "other space
-			// separators" precisely because they are not it. Phase I never sees
-			// one and phase II only hangs it; nothing in the value reaches its
-			// line-breaking class, so UAX #14 decides it here as it does
-			// everywhere else. The suite writes the two that differ as
-			// trailing-other-space-separators-break-spaces-009 and -013, which
-			// are the two GL separators and the only two of the fifteen where
-			// the answers part company.
-			breakNext = lb.Anywhere || SeparatorBreaksAfter(r)
+			if ws.BreakSpaces && SeparatorBreaksAfter(r) {
+				breakNext, explicitNext, keepNext = true, true, true
+			}
 
 		case r == ' ' || r == '\t':
 			flush()
@@ -830,22 +747,22 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 				// Phase I already reduced the run to a single space and turned
 				// any tab into one, so there is nothing left to gather.
 				emit(Piece{Text: " ", Space: true, Collapsible: true, TrimAtEnd: true})
-				breakNext = true
 				break
 			}
 			// Preserved. Under pre and pre-wrap the run hangs or wraps as a
-			// unit, so it is one Piece; under break-spaces a line may end after
-			// any single space, so each is its own.
-			// Under pre and pre-wrap the run hangs or wraps as a unit, so it is
-			// gathered — unless line-break: anywhere says a line may end between
-			// any two of them, which is a run that is no longer one thing.
+			// unit, so it is gathered — unless break-spaces or line-break:
+			// anywhere says a line may end between any two of them, which is a
+			// run that is no longer one thing.
 			if !ws.BreakSpaces && !lb.Anywhere {
 				for i < len(text) && text[i] == ' ' {
+					ctx.advance(c, hy)
 					i++
 				}
 			}
 			emit(Piece{Text: text[start:i], Space: true})
-			breakNext = true
+			if ws.BreakSpaces {
+				breakNext, explicitNext, keepNext = true, true, true
+			}
 
 		case r == '​':
 			// A zero-width space is a break opportunity, and it is also a
@@ -858,168 +775,82 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 			//
 			// So it is emitted rather than dropped, and marked ZeroWidth: it
 			// sets no paper and takes no room, so nothing is built from it, and
-			// what it does is stand between its neighbours.
+			// what it does is stand between its neighbours. The opportunity
+			// after it is LB8's, "ZW SP* ÷", which the next character asks.
 			flush()
 			emit(Piece{Text: text[start:i], ZeroWidth: true})
-			breakNext = true
 
 		case BreaksLikeAnIdeograph(r):
-			// CJK breaks between ideographs, which is why it needs no spaces.
+			// An ideograph begins a piece of its own where a cluster begins,
+			// whether or not a line may break in front of it. A piece is what a
+			// line is built of, and the pieces were cut this way when the
+			// ideograph was the only character this package offered an
+			// opportunity around; cutting them the same way keeps a piece from
+			// changing shape under a change that is about where lines may end.
 			//
-			// The opportunity after it is deferred rather than taken, because a
-			// Hangul syllable can be followed by a trailing jamo that belongs to
-			// it and by a combining mark that belongs to it, and neither is a
-			// place a line may end. The next character's boundary decides.
-			//
-			// That is also what makes a syllable spelt in jamo break as a
-			// precomposed one does: every jamo offers the opportunity, and the
-			// grapheme boundary takes it only where one syllable ends and the
-			// next begins. See BreaksLikeAnIdeograph.
-			//
-			// And the piece is cut where the cluster is, for the same reason: a
-			// piece is what a line is built of, and one that began inside a
-			// syllable would carry part of one typographic character unit — a
-			// run of its own, spaced by letter-spacing as a unit of its own.
+			// Not inside a cluster, for the reason the opportunity is not taken
+			// there: a piece that began inside a syllable would carry part of
+			// one typographic character unit — a run of its own, spaced by
+			// letter-spacing as a unit of its own.
 			if atBoundary {
 				flush()
 			}
 			cur.WriteRune(r)
-			deferBreak = true
 
-		case lb.Loose && BreaksAfterUnderLoose(r) && !startsSpace(text, i, at.Next):
-			// §5.3's one rule the other way round: under "loose" a line may end
-			// after a currency sign or a number sign, which belongs to the
-			// figure following it and which no other value lets go of.
-			//
-			// It is written beside the hyphen below because it is the same
-			// shape of rule — a character that ends a run and lets the next one
-			// begin a line — and it carries the same guard: a space after it is
-			// not an opportunity, because the space already is one and a line
-			// may not end in front of it.
-			//
-			// The end of this text is *not* that guard, which is what it used to
-			// ask. A prefix that ends a text node has whatever comes after it in
-			// another box, and the flag this function returns is how the
-			// opportunity gets there — which is what the soft hyphen below says
-			// in full and what every other opportunity here already does. The
-			// suite writes the prefix in an element of its own so that it can be
-			// coloured: line-break-loose-018 is
-			// "サンプル文サンプル<span>€</span>サンプル文", and asking for the
-			// end of the node meant the opportunity was offered in none of its
-			// five pairs.
-			cur.WriteRune(r)
-			flush()
-			breakNext = true
-
-		case (r == '-' || isLatinHyphen(r)) && !startsSpace(text, i, at.Next):
-			// A hyphen ends a run and the next may begin a line — which is what
-			// lets a hyphenated compound break where it is written.
-			//
-			// Including where the next line's half is in another box.
-			// "high-<span>way</span>" and "<span>high-</span>way" are the same
-			// word as "high-way" and have to break the same way; asking for the
-			// end of the *text* rather than for a space after it, they broke
-			// nowhere and the compound overflowed its box. It is the rule the
-			// soft hyphen below states in full, and the two are one rule.
-			//
-			// All three of them. U+002D HYPHEN-MINUS is class HY and U+2010
-			// HYPHEN and U+2013 EN DASH are class HH, and what the classes differ
-			// about is the *start* of a line: see isLatinHyphen, which is the
-			// other half of the same pair and was written first. A line may end
-			// after any of the three, and only U+002D was ending one — so a
-			// document that spells its hyphen with the character meant for it,
-			// which is what "&#x2010;" is for, had its compounds overflow
-			// instead of break.
-			//
-			// It is not the hyphens property's business. §6.1 is about where a
-			// word may be broken *without* a hyphen written in it; a hyphen that
-			// is there is an ordinary break opportunity whatever the value.
-			// hyphens-none-013's assert is that "hyphens: none does not suppress
-			// line wrapping after encountering an actual hyphen character
-			// (U+2010)".
-			cur.WriteRune(r)
-			flush()
-			breakNext = true
-
-		case breaksAfter(r):
-			// UAX #14's class BA: a line may end after this character whatever
-			// follows it. See breaksAfter for which characters those are and
-			// which of the class are handled above instead.
-			//
-			// Deferred rather than taken, for the reason the ideograph arm
-			// gives: the opportunity is at the *next* boundary, and only the
-			// character after this one can say whether a cluster ended there or
-			// whether a rule forbids a line to begin with it. A danda followed
-			// by a closing bracket offers nothing, which is LB13, and the
-			// deferral is what runs that rule.
-			cur.WriteRune(r)
-			deferBreak = true
-
-		case r == 0x00AD && hy.Soft() && !startsSpace(text, i, at.Next):
-			// A soft hyphen. §6.1: the author has marked a place the word may be
-			// broken, and a hyphen is printed there if it is.
+		case r == 0x00AD && hy.Soft() && i == len(text) && !startsSpace(text, i, at.Next):
+			// A soft hyphen at the end of the text. CSS Text's hyphens: a
+			// "conditional hyphenation point", where a hyphen is printed if the
+			// line breaks. Inside the text the piece is cut and marked where the
+			// next character takes the opportunity, above; at the end the next
+			// character is in another box, and it is that box's rules that
+			// decide whether a line may end here — so the piece is marked now,
+			// and the opportunity goes with the context.
 			//
 			// The character stays in the piece rather than being dropped. It
 			// takes no room and sets no paper — every face here shapes it to
 			// nothing, and shape/ignorable.go is where that is decided — so
 			// keeping it costs nothing on the page, and it keeps the text of the
-			// document the text the author wrote. Dropping characters to make
-			// layout tidier is how a paragraph comes out of a PDF missing pieces
-			// of its words.
+			// document the text the author wrote.
 			//
-			// startsSpace and not "the end of this text", which is the rule the
-			// ordinary hyphen above now shares and once did not: the end of
-			// *this text* is not the end of the word. The suite's
-			// hyphens-span-001 writes the same word nine ways —
+			// The suite's hyphens-span-001 writes the same word nine ways —
 			// "<span>high&shy;</span>way", "high<span>&shy;</span>way",
 			// "high&shy;<span>way</span>" — and asks for one answer from all of
-			// them, so a soft hyphen that ends a text node has to offer its
-			// opportunity to whatever box comes next. That is what the returned
-			// flag is for and what every other opportunity here already does.
-			//
-			// A space after it is still not one, for the reason the hyphen above
-			// has: there would be nothing to move to the next line, and a hyphen
-			// printed there would be one in the middle of nothing.
-			//
-			// That conjunct is the correct reading of the rule and has no test,
-			// which is a different thing from being covered. Removing it prints
-			// no hyphen anywhere — a line that ends at a space ends *after* the
-			// space, so the item a hyphen would hang off is never the last one —
-			// and what it does leave is an opportunity in front of a space, which
-			// LB7 forbids and which every path that would use one already
-			// declines. Measured: with the conjunct gone, all 6250 of the suite's
-			// reftests give the same answer, 5388 of them cleanly. It is recorded
-			// here rather than left as an implied claim.
+			// them. A space after it is not an opportunity at all: there would
+			// be nothing to move to the next line.
 			cur.WriteRune(r)
 			flushHyphen()
-			breakNext = true
 
 		default:
 			cur.WriteRune(r)
 		}
 	}
 	flush()
+	// What the boundary after this text will be, as far as this text can say:
+	// whether UAX #14 and CSS would let a line end in front of an ordinary letter
+	// written next. The box that holds the next character decides the boundary
+	// for itself, from the context; this answers the callers that have to say
+	// something before there is a next character — an inline box's margin, which
+	// takes the opportunity in front of it at its edge.
+	probe := ctx
+	next := tl.char('a')
+	end, endRule := probe.decide(next, lbAhead{t: tl})
+	deferred := end != lbProhibited && !cssRefuses(ctx, next) && !ctx.noBreakAfter
+	if end == lbProhibited && endRule == ruleHyphenNumber {
+		deferred = false
+	}
 	return out, Trailing{
 		DictTail:   dictionaryTail(dictSeg, dictBreaks),
 		PhraseTail: phraseTail,
-		Offered:    breakNext || deferBreak || heldBreak,
-		// The three kinds are not exclusive, and the whole of this family's
-		// history is people assuming they are. "|-" ends with a deferred
-		// opportunity the vertical line offered and the hyphen then held — a
-		// line may not begin with a hyphen — *and* with the unconditional one
-		// the hyphen itself takes. Both are at the same offset, which is the
-		// end of the text, and they land in different places: the taken one is
-		// the boundary, and the hold is still looking for a character it is
-		// allowed to fall in front of.
-		//
-		// Saying only the hold lost the break: "|-!" sets two lines and
-		// "<span>|-</span><span>!</span>" set one. Saying only the taken one
-		// lost the hold: "0|-!00" sets three lines and
-		// "<span>0|-</span><span>!00</span>" set two. So all three are said,
-		// and the next box runs whichever of them still has something to do.
-		Taken:    breakNext,
-		Deferred: deferBreak,
-		Held:     heldBreak,
+		Context:    ctx,
+		Offered:    (breakNext && explicitNext) || deferred,
+		// Taken is an opportunity this text left that is not UAX #14's to
+		// decide — a preserved space's under break-spaces — and Deferred is one
+		// the next character decides. Both can be true at
+		// once, and the one CSS gives wins: a preserved space under
+		// break-spaces followed by a closing bracket is an opportunity CSS
+		// gives and one UAX #14 refuses.
+		Taken:    breakNext && explicitNext,
+		Deferred: deferred,
 	}
 }
 
@@ -1031,25 +862,23 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 // that has one box's text and then another's cannot ask them without this,
 // because neither fact can be read back off the text.
 type Trailing struct {
-	// Offered says the text ended at an opportunity the next box may take.
-	//
-	// A deferred one counts, and has to: text ending in an ideograph offers a
-	// break to whatever box comes next, and the character that would have
-	// confirmed it is in that box rather than this one.
+	// Context is what UAX #14's rules need of this text at its end, for the
+	// box that holds the next character: see Carried.Context. It is the only
+	// field the next box's rules read; the rest are for callers that have to
+	// say something about the boundary before there is a next character.
+	Context BreakContext
+	// Offered says the text ended at an opportunity the next box may take:
+	// Taken, or Deferred.
 	Offered bool
-	// Deferred says that opportunity is one the next character may still
-	// refuse. It was *offered* rather than taken, so UAX #14's "a line may not
-	// begin with this character" has yet to run over it — which inside a run is
-	// what turns "字字、字字" into two lines of two rather than three and one.
+	// Deferred says UAX #14 and CSS would let a line end after this text in
+	// front of an ordinary letter. The next character decides for itself from
+	// Context; this is the answer for an inline box's margin, which takes the
+	// opportunity at its edge before its first character is known.
 	//
-	// It cannot be read off the last character, and the attempt to is what this
-	// field replaced. An ideograph defers an opportunity and so does every class
-	// BA character — a danda, a vertical line — while a hyphen does not, because
-	// the arm that handles it takes the opportunity instead, and nor does a
-	// space. Which arm ran is a fact about the scan and not about the character,
-	// and a caller testing the character alone gets the ideographs right and the
-	// rest wrong: "0|!" is one unbreakable run and "<span>0|</span><span>!</span>"
-	// broke in two, because nothing asked LB13 about the exclamation mark.
+	// It cannot be read off the last character, and an attempt to is what an
+	// earlier form of this field replaced: "0|!" is one unbreakable run, and
+	// "<span>0|</span><span>!</span>" broke in two because nothing asked LB13
+	// about the exclamation mark.
 	Deferred bool
 	// DictTail is what the next box needs to be segmented together with this
 	// text, for the scripts whose words a dictionary finds. It is empty for
@@ -1071,28 +900,25 @@ type Trailing struct {
 	// last PhraseContext characters of this text, reaching back into the text
 	// before it where this one is shorter. Empty unless "auto-phrase" asked.
 	PhraseTail string
-	// Taken says the text before this one ended at an opportunity it *took*
-	// rather than offered — a hyphen, a space, a picture — which the rules have
-	// already had their say over.
+	// Taken says the text ended at an opportunity CSS gives whatever UAX #14
+	// says of the character after it: a preserved space's under break-spaces,
+	// which is "a soft wrap opportunity after every preserved white space
+	// character", or one of the separators' it names beside it.
 	//
-	// It is a field rather than the absence of the two below, because a boundary
-	// can be all three at once. See the note where Trailing is returned.
+	// It is a field rather than the absence of Deferred, because a boundary can
+	// be both at once. See the note where Trailing is returned.
 	//
-	// Offered is still the switch over all three. An inline box's own margin
-	// takes the opportunity in front of it and clears the flag — a line may end
+	// Offered is still the switch over both. An inline box's own margin takes
+	// the opportunity in front of it and clears the flag — a line may end
 	// before "<span style='margin-left: 99px'>word</span>" and may not end
 	// between that margin and the word — and reading this one without asking
 	// Offered first put the break back, with the margin left on the line above.
 	Taken bool
-	// Held says the opportunity has already been through the rules once: it was
-	// offered, a prohibition moved it past the character in front of it rather
-	// than deleting it, and the character it lands on is in the next box.
-	//
-	// It is Offered and not Deferred, and the difference is which rules still
-	// get to run. UAX #14's prohibitions run again — a line may begin with
-	// neither of "|!!"'s exclamation marks — but word-break does not, because it
-	// already suppressed or allowed this opportunity where it was offered.
-	// Reporting a held one as deferred is what broke word-break-keep-all-006.
+	// Held is never set. It said an opportunity had been moved past a
+	// character a line may not begin with, which is how this package
+	// approximated UAX #14's pair rules before it ran them; the rules decide
+	// each boundary now and nothing is moved. It is kept because it is part of
+	// what callers outside this package build a Carried from.
 	Held bool
 }
 
@@ -1111,27 +937,6 @@ func isLetterUnit(r rune) bool {
 // IsLetterUnit is isLetterUnit for the layout package, which asks the same
 // question about the character on the far side of a box boundary.
 func IsLetterUnit(r rune) bool { return isLetterUnit(r) }
-
-// startsSpacePiece reports whether a character is one SplitAtBreaks gives a
-// white-space Piece of its own.
-//
-// It is the set break-all's opportunities are withheld before — see the call
-// site — and it is written as a predicate rather than inlined so the two places
-// cannot drift apart: a character that grew a branch below without being added
-// here would silently gain a break opportunity before it.
-func startsSpacePiece(r rune, ws WhiteSpace) bool {
-	switch {
-	case r == '\n' || r == '\r':
-		return true
-	case r == '\t':
-		return true
-	case r == ' ':
-		return true
-	case r == '​':
-		return true
-	}
-	return IsOtherSpaceSeparator(r)
-}
 
 // betweenTwoSpaces reports whether the boundary between prev and r is one the
 // scan would not have broken at inside a run, so a line may not end there.
@@ -1161,12 +966,12 @@ func betweenTwoSpaces(prev, r rune) bool { return prev == ' ' && r == ' ' }
 // startsSpace reports whether white space follows the text at i, where next is
 // the first character of whatever follows the text itself.
 //
-// Three arms are gated on it, and all three are about an opportunity there would
-// be no point taking: a hyphen, a soft hyphen and §5.3's loose-break characters
-// all end a line, and a line that ends in front of white space has nothing to
-// move down to the next one. The gate has to see across a box boundary for the
-// same reason the rest of Carried does — "high-<span> way</span>" is
-// "high- way", and the hyphen in it ends no line.
+// The soft hyphen's arm is gated on it: a line that ends in front of white space
+// has nothing to move down to the next one, so a piece that ends at a soft
+// hyphen with white space after it is not marked for a hyphen. The gate has to
+// see across a box boundary for the same reason the rest of Carried does —
+// "high&shy;<span> way</span>" is "high&shy; way", and the hyphen in it ends no
+// line.
 //
 // It used to answer false at the end of the text, on the grounds that what comes
 // after it is in another box and not this function's to say. That was true when
@@ -1177,7 +982,7 @@ func betweenTwoSpaces(prev, r rune) bool { return prev == ' ' && r == ' ' }
 // "White space" is the kind a line may not end in front of, and it is not
 // unicode.IsSpace, which was the test. That one holds the no-break spaces —
 // U+00A0, U+2007 FIGURE SPACE and U+202F NARROW NO-BREAK SPACE — which are
-// class GL, and UAX #14's LB12a exempts exactly these three arms from GL:
+// class GL, and UAX #14's LB12a exempts a soft hyphen (class BA) from GL:
 // "[^SP BA HY] × GL", so a hyphen or a soft hyphen may end a line in front of a
 // no-break space. The no-break space is content that goes to the next line
 // with what follows it, so ending here moves something down after all. "ab-
@@ -1278,19 +1083,16 @@ func BreaksLikeAnIdeograph(r rune) bool {
 // NeedsFollowingCharacter reports whether the scan's answer for a text ending in
 // r depends on the character after it.
 //
-// Three arms do: the hyphen, the soft hyphen and §5.3's loose-break characters
-// all take an opportunity unless white space follows, and at the end of a box
-// the white space is in the next one. It is asked so that the walk that fetches
-// that character can be skipped for the characters — which is almost all of
-// them — whose arms never look. See startsSpace and Carried.Next.
+// One arm does: a soft hyphen that ends a text marks its piece for a hyphen
+// unless white space follows, and at the end of a box the white space is in the
+// next one. It is asked so that the walk that fetches that character can be
+// skipped for every other character. See startsSpace and Carried.Next.
+//
+// The hyphen and §5.3's loose-break characters asked it too, when they took an
+// opportunity after themselves unless white space followed. UAX #14 decides the
+// boundary after them now, in the box that holds the character after it, and
+// the rules that look further than one character past a box's end read
+// Carried.Ahead instead. The parameters are kept because callers pass them.
 func NeedsFollowingCharacter(r rune, lb LineBreak, hy Hyphens) bool {
-	switch {
-	case r == '-' || isLatinHyphen(r):
-		return true
-	case r == 0x00AD && hy.Soft():
-		return true
-	case lb.Loose && BreaksAfterUnderLoose(r):
-		return true
-	}
-	return false
+	return r == 0x00AD && hy.Soft()
 }

@@ -142,19 +142,15 @@ func TestABoundaryDoesNotLoseABreakTheTextHas(t *testing.T) {
 	}
 }
 
-// TestABoundaryLeavesBothABreakAndAHold is the other half of the test below,
-// and the two together are why Trailing has three fields rather than an enum.
+// TestABoundaryLeavesBothABreakAndAHold is the other half of the test below.
 //
-// "0|-!00" sets three lines in a box narrower than a character: the hyphen takes
-// an unconditional break, and the opportunity the vertical line offered — which
-// the hyphen held, because a line may not begin with one — lands on the "0" that
-// the exclamation mark refused it in front of. Two breaks, from two rules, one
-// of them at the boundary and one of them two characters past it.
-//
-// A box can only say one thing about its far edge, so it says three. Saying only
-// the hold lost the break, which is the test below; saying only the taken one
-// lost the hold, which is this: "<span>0|-</span><span>!00</span>" set two lines
-// where the text sets three.
+// "0|-!00" in a box narrower than a character: UAX #14 refuses a break in front
+// of the vertical line, the hyphen and the exclamation mark (LB21, LB13) and
+// allows the one after the exclamation mark (LB31), so it sets two lines. Cut
+// before the exclamation mark, the second box decides the boundary from the
+// context the first left — which used to be three flags, a taken break and a
+// hold, and "<span>0|-</span><span>!00</span>" came out with a different
+// number of lines from the text whenever one of them was dropped.
 func TestABoundaryLeavesBothABreakAndAHold(t *testing.T) {
 	// Narrower than one character, so every opportunity there is gets taken and
 	// a lost one is a line that did not happen.
@@ -164,10 +160,9 @@ func TestABoundaryLeavesBothABreakAndAHold(t *testing.T) {
 		at := strings.Index(whole, "!")
 		cut := linesOfMarkup(t,
 			`<span>`+whole[:at]+`</span><span>`+whole[at:]+`</span>`, narrow)
-		if len(got) < 3 {
-			t.Fatalf("%q set %d lines %q; the hyphen takes one break and the "+
-				"vertical line's hold lands past the exclamation mark, so there "+
-				"are at least three", whole, len(got), got)
+		if len(got) != 2 {
+			t.Fatalf("%q set %d lines %q; UAX #14 breaks it once, after the "+
+				"exclamation mark", whole, len(got), got)
 		}
 		if strings.Join(cut, "\x00") != strings.Join(got, "\x00") {
 			t.Errorf("%q set %q and the same text cut before the exclamation "+
@@ -177,35 +172,29 @@ func TestABoundaryLeavesBothABreakAndAHold(t *testing.T) {
 	}
 }
 
-// TestATakenBreakIsWhatTheBoundaryIs, and the three kinds are not exclusive.
+// TestATakenBreakIsWhatTheBoundaryIs.
 //
-// "|-!" sets two lines. The vertical line is class BA and offers a break; the
-// hyphen is one a line may not begin with, so that opportunity is *held* past
-// it; and the hyphen then takes an unconditional opportunity of its own, which
-// is what lets a hyphenated compound break where it is written. Both land at
-// the same offset, and an exclamation mark refuses the first and not the second.
-//
-// At the end of a box the two coincide at the boundary, and Trailing said
-// "held" — so the next box did what a box handed a hold is meant to do, ran the
-// prohibition, and had nothing left. "<span>|-</span><span>!</span>" set one
-// line where the text sets two.
-//
-// It is the one case in this file where the box before is not merely reporting
-// what it left but choosing between two things it left at once.
+// "|-!" is one unbreakable run: a line may begin with neither the hyphen nor
+// the exclamation mark (UAX #14's LB21 and LB13), and the hyphen's own
+// opportunity is refused by the character after it like any other. It used to
+// be taken whatever followed, and the text set two lines; then a box boundary
+// before the "!" set one, because the box handed on a hold where it had taken
+// a break. The boundary is decided by the rules now, from the context the first
+// box left, and a box boundary makes no difference to the answer.
 func TestATakenBreakIsWhatTheBoundaryIs(t *testing.T) {
 	// Narrow enough that "|-" and the character after it cannot share a line.
 	const narrow = 14
 	for _, tc := range []struct{ whole, cut string }{
 		{"|-!", `<span>|-</span><span>!</span>`},
 		{"|-)", `<span>|-</span><span>)</span>`},
-		{"|\u2010!", `<span>|\u2010</span><span>!</span>`},
+		{"|‐!", `<span>|‐</span><span>!</span>`},
 	} {
 		whole := linesOfMarkup(t, tc.whole, narrow)
 		cut := linesOfMarkup(t, tc.cut, narrow)
-		if len(whole) != 2 {
-			t.Fatalf("%q set %d lines %q; the hyphen takes a break nothing "+
-				"after it refuses, so it is two and the comparison below is "+
-				"against the wrong answer", tc.whole, len(whole), whole)
+		if len(whole) != 1 {
+			t.Fatalf("%q set %d lines %q; UAX #14 does not break it, so it is "+
+				"one and the comparison below is against the wrong answer",
+				tc.whole, len(whole), whole)
 		}
 		if len(cut) != len(whole) {
 			t.Errorf("%q set %d lines %q and the same text in two spans set "+
@@ -302,10 +291,12 @@ func TestAHoldIsTakenUpInsideTheNextBox(t *testing.T) {
 // front of a character rather than after one — the ideograph's, the aksara's
 // and §5.1's fallback for a script with no dictionary.
 //
-// New Tai Lue is such a script, so "0ᦤ" breaks between the two characters and
-// "<span>0</span><span>ᦤ</span>" has to as well. It did not: at the second
+// New Tai Lue is such a script, so "ᦤᦤ" breaks between the two characters and
+// "<span>ᦤ</span><span>ᦤ</span>" has to as well. It did not: at the second
 // box's first character there was no text to flush and nothing carried, so the
-// opportunity was dropped.
+// opportunity was dropped. (The case was "0ᦤ", which does not break: the
+// fallback is "between pairs of typographic letter units in that writing
+// system", and UAX #14 keeps a digit with the letter after it.)
 //
 // FuzzRunTiling found it as a width rather than as a line — the two spans were
 // one unbreakable run, so they were shaped as one merge group and tiled, and
@@ -316,13 +307,13 @@ func TestABoxsFirstCharacterMayOfferItsOwnBreak(t *testing.T) {
 	// Narrow enough that two characters cannot share a line.
 	const narrow = 12
 	for _, tc := range []struct{ whole, cut string }{
-		{"0ᦤ", `<span>0</span><span>ᦤ</span>`},
+		{"0中", `<span>0</span><span>中</span>`},
 		{"ᦤᦤ", `<span>ᦤ</span><span>ᦤ</span>`},
 		{"0ᦤᦤ", `<span>0ᦤ</span><span>ᦤ</span>`},
 		// A box ending in a literal replacement character has a last character
 		// like any other. Reading utf8.RuneError as "there is none" gave this
 		// one the paragraph's own answer and lost the break. See lastRuneOf.
-		{"\uFFFDᦤ", `<span>` + "\uFFFD" + `</span><span>ᦤ</span>`},
+		{"\uFFFD中", `<span>` + "\uFFFD" + `</span><span>中</span>`},
 	} {
 		whole := linesOfMarkup(t, tc.whole, narrow)
 		cut := linesOfMarkup(t, tc.cut, narrow)
@@ -613,13 +604,17 @@ func TestBreakSpacesOverrulesOnlyASpacesOwnOpportunity(t *testing.T) {
 // TestAnOpportunityAfterASpaceStillCrossesABoundary is the containment case, and
 // the one a fix here is most likely to break.
 //
-// The prohibition applies to the opportunities the scan *offers* and not to the
-// one a space takes: "AA )BB" breaks after the space and always has. A box
-// boundary must not change that either — which is what
-// TestAnOpportunityFromASpaceIsNotWithheld says from the other side, and what
-// the first attempt at this fix got wrong by four reftests.
+// A space's opportunity crosses a box boundary as it stands inside a run —
+// which is what TestAnOpportunityFromASpaceIsNotWithheld says from the other
+// side, and what the first attempt at this fix got wrong by four reftests.
+//
+// The marks are ones UAX #14 lets a line begin with after a space. It used to
+// be ")" and "！" as well, on the reading that a prohibition applies only to
+// an opportunity a character offers and never to one a space takes; LB13 is
+// an earlier rule than LB18, so "AA )BB" does not break at the space, and
+// LineBreakTest.txt says so in "× 0020 × 0029".
 func TestAnOpportunityAfterASpaceStillCrossesABoundary(t *testing.T) {
-	for _, mark := range []string{")", "…", "！"} {
+	for _, mark := range []string{"(", "…", "‐"} {
 		whole := linesOfMarkup(t, "AA "+mark+"BB", 40)
 		cut := linesOfMarkup(t, "AA <span>"+mark+"BB</span>", 40)
 		if len(whole) < 2 {
