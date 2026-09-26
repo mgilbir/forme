@@ -363,3 +363,41 @@ func TestAWordIsNotCutInFrontOfItsBidiControls(t *testing.T) {
 		}
 	}
 }
+
+// TestAMarkAtABoxEdgeKeepsItsBasesOpportunity is the seventh: under
+// "word-break: keep-all", "ไࠩ踢" broke in front of the ideograph and
+// "<span>ไࠩ</span><span>踢</span>" did not. keep-all demotes the opportunity
+// between a letter and an ideograph rather than removing it, and the scan finds
+// the letter by stepping over the marks after it — which it could not do from
+// the far side of a box boundary, where the character it was handed was the
+// mark. It is the base that travels now, through a box of marks alone as well.
+func TestAMarkAtABoxEdgeKeepsItsBasesOpportunity(t *testing.T) {
+	face, err := notosans.Face()
+	if err != nil {
+		t.Fatalf("loading the embedded Noto Sans: %v", err)
+	}
+	set := namedFaceSet{family: "T", face: face, standard: StandardFonts()}
+	for _, decl := range []string{"", "word-break: keep-all"} {
+		sheet := `#d { font-family: T; font-size: 16px; ` + decl + ` }`
+		for _, tc := range []struct {
+			text string
+			cut  []int
+		}{
+			{"ไࠩ踢", []int{6}},
+			{"aࠩ踢", []int{4}},
+			{"aࠩ踢", []int{1, 4}},
+			{"ไ้踢", []int{6}},
+		} {
+			whole, _ := linesOfSpanned(t, set, tc.text, sheet, 10)
+			cut, _ := linesOfSpanned(t, set, spanned(tc.text, tc.cut), sheet, 10)
+			if len(whole) != 2 {
+				t.Fatalf("%q under %q set %v; the fixture is meant to break in front of "+
+					"the ideograph", tc.text, decl, whole)
+			}
+			if !sameBoundaryLines(whole, cut) {
+				t.Errorf("%q under %q set %v, and as %s it set %v",
+					tc.text, decl, whole, spanned(tc.text, tc.cut), cut)
+			}
+		}
+	}
+}

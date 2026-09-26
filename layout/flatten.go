@@ -870,6 +870,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	carried := paragraph.Carried{
 		Offered: in.BreakOpportunity, Deferred: in.AfterDeferred,
 		Held: in.AfterHeld, Taken: in.AfterTaken, Prev: in.AfterRune,
+		PrevBase:       in.AfterBase,
 		Before:         in.AfterText,
 		PhraseBefore:   in.AfterPhrase,
 		SpaceMayTakeIt: boundaryBreakSpaces,
@@ -1246,6 +1247,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// The state it had is handed in, because a piece of nothing but
 			// marks does not answer this and passes on what it was given.
 			AfterLetterUnit: endsLetterUnit(p.Text, state.AfterLetterUnit),
+			// And the base itself, for the scan of the next box, handed on the
+			// same way. See paragraph.Carried.PrevBase.
+			AfterBase: lastBaseOr(p.Text, state.AfterBase),
 		}
 	}
 	return out, inlineState{
@@ -1269,6 +1273,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		AfterText:       trailing.DictTail,
 		AfterPhrase:     trailing.PhraseTail,
 		AfterLetterUnit: state.AfterLetterUnit,
+		AfterBase:       state.AfterBase,
 		AfterBox:        b,
 	}
 }
@@ -1323,6 +1328,16 @@ func endsLetterUnit(text string, was bool) bool {
 		return was
 	}
 	return paragraph.IsLetterUnit(r) && !paragraph.IsIdeographic(r)
+}
+
+// lastBaseOr is the last base character of text, or what it was given where the
+// text has none of its own — the same walk endsLetterUnit makes, answering with
+// the character rather than with a question about it.
+func lastBaseOr(text string, was rune) rune {
+	if r, ok := paragraph.LastAutospaceBase(text); ok {
+		return r
+	}
+	return was
 }
 
 // textItemArgs is what one text item is built from. It is a struct because the

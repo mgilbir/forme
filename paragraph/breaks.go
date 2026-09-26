@@ -186,6 +186,19 @@ type Carried struct {
 	// for the rules that need to know there is any text in front of this at all.
 	// It is zero at the start of a paragraph and nowhere else.
 	Prev rune
+	// PrevBase is the last *base* character before the boundary: Prev with the
+	// marks and the invisibles stepped over, which is what the rules stated over
+	// typographic character units read — see prevBase in SplitAtBreaksAfter. It
+	// is zero at the start of a paragraph, and where nothing before the boundary
+	// has a base.
+	//
+	// Prev cannot stand in for it where Prev is a mark, and a box's text may end
+	// in one. "aࠩ踢" under keep-all has an opportunity in front of the
+	// ideograph that the value demotes rather than removes, because the letter
+	// unit in front of it is the "a" and not its mark; written
+	// "<span>aࠩ</span><span>踢</span>" the scan of the second box saw only the
+	// mark, found no letter unit, and the line could not break there at all.
+	PrevBase rune
 	// Before is the text in front of this one, for the scripts whose words are
 	// found with a dictionary rather than by a rule.
 	//
@@ -356,11 +369,13 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	// asked by §8.1 about a gap where this asks by §5.1 about a break. The two
 	// gave different answers to it, which is why it is one function.
 	//
-	// Zero where the carried character is itself a mark or an invisible: this
-	// scan cannot see past the boundary to find the base, and the box on the
-	// other side of it answers the same question for itself. See
-	// layout/flatten.go's endsLetterUnit.
+	// Where the carried character is itself a mark or an invisible this scan
+	// cannot see past the boundary to find the base, so the text before says
+	// what it was. See Carried.PrevBase.
 	prevBase := prev
+	if !AutospaceBase(prevBase) {
+		prevBase = at.PrevBase
+	}
 	if !AutospaceBase(prevBase) {
 		prevBase = 0
 	}
