@@ -71,7 +71,7 @@ import (
 // automatic fractions around U+2044 and the right-to-left mirrored forms are
 // masked the way HarfBuzz masks them.
 //
-// Not mirrored, besides the part of the Hangul model named at modelHangul: 'rand',
+// Not mirrored: 'rand',
 // which HarfBuzz applies with a pseudo-random choice of alternate and this
 // package applies as the first alternate like any other alternate
 // substitution; HarfBuzz's second Arabic fallback, for a face encoded as
@@ -79,8 +79,9 @@ import (
 // text vertically.
 //
 // Where HarfBuzz changed between versions, what is mirrored is what the
-// version the oracle runs does: HarfBuzz 8 turned 'calt' off for Hangul, and the
-// HarfBuzz the corpus and the sweep are compared against does not.
+// version the oracle runs does: HarfBuzz 8 turned 'calt' off for Hangul, and
+// the HarfBuzz the corpus and the sweep are compared against keeps it on for
+// everything but the jamo (see hangul.go).
 
 // shaperModel is which model sets a run: how its characters are cut, reordered
 // and put through the font's features.
@@ -100,11 +101,10 @@ const (
 	// modelThai is the default model with Thai and Lao's one rearrangement of
 	// the text first. See thai.go.
 	modelThai
-	// modelHebrew and modelHangul are the default model's features, named
-	// apart because HarfBuzz sets them apart: Hangul cancels no mark's advance.
-	// What the Hebrew model adds — its presentation forms and point order — is
-	// in hebrew.go. What HarfBuzz's Hangul model adds — composing and taking
-	// apart syllables, the jamo features, the tone marks — is not done here.
+	// modelHebrew and modelHangul are the default model's features with what
+	// HarfBuzz's two models add: Hebrew's presentation forms and point order
+	// (hebrew.go), and Hangul's syllables, jamo features and tone marks
+	// (hangul.go). Hangul cancels no mark's advance.
 	modelHebrew
 	modelHangul
 )
@@ -230,6 +230,12 @@ const (
 	maskFrac
 	maskNumr
 	maskDnom
+	// The Hangul jamo features, and 'calt' as the Hangul model applies it: to
+	// everything but the jamo. See hangul.go.
+	maskLjmo
+	maskVjmo
+	maskTjmo
+	maskCaltNotJamo
 )
 
 // featureFlags is how a feature is applied, apart from which glyphs it is for.
@@ -489,6 +495,12 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 		collectMyanmar(b, p)
 	case modelUniversal:
 		collectUniversal(b, p)
+	case modelHangul:
+		// collect_features_hangul: the jamo features, for the jamo
+		// preprocessing marked. See hangul.go.
+		b.add("ljmo", maskLjmo, 0)
+		b.add("vjmo", maskVjmo, 0)
+		b.add("tjmo", maskTjmo, 0)
 	}
 
 	// The features every script gets, in the stage whatever the model left
@@ -531,6 +543,14 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 	case modelKhmer:
 		b.enable("clig", 0)
 		b.disable("liga")
+	case modelHangul:
+		// override_features_hangul: 'calt' stays on, for everything but the
+		// jamo, which some fonts assemble under it and should not. Where it
+		// has been turned off it stays off, as it does there — HarfBuzz's
+		// merge keeps the value the earlier request gave.
+		if !key.features.suppresses("calt") {
+			b.add("calt", maskCaltNotJamo, 0)
+		}
 	}
 
 	p.compile(l, b)

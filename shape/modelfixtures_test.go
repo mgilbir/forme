@@ -9,12 +9,12 @@ import (
 	"github.com/mgilbir/forme/fonttest"
 )
 
-// The fixture faces of the model tests in syriac_test.go, hebrew_test.go,
-// usesubstituted_test.go and indicshared_test.go: each a face that states the
-// features one of HarfBuzz's script models turns on, and nothing else. Every
-// answer those tests hold this package to is HarfBuzz 14.5.0's for the same
-// face, from the pinned uharfbuzz; TestWriteModelFixtures writes them out to
-// ask it.
+// The fixture faces of the model tests in syriac_test.go, hangul_test.go,
+// hebrew_test.go, usesubstituted_test.go and indicshared_test.go: each a face
+// that states the features one of HarfBuzz's script models turns on, and
+// nothing else. Every answer those tests hold this package to is HarfBuzz
+// 14.5.0's for the same face, from the pinned uharfbuzz;
+// TestWriteModelFixtures writes them out to ask it.
 
 // glyphsFor makes one glyph per rune, glyph i+1 for rune i, each with the
 // advance given, and ink of its own.
@@ -60,6 +60,30 @@ func modelFixtures() map[string][]byte {
 			},
 			[]fonttest.Feature{{Tag: "stch", Lookups: []int{0}}, {Tag: "ccmp", Lookups: []int{1}}, {Tag: "rlig", Lookups: []int{2}}},
 			map[string]fonttest.Script{"syrc": fonttest.AllFeatures(3)})}})
+
+	// Hangul: jamo, two syllables, the tone marks, a compatibility jamo, two
+	// Old Hangul jamo, and '=' with the negation that composes it into '≠';
+	// 'calt' turns the compatibility jamo and the old leading jamo into one
+	// glyph, and 'ljmo', 'vjmo' and 'tjmo' the jamo into their forms.
+	hangulRunes := []rune{
+		0x1100, 0x1161, 0x11A8, 0xAC00, 0xAC01, 0x302E, 0x302F, 0x25CC, 0x3131,
+		0x1113, 0x1176, 0xE300, 0xE301, 0xE302, 0xE303, '=', 0x0338, 0x2260, 0x1102,
+	}
+	hangulAdvances := []int{600, 400, 300, 1000, 1010, 200, 0, 500, 700, 610, 410, 620, 420, 310, 111, 500, 0, 520, 630}
+	out["hangul"] = fonttest.SFNT(fonttest.SFNTOptions{Name: "Hangul",
+		Glyphs: glyphsFor(hangulRunes, hangulAdvances),
+		Extra: map[string][]byte{"GSUB": fonttest.GSUBTable(
+			[]fonttest.Lookup{
+				{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{9, 10}, []int{15, 15})}},
+				{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{10, 19}, []int{12, 12})}},
+				{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{2, 11}, []int{13, 13})}},
+				{Type: 1, Subtables: [][]byte{fonttest.SingleSubst([]int{3}, []int{14})}},
+			},
+			[]fonttest.Feature{
+				{Tag: "calt", Lookups: []int{0}}, {Tag: "ljmo", Lookups: []int{1}},
+				{Tag: "vjmo", Lookups: []int{2}}, {Tag: "tjmo", Lookups: []int{3}},
+			},
+			map[string]fonttest.Script{"hang": fonttest.AllFeatures(4)})}})
 
 	// Hebrew: letters, points and the presentation forms of some pairs, in a
 	// face that positions no marks and in one that declares 'mark'.

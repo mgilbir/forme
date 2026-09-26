@@ -379,9 +379,17 @@ func (f *Face) hasGlyph(r rune) bool {
 // arabic, hebrew and hebrewForms are the orderings and compositions HarfBuzz's
 // Arabic and Hebrew shapers add: see reorderArabicMarks, reorderHebrewMarks
 // and composeHebrew.
+//
+// none is HarfBuzz's normalisation mode of that name, which its Hangul shaper
+// asks for: a character the face has is left alone even with marks on it, a
+// character it has not is still drawn as its decomposition where it can be,
+// the marks are still put in order, and nothing is composed. Composing would
+// put a syllable and jamo back together that the Hangul preprocessing chose to
+// keep apart. See hangul.go.
 type normalization struct {
 	syllabic, indic, arabic bool
 	hebrew, hebrewForms     bool
+	none                    bool
 }
 
 // normalize puts a run into the spelling this face draws best, with each
@@ -401,6 +409,7 @@ func (f *Face) normalize(runes []rune, offsets []int, how normalization) ([]rune
 		hebrewForms: how.hebrewForms,
 		syllabic:    how.syllabic,
 		shortest:    !how.syllabic,
+		always:      how.none,
 		out:         make([]rune, 0, len(runes)+4),
 		off:         make([]int, 0, len(runes)+4),
 	}
@@ -411,6 +420,9 @@ func (f *Face) normalize(runes []rune, offsets []int, how normalization) ([]rune
 		return n.out, n.off
 	}
 	n.reorderRound()
+	if how.none {
+		return n.out, n.off
+	}
 	return n.composeRound()
 }
 
@@ -467,7 +479,10 @@ type normalizer struct {
 	f *Face
 	// shortest says a character the face already has is emitted as it is rather
 	// than taken apart. It is the general path's setting and not the Indic one.
-	shortest bool
+	// always says the same of a base and its marks, which the general path
+	// takes apart to compose again: the setting of a model that composes
+	// nothing. See normalization.
+	shortest, always bool
 	// indic says the one disagreement between the Indic model and Unicode's own
 	// tables applies — see compose below. It is narrower than shortest: Khmer,
 	// Myanmar and the scripts the universal engine covers are fully decomposed
@@ -541,7 +556,7 @@ func (n *normalizer) decomposeRound(runes []rune, offsets []int) bool {
 			end++
 		}
 		for i < end {
-			i = n.step(runes, offsets, i, false)
+			i = n.step(runes, offsets, i, n.always)
 		}
 	}
 	return allSimple

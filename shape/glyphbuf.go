@@ -473,6 +473,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 			runes = f.thaiPUAShape(runes)
 		}
 	}
+	// Hangul's syllables into the spelling the face draws, and its tone marks
+	// in front of them. See hangul.go.
+	if model == modelHangul {
+		runes, offsets = f.hangulPreprocess(runes, offsets)
+	}
 	// A vowel followed by a sign that spells another, against a dotted circle.
 	// See markInvalidVowels.
 	if model == modelIndic || model == modelUniversal {
@@ -487,7 +492,15 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		syllabic: model.syllabic(), indic: model == modelIndic,
 		arabic: model == modelArabic,
 		hebrew: model == modelHebrew, hebrewForms: model == modelHebrew && !l.hasMarkFeature(),
+		none: model == modelHangul,
 	})
+	// Which jamo feature each character is for, read before the characters
+	// nothing is drawn for are taken out, since a joiner between two jamo
+	// keeps them apart. See hangulFeatures.
+	var jamo []uint8
+	if model == modelHangul {
+		jamo = hangulFeatures(runes)
+	}
 	// The characters nothing is drawn for, for every run but a syllabic one.
 	//
 	// Removing them here means no rule of the font is ever asked about a glyph
@@ -502,6 +515,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// — so a syllabic run keeps them, and the shaper that gets them drops them
 	// once they have said which cluster they broke. See ignorable.go.
 	if !model.syllabic() {
+		if jamo != nil {
+			jamo = keepShown(jamo, runes)
+		}
 		runes, offsets = dropHiddenCharacters(runes, offsets)
 	}
 	if len(runes) == 0 {
@@ -599,6 +615,10 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		// substitution can see them — see ignorable.go.
 		if model == modelArabic {
 			markJoiningForms(buf, runes, before, after)
+		}
+		if model == modelHangul {
+			markJamo(buf, runes, jamo)
+			markToneCircles(buf, runes, offsets)
 		}
 		buf = hideJoiners(buf, runes)
 		for i, stage := range p.stages {
