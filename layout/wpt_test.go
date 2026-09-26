@@ -1395,7 +1395,16 @@ const wptEnv = "WPT_TESTS"
 // grid was painted before the table's own background and border, the order
 // the anonymous wrapper holds them in rather than the element tree's, so the
 // red border was drawn over it. wpt.fyi: all three browsers pass.
-const wptCleanPassBaseline = 5985
+//
+// **5985 to 5986, for a table's baseline**. floats-clear/margin-collapse-134's
+// reference sets three inline-tables of empty 1em cells, and the second line
+// sat a strut's descent low: a table's baseline was found by walking into it
+// for the first line box anywhere, and a first row of empty cells has none, so
+// the inline-table fell back to its bottom margin edge. css-tables-3 and CSS Box
+// Alignment 3 §9.1 make it the first row's, synthesized from the lowest cell
+// content edge when no cell has one. wpt.fyi: Chrome and Firefox pass, Safari
+// fails.
+const wptCleanPassBaseline = 5986
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
