@@ -678,7 +678,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// cannot see because the glyph on the far side of it is not in this buffer.
 	// See boundarykern.go. Not for a run set upright, which is not kerned:
 	// the pairs are the 'kern' feature's, and a vertical run applies none.
-	if len(sh.l.kern) > 0 && ctx.kerns && !ctx.features.NoKerning && !vertical {
+	if len(sh.l.kern) > 0 && ctx.kerns && !ctx.features.kerningOff() && !vertical {
 		kctx := ctx
 		if ctx.cutBefore {
 			kctx.before = ""

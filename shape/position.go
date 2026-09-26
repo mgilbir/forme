@@ -177,7 +177,7 @@ func (sh shaper) positioningFor(p *plan, model shaperModel) positioning {
 	out.gpos = sh.f.hasPositioning() && !(model == modelHebrew && sh.gposScript != "hebr")
 	lk := &sh.l.legacyKern
 	out.kern = lk.present() && !(p.gposKern && out.gpos) && model.fallbackPosition() &&
-		!sh.features.NoKerning
+		!sh.features.kerningOff()
 	out.zero = sh.zeroMarks != zeroMarksNone && (!out.kern || !lk.stateMachine)
 	out.adjust = !out.gpos && (!out.kern || !lk.crossStream)
 	out.fallback = out.adjust && model.fallbackPosition()

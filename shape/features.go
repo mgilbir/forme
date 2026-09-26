@@ -69,6 +69,9 @@ type Features struct {
 	// kern table, and the pair that spans a run boundary. It is "kern" turned
 	// off, as HarfBuzz is asked for it, and it leaves "dist" alone — the
 	// spacing an Indic font states for its conjuncts is not kerning.
+	//
+	// It is font-kerning: none, and so it is below font-feature-settings in
+	// CSS Fonts 4 §7.2's order: a "kern" in Tags turns kerning back on.
 	NoKerning bool
 	// Caps is the capitals a run is set in: the first request here that asks a
 	// face for a rule rather than taking one away.
@@ -107,6 +110,17 @@ type Features struct {
 	// anyway — "liga", "calt" — is the same feature asked for twice and is
 	// applied once, where it always is.
 	Tags string
+	// TagsOff are the features the same declaration turned *off* by name, in
+	// the same settled form: "liga" 0, "kern" off. No tag is in both: the
+	// declaration's last word on a tag is the one that stands (see the layout
+	// package's featureSettingsOf).
+	//
+	// They are applied, and applied last: CSS Fonts 4 §7.2 puts
+	// font-feature-settings above everything else that asks for or against a
+	// feature, so "kern" off turns kerning off whatever font-kerning says, and
+	// "liga" off turns the ligatures off whatever font-variant-ligatures says.
+	// See requested for the whole order. An empty string turns nothing off.
+	TagsOff string
 	// EastAsian is which national standard's forms a run's ideographs take,
 	// whether its characters are set on the ideographic advance or their own,
 	// and whether its kana are the small forms an annotation is set in.
@@ -295,7 +309,9 @@ var capsFeatures = [...]struct{ capitals, lowercase string }{
 	CapsTitling:   {capitals: "titl"},
 }
 
-// adds returns the tags this set turns on.
+// adds returns the tags the font-variant properties turn on. What
+// font-feature-settings turns on is not among them: it comes later in CSS
+// Fonts 4 §7.2's order, and is Tags. See requested.
 //
 // The order they are returned in decides nothing, and that is worth saying
 // rather than leaving to be inferred: a plan merges these by the font's own
@@ -311,7 +327,6 @@ func (f Features) adds() []string {
 	asked := [...][]string{
 		f.Caps.Features(), f.Numeric.Features(),
 		f.EastAsian.Features(), f.Position.Features(),
-		f.tags(),
 	}
 	var (
 		only  []string
@@ -481,7 +496,11 @@ var numericFeatures = [...]struct {
 	{NumericSlashedZero, "zero"},
 }
 
-// suppresses reports whether a feature tag is one this set turns off.
+// suppresses reports whether a feature tag is one of the substitutions the
+// font-variant properties or the spacing rule turn off. Kerning is
+// positioning, and NoKerning names it apart. Neither is whether the tag ends
+// up off: a font-feature-settings that names it has the last word. See
+// turnsOff.
 func (f Features) suppresses(tag string) bool {
 	switch tag {
 	case "liga", "clig", "dlig", "hlig":
@@ -492,10 +511,53 @@ func (f Features) suppresses(tag string) bool {
 	return false
 }
 
+// turnsOff reports whether a tag this set says anything about ends up off, in
+// CSS Fonts 4 §7.2's order: font-feature-settings over everything below it.
+// A tag it says nothing about is not off, whatever the font's own defaults
+// are; that is the plan's question.
+func (f Features) turnsOff(tag string) bool {
+	switch {
+	case listsTag(f.TagsOff, tag):
+		return true
+	case listsTag(f.Tags, tag):
+		return false
+	case tag == "kern":
+		return f.NoKerning
+	}
+	return f.suppresses(tag)
+}
+
+// kerningOff is whether kerning is off for the run: the 'kern' feature's
+// lookups, the legacy kern table and the pair across a run boundary, all three
+// of which HarfBuzz ties to the one feature. font-kerning: none turns it off
+// and a font-feature-settings "kern" 1 turns it back on.
+func (f Features) kerningOff() bool { return f.turnsOff("kern") }
+
+// listsTag reports whether a comma-separated tag list names a tag. Tags are
+// four characters, so a match at a boundary is a match of the whole tag.
+func listsTag(list, tag string) bool {
+	for list != "" {
+		var t string
+		t, list, _ = strings.Cut(list, ",")
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
 // tags is Tags as a list, or nothing.
 func (f Features) tags() []string {
 	if f.Tags == "" {
 		return nil
 	}
 	return strings.Split(f.Tags, ",")
+}
+
+// tagsOff is TagsOff as a list, or nothing.
+func (f Features) tagsOff() []string {
+	if f.TagsOff == "" {
+		return nil
+	}
+	return strings.Split(f.TagsOff, ",")
 }

@@ -391,26 +391,18 @@ func (l *layouter) reportHyphens(b *Box, value string) {
 // reportKerning names a request about a font's own rules that this engine cannot
 // carry out.
 //
-// "font-kerning: none" is not one of them any more — it is applied, see
+// "font-kerning: none" is not one of them — it is applied, see
 // layout/fontfeatures.go — and what is left is font-feature-settings, which asks
-// for a named feature by tag.
+// for a named feature by tag. Of that, only one thing is left: a tag turned on
+// that the face has nothing under. A tag turned off is applied, and turning off
+// what a face has not got asks for the page that is already there — the
+// fourteen standard PDF faces carry no kern pairs, and five of the suite's
+// reftests write "kern" off over the default serif face.
 //
-// The narrowing it keeps is worth stating, because it is the same one inert.go
-// makes for a declaration at its initial value, one step further along: the
-// question is not what the property is but what it is being asked to *do*, and
-// here the answer depends on the font. "font-feature-settings: \"kern\" off"
-// asks for nothing at all when the face has no kerning in it, and the fourteen
-// standard PDF faces are that case — their metrics carry no kern pairs.
-//
-// That is not a corner of the suite. Five of its reftests write the declaration
-// over text in the default serif face, and every one of them was held out of the
-// clean count by a finding about a page that is right.
-//
-// The property is judged only by the tags it names. A tag turned on is applied
-// and is reported only when the face offers nothing under it — substitution or
-// positioning, since the shaping plan applies either (see shape.Face.Features)
-// — and a tag turned off is reported unless it is "kern" on a face with no
-// kerning; see unappliedFontFeatures.
+// The property is judged only by the tags it names. Every tag is applied, on
+// or off, and a tag turned on is reported only when the face offers nothing
+// under it — substitution or positioning, since the shaping plan applies
+// either (see shape.Face.Features). See unappliedFontFeatures.
 func (l *layouter) reportKerning(b *Box, face *shape.Face) {
 	value := b.Style.Get("font-feature-settings")
 	why := unappliedFontFeatures(value, face)
@@ -985,56 +977,38 @@ func blank(text string) bool {
 // carried out on this face, or "" when all of it was.
 //
 // "normal" asks for nothing by definition. Otherwise the value is a list of tags
-// with a setting each: a tag turned on is carried out, and changes nothing when
-// the face offers nothing under it; a tag turned off is not acted on by tag at
-// all, and is inert only where it is "kern" on a face with no kerning.
+// with a setting each, and every one of them is carried out: the shaping layer
+// runs the lookups of the tags turned on and leaves out the ones turned off,
+// above font-kerning and the font-variant properties, as CSS Fonts 4 §7.2
+// orders them. So a tag turned off is never reported. Turning off a feature
+// the face has not got changes nothing, which is what was asked, and turning
+// off one it has is done.
+//
+// What is left is a tag turned on that the face has not got. Asking for it is
+// carried out, but a face that declares none of its lookups sets the run in
+// the letters it was written with, which is the same thing reportCaps says
+// about a face with no small capitals. The fourteen standard faces are every
+// one of them this case: they carry no OpenType feature at all. "kern" is
+// asked of the face's kerning rather than of its feature list, because a face
+// may kern from its legacy kern table, which is no feature and is applied as
+// 'kern'. Compared exactly: CSS Fonts 4 makes an <opentype-tag>
+// case-sensitive, so "KERN" is some other feature.
 func unappliedFontFeatures(value string, face *shape.Face) string {
-	on, off := featureSettingsOf(value)
-	kerns := face != nil && face.HasKerning()
-
-	// A tag turned off, which this property cannot express. The features this
-	// engine applies without being asked have switches of their own —
-	// font-variant-ligatures and font-kerning — and the rest are not applied
-	// anyway, so turning one off changes nothing either way.
-	var turnedOff []string
-	for _, tag := range off {
-		// "kern" is inert on a face with no kerning whether it was asked for or
-		// turned off, because neither can change the page. Compared exactly:
-		// CSS Fonts 4 §6.12 makes an <opentype-tag> case-sensitive, so "KERN"
-		// is some other feature, and not one this can say anything about.
-		if tag == "kern" && !kerns {
-			continue
-		}
-		turnedOff = append(turnedOff, quoteValue(tag))
-	}
-
-	// And a tag turned on that the face has not got. Asking for it is carried
-	// out — the shaping layer runs the lookups of whatever tags it is given —
-	// but a face that declares none of them sets the run in the letters it was
-	// written with, which is the same thing reportCaps says about a face with
-	// no small capitals. The fourteen standard faces are every one of them this
-	// case: they carry no OpenType feature at all.
+	on, _ := featureSettingsOf(value)
 	var lacking []string
 	if on != "" {
 		for _, tag := range strings.Split(on, ",") {
-			if face == nil || !faceDeclares(face, tag) {
-				lacking = append(lacking, quoteValue(tag))
+			switch {
+			case face == nil:
+			case tag == "kern" && face.HasKerning():
+				continue
+			case faceDeclares(face, tag):
+				continue
 			}
+			lacking = append(lacking, quoteValue(tag))
 		}
 	}
-
-	switch {
-	case len(turnedOff) > 0 && len(lacking) > 0:
-		return "asks for " + strings.Join(turnedOff, ", ") + " to be turned off, " +
-			"which is done through font-variant-ligatures or font-kerning rather " +
-			"than by tag, and for " + strings.Join(lacking, ", ") +
-			", which this face does not declare"
-	case len(turnedOff) > 0:
-		return "asks for " + strings.Join(turnedOff, ", ") + " to be turned off; a " +
-			"feature this engine applies is turned off through " +
-			"font-variant-ligatures or font-kerning rather than by tag, and the " +
-			"rest of the declaration was applied"
-	case len(lacking) > 0:
+	if len(lacking) > 0 {
 		return "asks for " + strings.Join(lacking, ", ") + ", which this face does " +
 			"not declare; the run is set in the letters it was written with"
 	}
