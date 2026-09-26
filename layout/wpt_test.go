@@ -1385,7 +1385,17 @@ const wptEnv = "WPT_TESTS"
 // line out of it was the left-to-right rule on both sides, so it pushed a word
 // too wide for an indented right-to-left line back across the indent.
 // wpt.fyi: Chrome and Safari pass, Firefox fails.
-const wptCleanPassBaseline = 5984
+//
+// **5984 to 5985, for a caption laid over its table**. box-display/root-box-002
+// makes the root element a table and hangs an "html::before" caption over the
+// table's red top border with a negative margin, the caption's white meant to
+// hide it. Two faults stood in the way. The caption was taken for the root
+// element when §2.11.2 looked through the wrapper (fixed below this and moving
+// nothing alone), so its white went to the canvas; and a caption above the
+// grid was painted before the table's own background and border, the order
+// the anonymous wrapper holds them in rather than the element tree's, so the
+// red border was drawn over it. wpt.fyi: all three browsers pass.
+const wptCleanPassBaseline = 5985
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
