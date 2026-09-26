@@ -12,13 +12,14 @@ import (
 // exist, their advance widths in 1/1000 of the em, which glyph a character
 // maps to, and, for a CID-keyed CFF, how its CIDs and glyph indices relate.
 //
-// shape.Load reads NumGlyphs, WidthByGID, Cmap, GlyphBBox and CmapPartial, and
-// of a CFF, GIDToCID and the Registry, Ordering and Supplement; the subsetters
-// read NumGlyphs. WidthByName, WidthByCID, GlyphNames, GlyphPresent,
-// GlyphNonEmpty, ComponentGID, MacCmap, SymbolCmap, CmapSubtableCount, CIDGIDs,
-// GIDToFD and BudgetExhausted are read by no code outside this package but
-// tests: they answered questions a PDF/A validator asked of an embedded font,
-// in the repository this package came from. See doc.go.
+// shape.Load reads NumGlyphs, WidthByGID, Cmap, GlyphBBox, CmapPartial and
+// CmapState, and of a CFF, GIDToCID and the Registry, Ordering and Supplement;
+// the subsetters read NumGlyphs. WidthByName, WidthByCID, GlyphNames,
+// GlyphPresent, GlyphNonEmpty, ComponentGID, MacCmap, SymbolCmap,
+// CmapSubtableCount, CIDGIDs, GIDToFD and BudgetExhausted are read by no code
+// outside this package but tests: they answered questions a PDF/A validator
+// asked of an embedded font, in the repository this package came from. See
+// doc.go.
 type Program struct {
 	// GlyphNames lists the glyph names defined by the program (a Type 1 program,
 	// or a CFF that is not CID-keyed); nil when the format identifies glyphs by
@@ -123,6 +124,9 @@ type Program struct {
 	// The parser cannot report the trip itself, having nobody to report it to;
 	// the caller reads this, and shape.Load refuses the font on it.
 	CmapPartial bool
+	// CmapState says what the Unicode cmap is, and when Cmap is nil, which of
+	// the three reasons for that it is. See CmapState.
+	CmapState CmapState
 	// BudgetExhausted reports that the work budget the program was read under
 	// ran out, so some field above holds less than the font declares.
 	// CmapPartial says whether the cmap is among them; this says whether
@@ -322,6 +326,43 @@ func ParseSFNTWithin(data []byte, b *Budget) *Program {
 	return fp
 }
 
+// CmapState is what came of looking for a font's Unicode cmap.
+//
+// A nil Cmap used to be the whole answer, and it is the same nil for three
+// different fonts: one that has no Unicode character map, one whose map this
+// reader cannot read, and one whose map reads perfectly well and names only
+// glyphs the font has not got. The refusal is the same for all three — a face
+// that maps no character to a glyph cannot set any text — but what a caller
+// tells an author is not, and telling the third that its font "has no Unicode
+// character map" sends them looking for a table that is there. WPT's
+// fonts/ahem-visible-zwnj.otf is the third: its format-4 subtables map A, B and
+// U+200C through deltas that land on glyphs 35 and 36 of a font whose maxp
+// declares three, and onlyDeclaredGlyphs drops every one of them.
+//
+// A budget that stopped the walk is none of these; CmapPartial says so, and it
+// is read first.
+type CmapState uint8
+
+const (
+	// CmapAbsent: there is no cmap table, or none of its encoding records is a
+	// Unicode one. It is the zero value because it is what a Program that
+	// never reached a cmap has.
+	CmapAbsent CmapState = iota
+	// CmapUnreadable: there are Unicode subtables and none of them gave a
+	// mapping — each is in a format this reader does not take, is cut short
+	// of its own length, or maps no character to any glyph but .notdef, the
+	// three cases parseCmapSubtable answers nil for.
+	CmapUnreadable
+	// CmapNamesNoGlyph: a Unicode subtable was read and mapped characters, and
+	// every glyph it named lies past NumGlyphs, so none of them is a mapping
+	// (see onlyDeclaredGlyphs). Where some subtables were unreadable and
+	// another was this, this is what is reported: it is the one of the two
+	// that says what the font's readable map actually holds.
+	CmapNamesNoGlyph
+	// CmapRead: Cmap holds the font's mappings.
+	CmapRead
+)
+
 // readCmap chooses and reads the font's cmap subtables: the best Unicode one,
 // and the last readable (3,0) symbol and (1,0) Mac Roman ones.
 //
@@ -354,16 +395,22 @@ func readCmap(fp *Program, cmap []byte, b *Budget) {
 	type result struct {
 		m       map[rune]int
 		partial bool
+		// ghosts says the subtable was read and did map characters, and that
+		// every one of them named a glyph the font has not got — so the nil m
+		// is onlyDeclaredGlyphs' answer and not parseCmapSubtable's.
+		ghosts bool
 	}
 	parsed := map[uint32]result{}
-	parse := func(off uint32) (map[rune]int, bool) {
+	parse := func(off uint32) result {
 		if r, ok := parsed[off]; ok {
-			return r.m, r.partial
+			return r
 		}
 		m, partial := parseCmapSubtable(cmap[off:], b)
+		read := m != nil
 		m = onlyDeclaredGlyphs(m, fp.NumGlyphs)
-		parsed[off] = result{m, partial}
-		return m, partial
+		r := result{m: m, partial: partial, ghosts: read && m == nil}
+		parsed[off] = r
+		return r
 	}
 
 	type candidate struct {
@@ -397,18 +444,29 @@ func readCmap(fp *Program, cmap []byte, b *Budget) {
 	// and then a stable sort that keeps that order among equals.
 	slices.Reverse(unicode)
 	slices.SortStableFunc(unicode, func(x, y candidate) int { return y.rank - x.rank })
+	// No Unicode subtable at all is CmapAbsent, which is the zero value; each
+	// one tried moves the state on from there.
+	if len(unicode) > 0 {
+		fp.CmapState = CmapUnreadable
+	}
 	for _, c := range unicode {
-		m, partial := parse(c.off)
-		if m != nil {
-			fp.Cmap = m
-			fp.CmapPartial = partial
+		r := parse(c.off)
+		if r.m != nil {
+			fp.Cmap = r.m
+			fp.CmapPartial = r.partial
+			fp.CmapState = CmapRead
 			break
 		}
-		// Nothing came back, which is two things: a subtable this cannot read,
-		// and one the budget stopped before it read anything. The flag is what
-		// tells them apart, and dropping it with the empty map made a reader
-		// that gave up look like a font with no cmap at all.
-		if partial {
+		// Nothing came back, which is three things: a subtable this cannot
+		// read, one the budget stopped before it read anything, and one whose
+		// every mapping named a glyph past the font's count. The flags are what
+		// tell them apart, and dropping them with the empty map made a reader
+		// that gave up, or a font with a broken maxp, look like a font with no
+		// cmap at all.
+		if r.ghosts {
+			fp.CmapState = CmapNamesNoGlyph
+		}
+		if r.partial {
 			fp.CmapPartial = true
 			break
 		}
@@ -417,10 +475,10 @@ func readCmap(fp *Program, cmap []byte, b *Budget) {
 	// The last readable one of each, so tried from the end.
 	lastReadable := func(offs []uint32) map[rune]int {
 		for i := len(offs) - 1; i >= 0; i-- {
-			m, partial := parse(offs[i])
-			fp.CmapPartial = fp.CmapPartial || partial
-			if m != nil || partial {
-				return m // unreadable leaves the map unset, not empty
+			r := parse(offs[i])
+			fp.CmapPartial = fp.CmapPartial || r.partial
+			if r.m != nil || r.partial {
+				return r.m // unreadable leaves the map unset, not empty
 			}
 		}
 		return nil

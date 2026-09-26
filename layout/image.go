@@ -235,6 +235,11 @@ type replacedLoader struct {
 type refKey struct {
 	ref string
 	as  svgAs
+	// declared is an <object>'s type attribute, as an essence, and empty for
+	// every other reference. It is part of how the reference is read because
+	// it can decide what the bytes are — see objectDocumentType — so two
+	// objects naming one file under different types are two readings of it.
+	declared string
 }
 
 // contentKey is what a reference read, and everything the reading depends on:
@@ -410,6 +415,13 @@ func (l *replacedLoader) image(b *Box) {
 // suite's replaced-intrinsic-001 to -005 are five of them, and every one is an
 // SVG or a PNG.
 //
+// So which of the three the resource is has to be asked before it is decoded,
+// and a document is reported as what it is: a browsing context this engine
+// does not create, as an <iframe>'s is. It used to go to the image decoder
+// with everything else and come back as "image: unknown format", which is true
+// of no HTML file and sent an author looking for a broken picture. The suite's
+// root-canvas-001 is one: an <object type="text/html"> whose data is a page.
+//
 // Where the data cannot be decoded, HTML says the element is represented by its
 // *fallback content*, which is its children and is ordinary markup — so the box
 // is laid out like any other and the children are on the page. The finding is
@@ -428,7 +440,7 @@ func (l *replacedLoader) object(b *Box) {
 	if !ok || data == "" {
 		return
 	}
-	content, why := l.attribute(data, "object", svgAsDocument)
+	content, why := l.attributeTyped(data, "object", svgAsDocument, typeAttributeEssence(b.Element))
 	if content == nil {
 		l.fallbackTo(b, why, data)
 		return
@@ -791,7 +803,8 @@ type loadFailure struct {
 // Then the bytes are looked up by what they are, so that a second name for
 // the same file — or the same data: URL written twice — is not decoded twice,
 // and a file that did not decode is not decoded again to fail again.
-func (l *replacedLoader) load(src, what string, as svgAs) (*ReplacedContent, *loadFailure) {
+func (l *replacedLoader) load(ref refKey, what string) (*ReplacedContent, *loadFailure) {
+	src, as := ref.ref, ref.as
 	if l.cut {
 		return nil, l.cutShort(src, what)
 	}
@@ -802,6 +815,19 @@ func (l *replacedLoader) load(src, what string, as svgAs) (*ReplacedContent, *lo
 	if !l.rec.charge(int64(len(data))*costFetchedByte, "the pictures past that point") {
 		l.cut = true
 		return nil, l.cutShort(src, what)
+	}
+	// An <object>'s resource is a picture only if it is not a document, and
+	// that is asked of the bytes, the type they came with and the element's
+	// type attribute before anything is decoded — and before the content memo,
+	// whose key has no type attribute in it. See objectDocumentType.
+	if as == svgAsDocument {
+		if doc := objectDocumentType(mime, ref.declared, data); doc != "" {
+			return nil, &loadFailure{
+				rule: RuleResourceBlocked,
+				message: "the " + what + " at " + quoteValue(src) + " is a " + doc +
+					" document, and this engine creates no nested browsing context to show it in",
+			}
+		}
 	}
 	key := contentKey{sum: sha256.Sum256(data), as: as, mime: mime}
 	if got, ok := l.byContent[key]; ok {
@@ -829,14 +855,19 @@ func (l *replacedLoader) load(src, what string, as svgAs) (*ReplacedContent, *lo
 // one memo: there were six copies of these ten lines, one per kind of element,
 // and each had to be told separately what the key was.
 func (l *replacedLoader) memoized(ref, what string, as svgAs) (*ReplacedContent, *loadFailure) {
-	key := refKey{ref: ref, as: as}
+	return l.memoizedKey(refKey{ref: ref, as: as}, what)
+}
+
+// memoizedKey is memoized for a key that carries more than the reference and
+// how it is read, which is an <object> with a type attribute.
+func (l *replacedLoader) memoizedKey(key refKey, what string) (*ReplacedContent, *loadFailure) {
 	if got, ok := l.loaded[key]; ok {
 		return got, nil
 	}
 	if l.failed[key] {
 		return nil, nil
 	}
-	content, why := l.load(ref, what, as)
+	content, why := l.load(key, what)
 	if content == nil {
 		l.failed[key] = true
 		return nil, why
@@ -850,11 +881,19 @@ func (l *replacedLoader) memoized(ref, what string, as svgAs) (*ReplacedContent,
 // first. The memo is keyed by what it came to, so "a.png" under
 // <base href="img/"> and "img/a.png" beside it are one read.
 func (l *replacedLoader) attribute(ref, what string, as svgAs) (*ReplacedContent, *loadFailure) {
+	return l.attributeTyped(ref, what, as, "")
+}
+
+// attributeTyped is attribute for an <object>, whose type attribute is part of
+// how its reference is read (see refKey.declared): the reference is resolved
+// against the document's base first, as every attribute's is, and the memo is
+// keyed by what it came to and the type together.
+func (l *replacedLoader) attributeTyped(ref, what string, as svgAs, declared string) (*ReplacedContent, *loadFailure) {
 	resolved, fail := l.base.resolve(ref, what, l.rec)
 	if fail != nil {
 		return nil, fail
 	}
-	return l.memoized(resolved, what, as)
+	return l.memoizedKey(refKey{ref: resolved, as: as, declared: declared}, what)
 }
 
 // cutShort is the finding for a picture the work budget refused. The budget has
@@ -1207,6 +1246,90 @@ func (l *replacedLoader) altOnly(b *Box) {
 // essence, which is lowercased and has no parameters.
 func isXMLMIMEType(essence string) bool {
 	return strings.HasSuffix(essence, "+xml") || essence == "text/xml" || essence == "application/xml"
+}
+
+// typeAttributeEssence is an element's type attribute as a MIME type essence —
+// lowercased, without its parameters — or empty when it has none, or has one
+// that is not a type at all, which HTML's object algorithm reads the same way.
+func typeAttributeEssence(n *html.Node) string {
+	t, ok := n.Attr("type")
+	if !ok {
+		return ""
+	}
+	if i := strings.IndexByte(t, ';'); i >= 0 {
+		t = t[:i]
+	}
+	t = ascii.Lower(ascii.TrimSpace(t))
+	if !strings.Contains(t, "/") {
+		return ""
+	}
+	return t
+}
+
+// objectDocumentType is the type of an <object>'s resource when that is a
+// document, and empty when it is not — when it is a picture, or something that
+// is neither and is left to the decoder to refuse.
+//
+// HTML §4.8.7 determines the resource type from the Content-Type the bytes
+// arrived with; where there is none, from the element's type attribute; and
+// where there is neither, by sniffing the bytes. A resource whose type is not
+// an image is shown in a nested browsing context, and an XML type is one of
+// those. So mime is the Content-Type — what a data: URL declared, and empty
+// for a resolver's bytes, which declare nothing — and declared the attribute.
+//
+// Two readings here are this engine's, and both keep an SVG what it was. HTML
+// sends every XML type to a browsing context, image/svg+xml among them; this
+// engine reads an SVG as a picture (see svg.go), under its own type or under
+// any XML type whose bytes are an SVG, which is what decode does with them too.
+// And an untyped file is asked whether it is an SVG before it is asked whether
+// it is HTML, as decode asks it before the image signatures: a browser serving
+// the file has a Content-Type for it, a resolver has none, and the sniffing
+// table's "<!--" pattern would otherwise take an SVG opening with a comment
+// for a page.
+func objectDocumentType(mime, declared string, data []byte) string {
+	t := mime
+	if t == "" {
+		t = declared
+	}
+	switch {
+	case t == "":
+		if !looksLikeSVG(data) && sniffsAsHTML(data) {
+			return "text/html"
+		}
+	case t == "text/html":
+		return t
+	case isXMLMIMEType(t) && t != "image/svg+xml" && !looksLikeSVG(data):
+		return t
+	}
+	return ""
+}
+
+// sniffHTMLPatterns are the MIME Sniffing standard's HTML patterns (§7.1, the
+// rules for identifying an unknown MIME type), each of which has to be followed
+// by a tag-terminating byte — a space or ">" — to match.
+var sniffHTMLPatterns = [...]string{
+	"<!doctype html", "<html", "<head", "<script", "<iframe", "<h1", "<div",
+	"<font", "<table", "<a", "<style", "<title", "<b", "<body", "<br", "<p",
+	"<!--",
+}
+
+// sniffsAsHTML reports whether bytes that came with no type sniff as
+// text/html: after any leading white space bytes, one of the HTML patterns,
+// compared ASCII case-insensitively, then a tag-terminating byte. The standard
+// reads only the resource header, its first 1445 bytes, and so does this.
+func sniffsAsHTML(data []byte) bool {
+	const resourceHeader = 1445
+	if len(data) > resourceHeader {
+		data = data[:resourceHeader]
+	}
+	data = bytes.TrimLeft(data, "\t\n\f\r ")
+	for _, p := range sniffHTMLPatterns {
+		if len(data) > len(p) && hasFoldPrefix(data, p) &&
+			(data[len(p)] == ' ' || data[len(p)] == '>') {
+			return true
+		}
+	}
+	return false
 }
 
 // looksLikeSVG reports whether bytes that came with no type are meant to be an

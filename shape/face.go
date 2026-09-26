@@ -206,6 +206,28 @@ func keepLayoutTables(tables map[string][]byte) map[string][]byte {
 	return out
 }
 
+// noCmapError says why a font with no usable Unicode cmap is refused.
+//
+// The refusal is one — a face that maps no character to a glyph can set no
+// text — but the reason is not, and the reason is what the author reads, in the
+// @font-face finding that quotes this. A font whose map is there and names only
+// glyphs past maxp's count was told it "has no Unicode character map", which is
+// false of it and sends whoever reads it looking for a table the font carries.
+// font.CmapState is what tells the cases apart.
+func noCmapError(prog *font.Program) error {
+	switch prog.CmapState {
+	case font.CmapUnreadable:
+		return errors.New("fonts: the font's Unicode character map could not be " +
+			"read: each of its subtables is in a format this engine does not read, " +
+			"is cut short, or maps no character to a glyph")
+	case font.CmapNamesNoGlyph:
+		return fmt.Errorf("fonts: the font's Unicode character map names no glyph "+
+			"the font has: every character in it is mapped to a glyph index past "+
+			"the %d glyphs its maxp declares", prog.NumGlyphs)
+	}
+	return errors.New("fonts: the font has no Unicode character map")
+}
+
 // Load parses an sfnt font program — TrueType or OpenType — and prepares it for
 // embedding. The bytes are retained as they are, and Subset cuts them down.
 //
@@ -253,7 +275,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		return nil, err
 	}
 	if len(prog.Cmap) == 0 {
-		return nil, errors.New("fonts: the font has no Unicode character map")
+		return nil, noCmapError(prog)
 	}
 	// The CID a glyph index stands for, when the outlines are a CID-keyed CFF
 	// and the two numberings differ. nil for every other kind of face, which is
