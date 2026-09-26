@@ -138,6 +138,117 @@ func TestColumnFillAutoFillsEachColumnInTurn(t *testing.T) {
 	}
 }
 
+// TestALineAColumnWouldEndInsideBeginsTheNextColumn.
+//
+// A column of stated height ends that far below where it began, and where that
+// is inside a line the column ends above the line and the line begins the next
+// one: a line is the unit fragmentation works in, and CSS Fragmentation 3 §4's
+// class B break between two lines is where the column may end. It was refused
+// instead — the content laid out in one column and reported — for every
+// stated height that was not a whole number of lines, which is nearly every
+// stated height a document writes.
+//
+// Four 20px lines in columns of 50px: the column ends at 40, above the third
+// line, and the third and fourth begin the second column at its top.
+func TestALineAColumnWouldEndInsideBeginsTheNextColumn(t *testing.T) {
+	const doc = `<div id="d">a<br>b<br>c<br>d</div>`
+	for _, decl := range []string{
+		"column-fill: auto; height: 50px",
+		// "balance" is not consulted where the height is given, so the columns
+		// end in the same places.
+		"height: 50px",
+		// And a maximum that binds, where the columns are filled in turn at it.
+		"max-height: 50px",
+	} {
+		css := colCSS + `#d { column-count: 2; ` + decl + ` }`
+		for _, f := range findingsOf(t, doc, css) {
+			if f.Property == "column-count" {
+				t.Errorf("%s: %s", decl, f.Message)
+			}
+		}
+		got := columnLines(t, doc, css)
+		want := []Point{
+			{X: upx(t, 0), Y: upx(t, 0)},
+			{X: upx(t, 0), Y: upx(t, 20)},
+			{X: upx(t, 100), Y: upx(t, 0)},
+			{X: upx(t, 100), Y: upx(t, 20)},
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%s: the box drew %d lines, want %d", decl, len(got), len(want))
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("%s: line %d is at %v, want %v — the column ends above the "+
+					"line its height falls inside, and that line begins the next",
+					decl, i, got[i], want[i])
+			}
+		}
+	}
+
+	// A height that ends exactly at the bottom of a line is not inside it, and
+	// that line stays: two lines in the first column of 40px, not one.
+	wantLineXs(t, "a height on a line's edge", doc,
+		colCSS+`#d { column-count: 2; height: 40px }`, 0, 0, 100, 100)
+
+	// A line taller than a column has nowhere above it to end the column at.
+	// CSS Fragmentation 3 §4.4 requires progress, and a line is monolithic, so
+	// it is placed at the top of its column and overflows it, and the next
+	// line begins the next column: four columns of 10px, a line in each, the
+	// last two overflow columns. It was refused.
+	short := colCSS + `#d { column-count: 2; height: 10px }`
+	for _, f := range findingsOf(t, doc, short) {
+		if f.Property == "column-count" {
+			t.Errorf("columns shorter than a line: %s", f.Message)
+		}
+	}
+	got := columnLines(t, doc, short)
+	for i, at := range got {
+		if at.X != upx(t, float64(100*i)) || at.Y != 0 {
+			t.Errorf("columns shorter than a line: line %d is at %v, want the top of "+
+				"column %d", i, at, i+1)
+		}
+	}
+	if len(got) != 4 {
+		t.Errorf("columns shorter than a line drew %d lines, want 4", len(got))
+	}
+}
+
+// TestLinesSideBySideLeaveNothingToEndAColumnAt: a nested multicol, already
+// poured, has its columns' lines side by side, and where they interleave no
+// height is clear of all of them. Ending the outer column below them would put
+// all of them in it, which is not what a browser draws — it ends each inner
+// column above its own line — so the pour is refused and reported, as it was.
+//
+// The shape is the suite's float-in-nested-multicol-001: a line in the first
+// inner column, and in the second a float whose one line starts 10px lower.
+func TestLinesSideBySideLeaveNothingToEndAColumnAt(t *testing.T) {
+	const doc = `<div id="d"><div id="in"><div>a</div>` +
+		`<div style="float: left"><div style="margin-top: 10px">b</div></div></div></div>`
+	css := colCSS + `#d { column-count: 2; height: 25px } #in { column-count: 2 }`
+	said := ""
+	for _, f := range findingsOf(t, doc, css) {
+		if f.Property == "column-count" {
+			said = f.Message
+		}
+	}
+	if !strings.Contains(said, "cannot be divided") {
+		t.Errorf("interleaved lines side by side said %q; no height in the column "+
+			"is clear of them", said)
+	}
+}
+
+// TestALineBegunInTheNextColumnStillHonoursAnAvoid: the column that ends above
+// a line is then asked whether it may end there. Two paragraphs, the second
+// asking not to be separated from the first: a column of 50px would end inside
+// the second's first line, above it is the edge between the two, and that is
+// avoided — so the column ends a line earlier, after "a".
+func TestALineBegunInTheNextColumnStillHonoursAnAvoid(t *testing.T) {
+	const doc = `<div id="d"><p>a<br>b</p><p style="break-before: avoid">c<br>d</p></div>`
+	css := colCSS + `#d { column-count: 2; height: 50px } p { margin: 0 }`
+	// a | b c | d, the last in an overflow column.
+	wantLineXs(t, "an avoided break above the line", doc, css, 0, 100, 100, 200)
+}
+
 // TestTheGapGoesBetweenTheColumns.
 func TestTheGapGoesBetweenTheColumns(t *testing.T) {
 	got := columnLines(t, `<div id="d">a<br>b</div>`,

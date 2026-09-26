@@ -408,7 +408,9 @@ func (n *pending) split(y style.Unit) (top *Fragment, below, ok bool) {
 	if len(n.linesByStart) > 0 && n.src.Lines[n.linesByStart[0]].Rect.Y < at {
 		// A line box straddling the cut. A line is not divisible — it is the
 		// unit fragmentation works in — so this is not a height the caller may
-		// cut at, and columnBreaks is what stops it choosing one.
+		// cut at, and columnBreaks and clearOfLines are what stop it choosing
+		// one. What is left is content set side by side whose lines leave no
+		// height in the column clear of all of them.
 		return nil, false, false
 	}
 	slices.Sort(took)
@@ -689,6 +691,9 @@ type columnEnds struct {
 //     break point", and §4.4 relaxes only the rules for unforced breaks when
 //     there are not enough places to break;
 //   - it is balanced, and it ends at the last breakpoint that fits;
+//   - a column height below where it began is inside a line, and then it
+//     ends at the top of that line, which begins the next column, or below a
+//     line taller than the column, which overflows it. See clearOfLines;
 //   - that is somewhere a break is avoided, and then it ends at the last
 //     break before it that is not. See avoidZones.
 //
@@ -710,6 +715,15 @@ func fillColumnsWith(f *Fragment, c columns, height style.Unit, ends *columnEnds
 		ends = &columnEnds{}
 	}
 	p := &pour{ends: map[*Fragment]style.Unit{}}
+	// Where the lines are, for a column that would end inside one. Read
+	// before the pour moves anything, and only where a column can end at a
+	// height that is not a breakpoint: a balanced pour ends each column at
+	// one.
+	var lines []lineBand
+	if ends.breaks == nil {
+		lines = lineBands(f, 0, nil)
+		lines = mergeLineBands(lines)
+	}
 	rest := p.pend(*f, f)
 	bands := make([]*Fragment, 0, min(c.n, len(f.Lines)+len(f.Children)+1))
 	spent := false
@@ -745,9 +759,22 @@ func fillColumnsWith(f *Fragment, c columns, height style.Unit, ends *columnEnds
 			if b, ok := lastBreakIn(ends.breaks, start, cut); ok {
 				cut = b
 			}
-		case ends.avoid.forbids(cut):
-			if b, ok := ends.avoid.lastAllowed(start, cut); ok {
-				cut = b
+		default:
+			// A column height that falls inside a line ends the column above
+			// the line, and the line begins the next one. A line is the unit
+			// fragmentation works in and cannot be divided, so a height inside
+			// one is not a place a column may end, and CSS Fragmentation 3 §4
+			// puts the break at the class B break before it: between that line
+			// and the one above. A column of stated height whose height is not
+			// a whole number of lines was refused, and its content laid out in
+			// one column, whenever the cut came inside a line — which is
+			// nearly always. See clearOfLines, which also says what happens to
+			// a line taller than a column.
+			cut = clearOfLines(lines, start, cut)
+			if ends.avoid.forbids(cut) {
+				if b, ok := ends.avoid.lastAllowed(start, cut); ok {
+					cut = b
+				}
 			}
 		}
 		top, below, ok := rest.split(cut.Sub(start))
@@ -792,6 +819,93 @@ func fillColumnsWith(f *Fragment, c columns, height style.Unit, ends *columnEnds
 		}
 	}
 	return true, ""
+}
+
+// lineBand is the heights a line box covers, top and bottom, down the content
+// box of the fragment being poured, or several lines that overlap, merged.
+type lineBand struct {
+	lo, hi style.Unit
+	// merged says the band is more than one line: lines set side by side,
+	// whose tops and bottoms interleave.
+	merged bool
+}
+
+// lineBands collects where every line box in a subtree is, measured as
+// columnBreaks measures: down the fragment's content box, each child's lines
+// from its own content origin. A line with no height covers nothing a cut can
+// go through, and is left out.
+func lineBands(f *Fragment, at style.Unit, out []lineBand) []lineBand {
+	if f == nil {
+		return out
+	}
+	for _, line := range f.Lines {
+		if line.Rect.H > 0 {
+			out = append(out, lineBand{lo: at.Add(line.Rect.Y), hi: at.Add(line.Rect.Bottom())})
+		}
+	}
+	for _, c := range f.Children {
+		out = lineBands(c, at.Add(c.ContentRect().Y), out)
+	}
+	return out
+}
+
+// mergeLineBands sorts the bands and joins the ones that overlap, so that what
+// is left is disjoint and a height is inside at most one of them.
+//
+// Overlapping is strict. Two lines one above the other share an edge, and a cut
+// at that edge goes through neither, so they stay two bands with a place to
+// cut between them. Lines that do overlap are side by side — a float's beside
+// the text it floats in, or the columns of a multicol already poured — and a
+// cut between the top of one and the bottom of the other goes through one of
+// them wherever it falls, so the two are one band.
+func mergeLineBands(bands []lineBand) []lineBand {
+	if len(bands) < 2 {
+		return bands
+	}
+	slices.SortFunc(bands, func(a, b lineBand) int { return cmp.Compare(a.lo, b.lo) })
+	out := bands[:1]
+	for _, b := range bands[1:] {
+		last := &out[len(out)-1]
+		if b.lo < last.hi {
+			last.hi = style.Max(last.hi, b.hi)
+			last.merged = true
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+// clearOfLines is where a column that would end at cut, having begun at start,
+// ends instead when cut is inside a line. bands is sorted and disjoint (see
+// mergeLineBands), so a height is inside at most one band and one answer is
+// enough.
+//
+// Inside a band that begins below the column's start, the column ends at the
+// band's top — which is inside no line — and the line begins the next column.
+//
+// Inside one that begins at the start or above it, the line is taller than
+// the column and there is nowhere above it to end. CSS Fragmentation 3 §4.4
+// requires progress: a line at the top of a fragmentainer is placed there
+// whether or not it fits, and a line is monolithic, so it overflows the
+// column rather than being cut through. The column ends at the line's bottom.
+// That is for one line only. A band merged from lines side by side has no
+// height clear of all of them, and ending the column at its bottom would put
+// every one of them in this column, which is not what a browser draws: it ends
+// each side's column above its own line. The cut is left inside the band, and
+// the pour refuses it.
+func clearOfLines(bands []lineBand, start, cut style.Unit) style.Unit {
+	i := sort.Search(len(bands), func(i int) bool { return bands[i].hi > cut })
+	if i == len(bands) || bands[i].lo >= cut {
+		return cut
+	}
+	switch b := bands[i]; {
+	case b.lo > start:
+		return b.lo
+	case !b.merged:
+		return b.hi
+	}
+	return cut
 }
 
 // lastBreakIn is the latest of the sorted breakpoints after start and at or
@@ -1073,8 +1187,10 @@ func (l *layouter) pourIntoColumns(b *Box, frag *Fragment, cols columns,
 	// §3.5, and the two cases are which of the heights is *given*.
 	//
 	// A container told how tall to be has its column height decided for it: the
-	// columns are that tall and the content is cut at multiples of it, whichever
-	// value column-fill has, and anew from each forced break. "balance" is
+	// columns are that tall and each ends that far below where it began, or
+	// above the line that height falls inside (below it, where the line is
+	// taller than a column), whichever value column-fill has, and anew from
+	// each forced break. "balance" is
 	// consulted, as §3.5 puts it, "only if the length of columns has been
 	// constrained" — and where it has, the constraint is the length, so there is
 	// nothing left for balancing to choose.
