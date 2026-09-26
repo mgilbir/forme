@@ -288,10 +288,16 @@ UCD ?= $(UCD_DIR)
 # argument lists had drifted, and nothing was in a position to notice. See
 # cmd/regenerate_test.go, which now runs every one of them.
 #
-# The twenty files that are read, rather than UCD.zip: the archive is an
+# The twenty-one files that are read, rather than UCD.zip: the archive is an
 # order of magnitude larger than the files taken from it, unzip is one more
 # thing to have installed, and a file that moves in a new release fails here by
 # name instead of as a "no such file" from inside a generator.
+#
+# One of them is read by a test rather than a generator: LineBreakTest.txt is
+# UAX #14's conformance suite, and paragraph/linebreakconformance_test.go runs
+# every case of it through the line breaker. It is here rather than in a set of
+# its own, as GraphemeBreakTest.txt is, because it is held to the release
+# linebreaktable.go was generated from, and that release is this set's.
 #
 # The layout is the database's own, subdirectories and all, so that a caller who
 # already has one unpacked can point UCD at it and every target works.
@@ -314,6 +320,7 @@ UCD_FILES := \
 	UnicodeData.txt \
 	VerticalOrientation.txt \
 	auxiliary/GraphemeBreakProperty.txt \
+	auxiliary/LineBreakTest.txt \
 	emoji/emoji-data.txt \
 	extracted/DerivedBidiClass.txt
 

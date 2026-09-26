@@ -1404,7 +1404,26 @@ const wptEnv = "WPT_TESTS"
 // Alignment 3 §9.1 make it the first row's, synthesized from the lowest cell
 // content edge when no cell has one. wpt.fyi: Chrome and Firefox pass, Safari
 // fails.
-const wptCleanPassBaseline = 5986
+//
+// **5986 to 5984, for UAX #14 in full**, and it was the user's decision to take
+// it. The line breaker ran a subset of UAX #14 and disagreed with
+// LineBreakTest.txt at 5,478 positions no rule of CSS Text accounts for; it
+// now runs all of it, with CSS Text 3's cited tailorings on top (see
+// paragraph/uax14.go and paragraph/linebreakconformance_test.go). Two
+// documents go red, and neither has three browsers behind it. wpt.fyi's stable
+// runs at revision 59e94f7725:
+//
+//   - word-break/word-break-break-all-023 — Chrome passes, Firefox and Safari
+//     fail. It asks for no break after a backslash (class PR); UAX #14 has
+//     none of that, PR ÷ PR is LB31.
+//   - white-space/white-space-pre-wrap-justify-004 — Chrome and Safari pass,
+//     Firefox fails. Its reference breaks between a space and "!", which
+//     UAX #14's LB13 ("× EX", an earlier rule than LB18's "SP ÷") forbids, and
+//     Firefox follows LB13.
+//
+// Where the browsers do not agree the engine keeps UAX #14 rather than pick
+// one of them, and the two are accepted failures.
+const wptCleanPassBaseline = 5984
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

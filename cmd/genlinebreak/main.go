@@ -57,7 +57,25 @@
 // characters that quietly changed sides — which is how HH would have gone
 // unnoticed, since it was carved out of BA.
 //
-//	go run ./cmd/genlinebreak -version <X.Y.Z> <LineBreak.txt> > paragraph/linebreaktable.go
+// # The whole property
+//
+// The sets above are what this package asked of the file while it implemented
+// a subset of UAX #14. It implements all of it now — paragraph/uax14.go runs
+// the rules in full, and paragraph/linebreakconformance_test.go holds it to
+// every case of LineBreakTest.txt — and the rules need every character's class,
+// so the whole of the property is emitted too, as lineBreakClassRanges. The
+// sets stay, because the exported questions they answer are asked by callers
+// outside the rules.
+//
+// One more property is read for the rules and it is not in LineBreak.txt.
+// LB30b keeps an emoji modifier with an unassigned Extended_Pictographic code
+// point before it — a pictograph a later release may assign — and that is
+// emoji-data.txt's Extended_Pictographic intersected with the code points
+// UnicodeData.txt does not assign. Both are read here rather than asked of Go's
+// package unicode, for the reason cmd/pinnedunicode_test.go gives.
+//
+//	go run ./cmd/genlinebreak -version <X.Y.Z> <LineBreak.txt> <emoji-data.txt> \
+//		<UnicodeData.txt> > paragraph/linebreaktable.go
 package main
 
 import (
@@ -170,37 +188,6 @@ var inseparableClasses = map[string]bool{"IN": true}
 // rules governing the soft wrap opportunities created by punctuation".
 var openClasses = map[string]bool{"OP": true}
 
-// breakAfterClasses is UAX #14's "break after" class: the characters a line may
-// end after, whatever follows them.
-//
-// It is where the Ethiopic wordspace, the Tibetan tsheg, the Devanagari danda,
-// the Khmer and Mongolian and Myanmar punctuation, the runic and Aegean marks
-// and a dozen other scripts' word separators live — every writing system whose
-// words are divided by a mark rather than by a space. Without it none of them
-// wraps at all: the whole paragraph is one unbreakable run.
-//
-// The classes this engine handles character by character are not here and do
-// not need to be. The spaces of BA are U+0020 and the other space separators,
-// which SplitAtBreaks reaches before this; the hyphens are HY and HH, which
-// have a case of their own because a line may not *begin* with one of them
-// either.
-var breakAfterClasses = map[string]bool{"BA": true}
-
-// aksaraClasses are the two Brahmic classes a cluster may begin with.
-//
-// UAX #14's LB28a is written as four prohibitions *inside* an aksara cluster —
-// between a pre-base repha and the letter it belongs to, between a letter and
-// its final vowel, and across a virama — and it says nothing against a break
-// between two clusters, where LB31's "ALL ÷ ALL" allows one. The scripts these
-// classes cover write without spaces, so that boundary is the only opportunity
-// their text has: without it a paragraph of Javanese or Balinese is one
-// unbreakable run and overflows its box, which CSS Text §5.1 forbids outright.
-//
-// The prohibitions themselves need no table here. A cluster is a grapheme
-// cluster — Unicode 15.1's GB9c keeps a conjunct together, which is what the
-// virama rule is about — and SplitAtBreaks already refuses to cut inside one.
-var aksaraClasses = map[string]bool{"AK": true, "AS": true}
-
 // dictionaryClasses is UAX #14's SA: the South East Asian scripts whose words
 // are found by lexical analysis rather than by looking for a space.
 //
@@ -283,11 +270,17 @@ func main() {
 	version := flag.String("version", "", "the Unicode version the file came from")
 	flag.Parse()
 	args := flag.Args()
-	if len(args) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: genlinebreak -version <X.Y.Z> <LineBreak.txt>")
+	if len(args) != 3 {
+		fmt.Fprintln(os.Stderr, "usage: genlinebreak -version <X.Y.Z> <LineBreak.txt> "+
+			"<emoji-data.txt> <UnicodeData.txt>")
 		os.Exit(2)
 	}
 	if err := ucd.Check(*version, args...); err != nil {
+		fmt.Fprintln(os.Stderr, "genlinebreak:", err)
+		os.Exit(1)
+	}
+	pictUnassigned, err := extPictUnassigned(args[1], args[2])
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "genlinebreak:", err)
 		os.Exit(1)
 	}
@@ -298,8 +291,8 @@ func main() {
 	}
 	defer f.Close()
 
-	var spans, glue, strict, loose, prefix, postfix, inseparable, open, after, aksara, dict []span
-	var ideographic, jamo []span
+	var spans, glue, strict, loose, prefix, postfix, inseparable, open, dict []span
+	var ideographic, jamo, all []span
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -322,6 +315,7 @@ func main() {
 		if !ok {
 			continue
 		}
+		all = append(all, span{lo, hi, class})
 		if forbidden[class] {
 			spans = append(spans, span{lo, hi, class})
 		}
@@ -339,12 +333,6 @@ func main() {
 		}
 		if postfixClasses[class] {
 			postfix = append(postfix, span{lo, hi, class})
-		}
-		if breakAfterClasses[class] {
-			after = append(after, span{lo, hi, class})
-		}
-		if aksaraClasses[class] {
-			aksara = append(aksara, span{lo, hi, class})
 		}
 		if dictionaryClasses[class] {
 			dict = append(dict, span{lo, hi, class})
@@ -392,7 +380,7 @@ func main() {
 		}
 	}
 	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses,
-		inseparableClasses, openClasses, breakAfterClasses, aksaraClasses,
+		inseparableClasses, openClasses,
 		dictionaryClasses, ideographicClasses, jamoClasses} {
 		for class := range set {
 			if !seen[class] {
@@ -407,11 +395,16 @@ func main() {
 	}
 
 	var w strings.Builder
-	fmt.Fprintf(&w, `// Code generated by cmd/genlinebreak from Unicode's LineBreak.txt.
-// DO NOT EDIT.
+	fmt.Fprintf(&w, `// Code generated by cmd/genlinebreak from Unicode's LineBreak.txt,
+// emoji-data.txt and UnicodeData.txt. DO NOT EDIT.
 
 package paragraph
-`)
+
+// lineBreakUnicodeVersion is the release these tables were generated from. The
+// conformance test reads it, so LineBreakTest.txt from one release run against
+// tables from another is a failure rather than a puzzle.
+const lineBreakUnicodeVersion = %q
+`, *version)
 	emit(&w, "noBreakBeforeRanges", spans, `// The characters a line may not begin with. Unicode %s.
 //
 // %d ranges, merged from %d the file states separately: %s.
@@ -452,18 +445,6 @@ package paragraph
 // UAX #14 has no unconditional rule about them — nothing there says a line may
 // not start with a per-cent sign — so this is the one part of the tailoring
 // that adds to the base table rather than taking away from it.`, *version)
-	emit(&w, "breakAfterRanges", after, `// The characters a line may end after, UAX #14's class BA. Unicode %s.
-//
-// %d ranges, merged from %d the file states separately: %s.
-// Every writing system whose words are divided by a mark rather than by a space
-// is in here: the Ethiopic wordspace, the Tibetan tsheg, the Devanagari danda,
-// the Khmer, Mongolian and Myanmar punctuation, the runic and Aegean word
-// separators. Without them none of those scripts wraps at all.
-//
-// The BA characters this package reaches before this table are not a gap: the
-// spaces are U+0020 and the other space separators, which have their own arms
-// in SplitAtBreaks, and the hyphens are classes HY and HH, which have theirs
-// because a line may not begin with one either.`, *version)
 	emit(&w, "ideographicRanges", ideographic, `// The characters that break like an ideograph, UAX #14's classes ID and CJ and
 // the Hangul syllables H2 and H3. Unicode %s.
 //
@@ -481,14 +462,6 @@ package paragraph
 // They break as the Hangul syllables do, between one syllable and the next and
 // never inside one. See jamoClasses in cmd/genlinebreak for why the grapheme
 // cluster is what says where the syllable ends.`, *version)
-	emit(&w, "aksaraRanges", aksara, `// The characters an aksara cluster may begin with, UAX #14's classes AK and
-// AS. Unicode %s.
-//
-// %d ranges, merged from %d the file states separately: %s.
-// Balinese, Batak, Brahmi, Cham, Dives Akuru, Grantha, Javanese, Kawi and
-// Tulu-Tigalari — scripts that write without spaces, whose only soft wrap
-// opportunity is the boundary between two clusters. See aksaraClasses in
-// cmd/genlinebreak for why the prohibitions inside a cluster need no table.`, *version)
 	emit(&w, "dictionaryRanges", dict, `// The scripts whose words are found with a dictionary, UAX #14's class SA.
 // Unicode %s.
 //
@@ -513,7 +486,101 @@ package paragraph
 // prohibition and a relaxed prohibition still needs something to relax. The
 // same characters are in looseBreakRanges for the other half of the sentence,
 // which is a line *beginning* with one.`, *version)
+	emitClasses(&w, all, *version)
+	emit(&w, "extPictUnassignedRanges", pictUnassigned, `// The Extended_Pictographic code points no character is assigned to yet.
+// Unicode %s.
+//
+// %d ranges, merged from %d: %s.
+// UAX #14's LB30b keeps an emoji modifier with one of these before it, as it
+// keeps one with an emoji base: "[\p{Extended_Pictographic}&\p{Cn}] × EM". A
+// pictograph assigned in a later release is likely to be a base, and text
+// written with it should not break differently for a reader whose tables are
+// older. Read from emoji-data.txt and UnicodeData.txt; see cmd/genlinebreak.`, *version)
 	fmt.Print(w.String())
+}
+
+// emitClasses writes every character's Line_Break class, which is what UAX #14's
+// rules are stated over: runs of one class merged, the classes named by the Go
+// constants paragraph/uax14.go defines for them. A code point the file does not
+// list is XX, which is what its "@missing" line says, and is left out of the
+// table for the lookup to answer.
+func emitClasses(w *strings.Builder, spans []span, version string) {
+	sort.Slice(spans, func(i, j int) bool { return spans[i].lo < spans[j].lo })
+	var merged []span
+	for _, s := range spans {
+		if s.class == "XX" {
+			continue
+		}
+		if n := len(merged); n > 0 && merged[n-1].class == s.class && s.lo == merged[n-1].hi+1 {
+			merged[n-1].hi = s.hi
+			continue
+		}
+		if n := len(merged); n > 0 && s.lo <= merged[n-1].hi {
+			fmt.Fprintf(os.Stderr, "genlinebreak: %04X..%04X overlaps the range before it\n",
+				s.lo, s.hi)
+			os.Exit(1)
+		}
+		merged = append(merged, s)
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, `// The Line_Break class of every character, as LineBreak.txt states it.
+// Unicode %s.
+//
+// %d ranges, from %d lines. What is not here is XX, which the file's "@missing"
+// line gives every code point it does not list. The rules in uax14.go resolve
+// the classes that need resolving — AI, SA, CJ, SG and XX — so this is the
+// file's statement and not a policy.
+var lineBreakClassRanges = [...]lineBreakRange{
+`, version, len(merged), len(spans))
+	for _, s := range merged {
+		fmt.Fprintf(w, "\t{0x%04X, 0x%04X, lb%s},\n", s.lo, s.hi, s.class)
+	}
+	fmt.Fprintln(w, "}")
+}
+
+// extPictUnassigned is Extended_Pictographic, from emoji-data.txt, minus every
+// code point UnicodeData.txt assigns.
+func extPictUnassigned(emojiPath, unicodeDataPath string) ([]span, error) {
+	assigned, err := ucd.UnicodeData(unicodeDataPath)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(emojiPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []span
+	found := false
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		if i := strings.IndexByte(line, '#'); i >= 0 {
+			line = line[:i]
+		}
+		fields := strings.Split(line, ";")
+		if len(fields) < 2 || strings.TrimSpace(fields[1]) != "Extended_Pictographic" {
+			continue
+		}
+		found = true
+		lo, hi, ok := parseRange(strings.TrimSpace(fields[0]))
+		if !ok {
+			return nil, fmt.Errorf("%s: cannot read the range %q", emojiPath, fields[0])
+		}
+		for r := lo; r <= hi; r++ {
+			if _, ok := assigned[r]; !ok {
+				out = append(out, span{r, r, "ExtPict&Cn"})
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if !found || len(out) == 0 {
+		return nil, fmt.Errorf("%s has no unassigned Extended_Pictographic code point; "+
+			"has the property been renamed?", emojiPath)
+	}
+	return out, nil
 }
 
 // emit writes one table: the ranges sorted and merged, under a comment that

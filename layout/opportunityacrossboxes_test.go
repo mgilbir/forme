@@ -25,6 +25,9 @@ func TestAnOpportunityAtTheEndOfANodeReachesTheNextBox(t *testing.T) {
 	// that can put the second half on a line of its own.
 	const css = "#p { font-family: Courier; font-size: 20px; width: 5ch; %s }"
 
+	// The prefixes are in Japanese, which is what line-break: loose's rule
+	// about them is conditioned on — "if the writing system is Chinese or
+	// Japanese" — and what line-break-loose-018 is written in.
 	for _, tc := range []struct {
 		html, extra string
 		want        []string
@@ -36,11 +39,11 @@ func TestAnOpportunityAtTheEndOfANodeReachesTheNextBox(t *testing.T) {
 		{`high<span>-</span>way`, "", []string{"high-", "way"}, "a hyphen alone in a span"},
 		{`high‐<span>way</span>`, "", []string{"high‐", "way"}, "a U+2010 hyphen at a node edge"},
 
-		{`サンプル€サンプル`, "line-break: loose",
+		{`<span lang=ja>サンプル€サンプル</span>`, "line-break: loose",
 			[]string{"サンプル€", "サンプル"}, "a prefix inside one node"},
-		{`サンプル<span>€</span>サンプル`, "line-break: loose",
+		{`<span lang=ja>サンプル<span>€</span>サンプル</span>`, "line-break: loose",
 			[]string{"サンプル€", "サンプル"}, "a prefix in a span"},
-		{`サンプル<span>￥</span>サンプル`, "line-break: loose",
+		{`<span lang=ja>サンプル<span>￥</span>サンプル</span>`, "line-break: loose",
 			[]string{"サンプル￥", "サンプル"}, "a fullwidth yen sign in a span"},
 	} {
 		got := brokenLines(t, tc.html, fmt.Sprintf(css, tc.extra))
