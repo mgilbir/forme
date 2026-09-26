@@ -323,26 +323,19 @@ func turnLine(l *LineFragment, mode writingMode, in Size) {
 	l.Rect = turnRect(l.Rect, mode, in)
 	l.Sideways = true
 	l.Anticlockwise = mode == sidewaysLR
-	for _, ib := range l.Boxes {
-		// An inline box's fragment is positioned in the block's content
-		// coordinates, the same ones the line is, so it takes the same mirror.
-		// Its own children are the boxes further in, which turnFragment reaches
-		// through turnContent.
-		ib.BorderRect = turnRect(ib.BorderRect, mode, in)
-		for i := range ib.bgBands {
-			ib.bgBands[i] = turnRect(ib.bgBands[i], mode, in)
+	// An inline box's fragment, and a link's area, are positioned in the
+	// block's content coordinates, the same ones the line is, so they take the
+	// same mirror. See LineFragment.placed.
+	for _, list := range l.placed() {
+		for _, ib := range *list {
+			ib.BorderRect = turnRect(ib.BorderRect, mode, in)
+			for i := range ib.bgBands {
+				ib.bgBands[i] = turnRect(ib.bgBands[i], mode, in)
+			}
+			ib.Margin = turnEdges(ib.Margin, mode)
+			ib.Border = turnEdges(ib.Border, mode)
+			ib.Padding = turnEdges(ib.Padding, mode)
 		}
-		ib.Margin = turnEdges(ib.Margin, mode)
-		ib.Border = turnEdges(ib.Border, mode)
-		ib.Padding = turnEdges(ib.Padding, mode)
-	}
-	// A link's area is a rectangle in the same coordinates, and turns the same
-	// way. See LineFragment.links.
-	for _, lf := range l.links {
-		lf.BorderRect = turnRect(lf.BorderRect, mode, in)
-		lf.Margin = turnEdges(lf.Margin, mode)
-		lf.Border = turnEdges(lf.Border, mode)
-		lf.Padding = turnEdges(lf.Padding, mode)
 	}
 }
 
