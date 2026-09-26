@@ -306,23 +306,35 @@ func TestTheIgnorableTableIsUnicodesOwn(t *testing.T) {
 
 // TestHidingCostsNothingForOrdinaryText pins the shortcut. Every string the
 // pipeline sets is asked this question, and almost every answer is no; a pass
-// that copied every run to remove nothing would cost more than the property is
-// worth.
+// that copied every run to remove nothing, or allocated a record of what each
+// character is to say that none is anything, would cost more than the property
+// is worth. Both questions are asked: what a shaped run's characters are to
+// the font's rules (ignorableKinds), and what a run set in a face that never
+// shapes drops before it is drawn (dropHiddenBeforeDrawing).
 func TestHidingCostsNothingForOrdinaryText(t *testing.T) {
 	runes := []rune("The quick brown fox jumps over the lazy dog.")
 	offsets := make([]int, len(runes))
 	for i := range offsets {
 		offsets[i] = i
 	}
-	gotR, gotO := dropHiddenCharacters(runes, offsets)
+	if kinds := ignorableKinds(runes); kinds != nil {
+		t.Error("a run with nothing ignorable in it was given a record of what each character is")
+	}
+	if n := testing.AllocsPerRun(100, func() { ignorableKinds(runes) }); n != 0 {
+		t.Errorf("asking an ordinary run what its characters are allocated %v times", n)
+	}
+	gotR, gotO := dropHiddenBeforeDrawing(runes, offsets)
 	if &gotR[0] != &runes[0] || &gotO[0] != &offsets[0] {
 		t.Error("a run with nothing to drop was copied")
 	}
 
 	// And it does copy when it must, without disturbing what is left.
-	withOne := []rune("x­y")
+	withOne := []rune("x\u00ady")
 	offs := []int{0, 1, 3}
-	gotR, gotO = dropHiddenCharacters(withOne, offs)
+	if kinds := ignorableKinds(withOne); len(kinds) != 3 || kinds[1] != ignorableStepped {
+		t.Errorf("a soft hyphen between two letters is %v, want it stepped over", kinds)
+	}
+	gotR, gotO = dropHiddenBeforeDrawing(withOne, offs)
 	if string(gotR) != "xy" {
 		t.Errorf("dropping gave %q, want %q", string(gotR), "xy")
 	}

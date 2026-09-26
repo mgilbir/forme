@@ -66,11 +66,19 @@ type hbInk struct {
 
 func readCFFInkGolden(t *testing.T) []*hbInk {
 	t.Helper()
-	path := filepath.Join(harfbuzzDir, "cffink.expected.txt")
+	return readInkGolden(t, "cffink.expected.txt", "hbcffink", len(cffInkFaces))
+}
+
+// readInkGolden reads expectations written as cffink.py writes them — the
+// form colrink.py writes too — from name, which make's target generates, and
+// requires them to hold as many faces as the test has to read them.
+func readInkGolden(t *testing.T, name, target string, nfaces int) []*hbInk {
+	t.Helper()
+	path := filepath.Join(harfbuzzDir, name)
 	refuseUnpinnedOracle(t, path)
 	file, err := os.Open(path)
 	if err != nil {
-		t.Fatalf("reading %s: %v\nRun `make hbcffink` to generate it.", path, err)
+		t.Fatalf("reading %s: %v\nRun `make %s` to generate it.", path, err, target)
 	}
 	defer file.Close()
 	sc := bufio.NewScanner(file)
@@ -140,8 +148,8 @@ func readCFFInkGolden(t *testing.T) []*hbInk {
 	if err := sc.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if len(faces) != len(cffInkFaces) {
-		t.Fatalf("%d faces in %s and %d here to read them", len(faces), path, len(cffInkFaces))
+	if len(faces) != nfaces {
+		t.Fatalf("%d faces in %s and %d here to read them", len(faces), path, nfaces)
 	}
 	return faces
 }

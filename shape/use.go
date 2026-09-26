@@ -116,7 +116,7 @@ type useInfo struct {
 	// recorded while the glyphs still correspond to the characters.
 	mark bool
 	// joiner is which join control the character is, if either, so that a
-	// lookup can step over one as its feature asks. See stepsOverJoiner.
+	// lookup can step over one as its feature asks. See stepsOver.
 	joiner joinerKind
 }
 
@@ -651,7 +651,12 @@ var (
 // That is HarfBuzz's setup_topographical_masks, and it is what a font stating
 // the four for a Brahmic script means. It is the same membership test HarfBuzz
 // uses to choose between the two, which is InCursiveScript.
-func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune, p *plan) []Glyph {
+//
+// Mongolian is among them, and its free variation selectors take the form of
+// the letter before them, as HarfBuzz gives them in setup_masks_arabic_plan,
+// which its universal shaper calls too: mongolian says the run is Mongolian.
+// See mongolianVariationForms.
+func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune, p *plan, mongolian bool) []Glyph {
 	// An independent vowel followed by a sign that spells a different vowel
 	// has already been shown against a dotted circle, as it is by the Indic
 	// model — the list covers Sinhala, Brahmi, Khojki, Khudawadi, Tirhuta, Modi
@@ -668,7 +673,7 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune,
 	// recorded on the glyph and survives that.
 	cursive := anyCursive(runes)
 	if cursive {
-		markJoiningForms(buf, runes, before, after)
+		markJoiningForms(buf, runes, before, after, mongolian)
 	}
 	hooks := useHooks(&info)
 	// The stages before the clusters are cut, which are the whole run's.

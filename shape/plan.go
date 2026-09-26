@@ -257,7 +257,7 @@ type featureFlags uint8
 const (
 	// flagManualZWJ says the feature's lookups see a zero width joiner in their
 	// input rather than stepping over it; flagManualZWNJ says their context
-	// sees a non-joiner. See stepsOverJoiner.
+	// sees a non-joiner. See stepsOver.
 	flagManualZWJ featureFlags = 1 << iota
 	flagManualZWNJ
 	// flagPerSyllable holds the feature's lookups to one syllable: neither
@@ -327,10 +327,16 @@ type plan struct {
 	// has no stages — HarfBuzz pauses between none of its lookups — so the
 	// order of the list is the whole of the order. See position.go.
 	gpos []planLookup
-	// gposKern says the font's positioning offers 'kern' to this run and the
-	// plan has it on, which is what decides whether the legacy kern table is
-	// read instead. See legacykern.go.
-	gposKern bool
+	// gposKern says the font's positioning offers the run's kerning feature —
+	// 'kern' across the page, 'vkrn' down it — and the plan has it on, which
+	// is what decides whether the legacy kern table is read instead; and
+	// kernRequested says the plan has that feature on at all, which is what
+	// decides whether the table's subtables are applied once it is. 'kern' is
+	// on whenever it is asked for, as HarfBuzz has a fallback for it; 'vkrn'
+	// only where the face's layout tables state it somewhere. See
+	// legacykern.go.
+	gposKern, kernRequested bool
+	kernTag                 string
 	// arabicFallback is the lookups HarfBuzz builds for an Arabic font with no
 	// joining forms, where this plan wants them, and arabicAfter the stage they
 	// are applied after. See arabicfallback.go.
@@ -513,7 +519,10 @@ func joinTags(tags []string) string {
 // buildPlan collects a model's features and compiles them against a layout.
 // It is hb_ot_shape_collect_features followed by the map builder's compile.
 func buildPlan(l *layout, key planKey, extra []string) *plan {
-	p := &plan{model: key.model}
+	p := &plan{model: key.model, kernTag: "kern"}
+	if key.features.Vertical {
+		p.kernTag = "vkrn"
+	}
 	b := &planBuilder{}
 
 	// 'rvrn' first, in a stage of its own: the substitutions a variable font
@@ -885,7 +894,15 @@ func (p *plan) compile(l *layout, b *planBuilder) {
 		}
 	}
 	p.gpos = mergeLookups(gpos)
-	p.gposKern = gposEnabled["kern"]
+	p.gposKern = gposEnabled[p.kernTag]
+	for _, f := range merged {
+		if f.tag != p.kernTag || !f.on {
+			continue
+		}
+		_, sub := l.featureLookups[f.tag]
+		_, pos := l.gposFeatures[f.tag]
+		p.kernRequested = f.tag == "kern" || sub || pos
+	}
 }
 
 // searchesGlobally reports whether a feature of the plan is taken from the

@@ -125,8 +125,11 @@ func (f *Face) hasPositioning() bool {
 type positioning struct {
 	// gpos says the plan's positioning lookups are applied at all.
 	gpos bool
-	// kern says the legacy kern table is.
-	kern bool
+	// kern says the legacy kern table is, and kernPairs that its pairs are:
+	// a table applied with its kerning feature off still ties the run
+	// together where it kerns across the line (legacykern.go), as HarfBuzz's
+	// does whatever the feature's mask.
+	kern, kernPairs bool
 	// zero says the model cancels mark advances, at the moment the shaper's
 	// zeroMarks says.
 	zero bool
@@ -175,9 +178,14 @@ type positioning struct {
 func (sh shaper) positioningFor(p *plan, model shaperModel) positioning {
 	var out positioning
 	out.gpos = sh.f.hasPositioning() && !(model == modelHebrew && sh.gposScript != "hebr")
+	// Whether the kern table is the run's positioning is one question, and
+	// whether its pairs are then applied another: the first decides how marks
+	// are cancelled and whether the run is tied together, and it is asked
+	// whatever the kerning feature is set to, as HarfBuzz's apply_kern is; the
+	// second is the feature's requested_kerning.
 	lk := &sh.l.legacyKern
-	out.kern = lk.present() && !(p.gposKern && out.gpos) && model.fallbackPosition() &&
-		!sh.features.kerningOff()
+	out.kern = lk.present() && !(p.gposKern && out.gpos) && model.fallbackPosition()
+	out.kernPairs = p.kernRequested
 	out.zero = sh.zeroMarks != zeroMarksNone && (!out.kern || !lk.stateMachine)
 	out.adjust = !out.gpos && (!out.kern || !lk.crossStream)
 	out.fallback = out.adjust && model.fallbackPosition()
@@ -253,10 +261,9 @@ func (sh shaper) position(buf []Glyph, p *plan, model shaperModel) {
 			sh.applyPositioningLookup(lk, buf)
 		}
 	}
-	// The kern table's pairs are read from its horizontal subtables alone, and
-	// HarfBuzz applies none of those to a run set upright.
-	if how.kern && !vertical {
-		sh.applyLegacyKern(buf)
+	// The kern table, each subtable of the run's direction.
+	if how.kern {
+		sh.applyLegacyKern(buf, how.kernPairs)
 	}
 	if how.zero && sh.zeroMarks == zeroMarksLate {
 		sh.cancelMarkWidths(buf, how.adjust)

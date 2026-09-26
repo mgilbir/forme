@@ -147,6 +147,14 @@ type Face struct {
 	// face has in its glyph headers instead: nil for every face but a CFF one.
 	// See cffink.go.
 	ink *cffInk
+	// colr measures the ink of a colour glyph by painting it, which is asked
+	// before the outline is: nil for a face with no COLR table. See
+	// colrink.go.
+	colr *colrInk
+	// bitmap reads the ink of a colour bitmap glyph from its metrics, which is
+	// asked before anything else: nil for a face with no CBDT. See
+	// bitmapink.go.
+	bitmap *cbdtInk
 	// simple is set when the face is to be embedded as a simple font: one byte
 	// per character through WinAnsiEncoding, rather than as a composite font
 	// keyed by glyph index.
@@ -373,6 +381,10 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	if !hasGlyf {
 		f.ink = newCFFInk(tables["CFF "], prog.NumGlyphs)
 	}
+	if len(tables["COLR"]) > 0 {
+		f.colr = newCOLRInk(f, tables, prog.NumGlyphs)
+	}
+	f.bitmap = newCBDTInk(tables, f.unitsPerEm)
 	f.vert = readVerticalTables(tables, prog.NumGlyphs, budget)
 	if err := budget.Err(); err != nil {
 		return nil, err
@@ -1079,8 +1091,9 @@ func (f *Face) Clone() *Face {
 // draws.
 //
 // The numbers come from what the font states: the glyph header for a glyf-based
-// face, the box the charstring draws for a CFF one, and Adobe's published
-// per-character boxes for the fourteen standard ones. The header and the AFM
+// face, the box the charstring draws for a CFF one, the box a colour glyph
+// paints or its bitmap states, and Adobe's published per-character boxes for
+// the fourteen standard ones. The header and the AFM
 // are not verified against the outline, and a CFF glyph's box takes in its
 // curves' control points, so a glyph's box may be larger than its ink and this
 // overstate the run's — which is the safe direction for the question it exists
@@ -1154,16 +1167,9 @@ func (f *Face) glyphInk(r rune) (lo, hi int, has bool) {
 		// extent is as much a part of the run's as any other's.
 		gid = 0
 	}
-	if f.ink != nil {
-		e, ok := f.ink.extents(gid)
-		if !ok {
-			return 0, 0, false
-		}
-		return e.yBearing + e.height, e.yBearing, true
-	}
-	if f.prog.GlyphBBox == nil || gid >= len(f.prog.GlyphBBox) {
+	e, ok := f.glyphExtents(gid)
+	if !ok {
 		return 0, 0, false
 	}
-	b := f.prog.GlyphBBox[gid]
-	return b[1], b[3], true
+	return e.yBearing + e.height, e.yBearing, true
 }

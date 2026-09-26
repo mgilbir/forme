@@ -50,7 +50,7 @@ func (sh shaper) shapeSyllabic(buf []Glyph, runes []rune, script uint16, p *plan
 	case modelMyanmar:
 		return sh.shapeMyanmar(buf, runes, p)
 	case modelUniversal:
-		return sh.shapeUniversal(buf, runes, before, after, p)
+		return sh.shapeUniversal(buf, runes, before, after, p, scriptSelects(script, "mong"))
 	}
 	return buf
 }

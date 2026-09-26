@@ -381,7 +381,7 @@ func (sh shaper) markToBaseAt(sub []byte, buf []Glyph, at int, ligature bool) in
 	if !covered {
 		return 0
 	}
-	j := sh.markBaseFor(buf, at, sub)
+	j := sh.markBaseFor(buf, at, sub, ligature)
 	if j < 0 {
 		return 0
 	}
@@ -405,8 +405,9 @@ func (sh shaper) markToBaseAt(sub []byte, buf []Glyph, at int, ligature bool) in
 
 // markBaseFor is the glyph a mark at a position attaches to under mark-to-base
 // or mark-to-ligature, or -1: HarfBuzz's search and its cache, which gposPass
-// describes.
-func (sh shaper) markBaseFor(buf []Glyph, at int, sub []byte) int {
+// describes. The two subtable types differ in which glyphs they accept on the
+// way; see acceptsMarks and acceptsLigatureMarks.
+func (sh shaper) markBaseFor(buf []Glyph, at int, sub []byte, ligature bool) int {
 	g := sh.gp
 	if g.lastBaseUntil > at {
 		g.lastBaseUntil, g.lastBase = 0, -1
@@ -416,7 +417,11 @@ func (sh shaper) markBaseFor(buf []Glyph, at int, sub []byte) int {
 		if sh.l.classOf(c) == classMark {
 			continue
 		}
-		if !sh.l.acceptsMarks(buf, j-1) {
+		accepts := sh.l.acceptsMarks(buf, j-1)
+		if ligature {
+			accepts = acceptsLigatureMarks(buf[j-1])
+		}
+		if !accepts {
 			if _, covered := coverageIndex(sub, font.Be16(sub, 4), c.GID); !covered {
 				continue
 			}
@@ -443,6 +448,21 @@ func (l *layout) acceptsMarks(buf []Glyph, i int) bool {
 	}
 	p := buf[i-1]
 	return l.isMark(p) || !p.multiplied || p.lig.id != g.lig.id || g.lig.comp != p.lig.comp+1
+}
+
+// acceptsLigatureMarks is acceptsMarks for mark-to-ligature, which HarfBuzz
+// asks differently: a later part of a multiple substitution is never where the
+// mark goes, whatever stands before it, because the first part may have been
+// ligated into the glyph before — and that ligature, a part further back, is
+// where a mark written after the whole sequence belongs.
+//
+// Handjet's 'ccmp' takes U+FB1F apart into yod, yod and patah, and its 'liga'
+// joins a vav before it with the first yod. The patah finds the second yod,
+// which mark-to-base accepts and mark-to-ligature does not: it steps over it
+// to the vav-yod ligature and attaches there, as HarfBuzz does (its issue
+// 4969).
+func acceptsLigatureMarks(g Glyph) bool {
+	return !g.multiplied || g.lig.comp == 0
 }
 
 // markLigatureComponent is which component of the ligature at j the mark at i

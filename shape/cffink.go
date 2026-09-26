@@ -483,6 +483,30 @@ func (b *cffBounds) offset(dx, dy float64) {
 	}
 }
 
+// drew reports whether any point was drawn into the box, which a box that is a
+// single point or a line has been, as an empty one has not.
+func (b cffBounds) drew() bool { return b.minX <= b.maxX }
+
+// include takes the points of another box into this one, as drawing both into
+// one outline does.
+func (b *cffBounds) include(o cffBounds) {
+	if o.drew() {
+		b.update(o.minX, o.minY)
+		b.update(o.maxX, o.maxY)
+	}
+}
+
+// shift moves the points drawn into a box, as drawing them through an offset
+// does.
+func (b *cffBounds) shift(dx, dy float64) {
+	if b.drew() {
+		b.minX += dx
+		b.maxX += dx
+		b.minY += dy
+		b.maxY += dy
+	}
+}
+
 // extents is the box as hb_glyph_extents_t: each edge rounded as HarfBuzz
 // rounds it, an axis with no extent zero, and then scaled at one unit to the
 // unit, which HarfBuzz does in floats.
@@ -529,9 +553,17 @@ func clampToInt32(v float64) int32 {
 
 // t2Run is the work of measuring one glyph and whatever a seac in it names:
 // the outlines, and the face's budget each operator is charged to.
+//
+// draw asks for the box of the points the charstring draws, which is what a
+// colour glyph clipped to this one is bounded by (colrink.go), rather than its
+// extents. The two differ in two places, both HarfBuzz's: drawing a seac draws
+// both glyphs whatever their boxes, where the extents merge replaces a box that
+// is only a line; and a charstring that fails part way has drawn what it drew
+// by then, where it has no extents at all.
 type t2Run struct {
 	o      *cffOutlines
 	budget *font.Budget
+	draw   bool
 	// capped is set when a charstring ran into HarfBuzz's cap, and spent when
 	// the budget ran out; either leaves the glyph without ink.
 	capped, spent bool
@@ -573,26 +605,28 @@ type t2Interp struct {
 }
 
 // bounds runs glyph gid's charstring for the box it draws: HarfBuzz's
-// _get_bounds. inSeac is set for a glyph a seac names.
+// _get_bounds, or with draw its _get_path. inSeac is set for a glyph a seac
+// names. The box comes back where the run fails too, as what it had drawn by
+// then, which only drawing reads.
 func (r *t2Run) bounds(gid int, inSeac bool) (cffBounds, bool) {
 	if gid < 0 || gid >= len(r.o.charStrings) {
-		return cffBounds{}, false
+		return newCFFBounds(), false
 	}
 	in := &t2Interp{run: r, locals: r.o.localsOf(gid), inSeac: inSeac, bounds: newCFFBounds()}
 	in.cur = t2Frame{code: r.o.charStrings[gid]}
 	for left := cffMaxOps; ; {
 		if !r.budget.Charge(1, "the ink of the CFF glyphs") {
 			r.spent = true
-			return cffBounds{}, false
+			return in.bounds, false
 		}
 		in.step(in.fetch())
 		left--
 		if in.err || r.spent {
-			return cffBounds{}, false
+			return in.bounds, false
 		}
 		if left == 0 {
 			r.capped = true
-			return cffBounds{}, false
+			return in.bounds, false
 		}
 		if in.endchar {
 			return in.bounds, true
@@ -1028,18 +1062,27 @@ func (in *t2Interp) seac() {
 		return
 	}
 	bb, ok := in.run.bounds(base, true)
+	if in.run.draw {
+		in.bounds.include(bb)
+	}
 	if !ok {
 		in.err = true
 		return
 	}
 	ab, ok := in.run.bounds(accent, true)
+	if in.run.draw {
+		ab.shift(dx, dy)
+		in.bounds.include(ab)
+	}
 	if !ok {
 		in.err = true
 		return
 	}
-	in.bounds.merge(bb)
-	ab.offset(dx, dy)
-	in.bounds.merge(ab)
+	if !in.run.draw {
+		in.bounds.merge(bb)
+		ab.offset(dx, dy)
+		in.bounds.merge(ab)
+	}
 }
 
 // toIntClamped is HarfBuzz's number_t::to_int: the integer part, and the

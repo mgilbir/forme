@@ -29,13 +29,12 @@ import (
 //
 // # What is not here
 //
-// The ink of a glyph is read from the glyph header of a TrueType face and by
-// running the charstring of a CFF one (cffink.go). A colour or bitmap face's
-// is in tables this does not read for it; for a glyph there HarfBuzz would
-// measure the colour layers or the bitmap, and this measures the outline.
-// Where a glyph's ink cannot be had at all, the marks' advances are cancelled
-// and they are left where they are, which is what HarfBuzz itself does for a
-// glyph whose extents it cannot get.
+// The ink of a glyph is read from the glyph header of a TrueType face, by
+// running the charstring of a CFF one (cffink.go), by painting a colour glyph
+// (colrink.go), and from a colour bitmap's metrics (bitmapink.go). Where a
+// glyph's ink cannot be had at all, the marks' advances are cancelled and they
+// are left where they are, which is what HarfBuzz itself does for a glyph
+// whose extents it cannot get.
 
 // unicodeMark is what a character says about itself as a mark: whether it is
 // one (general category Mn, Mc or Me), whether it takes no room (Mn), and its
@@ -152,12 +151,24 @@ type extents struct {
 
 // glyphExtents is a glyph's ink, where the face can say.
 //
-// For a TrueType face it is the glyph header's box with the left side bearing
-// hmtx states, which is how HarfBuzz reads a TrueType glyph at the instance a
-// face was cut at. An empty glyph has no ink and says so. For a CFF face it is
-// the box the glyph's charstring draws, measured as HarfBuzz measures it (see
-// cffink.go). A face with neither cannot answer.
+// A colour bitmap glyph's is what its metrics state, and a colour glyph's the
+// box it paints, which HarfBuzz asks before the outline, in that order
+// (bitmapink.go, colrink.go). For a TrueType face it is the glyph header's box with
+// the left side bearing hmtx states, which is how HarfBuzz reads a TrueType
+// glyph at the instance a face was cut at. An empty glyph has no ink and says
+// so. For a CFF face it is the box the glyph's charstring draws, measured as
+// HarfBuzz measures it (see cffink.go). A face with neither cannot answer.
 func (f *Face) glyphExtents(gid int) (extents, bool) {
+	if f.bitmap != nil {
+		if e, ok := f.bitmap.extents(gid); ok {
+			return e, true
+		}
+	}
+	if f.colr != nil {
+		if e, painted := f.colr.extents(gid); painted {
+			return e, true
+		}
+	}
 	if f.ink != nil {
 		return f.ink.extents(gid)
 	}

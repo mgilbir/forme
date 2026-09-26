@@ -28,12 +28,12 @@ func TestACharacterNothingDrawsIsNotOneTheFaceIsMissing(t *testing.T) {
 		want       int
 	}{
 		{"nothing hidden", "ab", 0},
-		// The join controls, which survive dropHiddenCharacters because the
-		// joining scan reads them and are taken out again by hideJoiners.
+		// The join controls, which the font's rules may name and which are
+		// taken out once they have run (dropIgnorables).
 		{"a zero width joiner", "a‍b", 0},
 		{"a zero width non-joiner", "a‌b", 0},
-		// And the rest of the default-ignorable characters, which are dropped
-		// earlier and were never counted.
+		// And the rest of the default-ignorable characters, which go the same
+		// way and were never counted.
 		{"a zero width space", "a​b", 0},
 		{"a left-to-right mark", "a‎b", 0},
 		// A character the face really has not got still counts: that is the

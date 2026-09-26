@@ -280,15 +280,3 @@ func markToneCircles(buf []Glyph, runes []rune, offsets []int) {
 		}
 	}
 }
-
-// keepShown is what dropHiddenCharacters leaves of a per-character slice: the
-// entries of the characters it keeps, in order.
-func keepShown(per []uint8, runes []rune) []uint8 {
-	out := per[:0:0]
-	for i, r := range runes {
-		if !hiddenBeforeShaping(r) {
-			out = append(out, per[i])
-		}
-	}
-	return out
-}

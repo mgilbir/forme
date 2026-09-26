@@ -49,15 +49,27 @@ import (
 //   - The weight and width classes OS/2 states, and post's italic angle, are
 //     rewritten from the location, so that a face reports the weight it draws.
 //     head's macStyle and the 'ital' axis are not: see instanceDesign.
-//   - Vertical metrics do *not* move. MVAR — which varies ascent, descent, cap
-//     height and the rest of the font-wide numbers — is dropped rather than
-//     applied, so those stay at the default instance's values. For the bundled
-//     face the whole of MVAR moves the ascent by at most a few units across the
-//     weight axis; it is a real gap and a small one, and it is stated here rather
-//     than guessed at in the code. Nor do vmtx and VORG, which a glyph set
-//     upright is advanced and hung by (vertical.go): VVAR and the vertical
-//     phantom points gvar moves are not read, so an instance's upright glyphs
-//     advance as the default instance's do and hang from its side bearings.
+//   - Vertical advances and top side bearings — what a glyph set upright is
+//     advanced and hung by (vertical.go) — move as HarfBuzz moves them: the
+//     advance by VVAR where the font has it and by the vertical phantom points
+//     gvar moves otherwise, and the point a glyph hangs from with its top
+//     phantom point. vmtx is rewritten to say both, the side bearing measured
+//     from the instanced glyph's box, so that the instance hangs its glyphs
+//     where HarfBuzz hangs them at the location. VORG is not rewritten: it is
+//     a CFF face's, and a CFF face is not instanced here.
+//   - A composite that takes its metrics from a component (USE_MY_METRICS)
+//     is given its own phantom points' advance, as fontTools' instancer gives
+//     it, and not the component's, which is what HarfBuzz reads for it — both
+//     across the page and down it. testdata/varinstance holds the horizontal
+//     advance of a font with no HVAR to fontTools, and following HarfBuzz
+//     there moves two of its values in Noto Sans at weight 700; which of the
+//     two to follow is left to be decided rather than taken here.
+//   - The font-wide vertical metrics do *not* move. MVAR — which varies ascent,
+//     descent, cap height and the rest of the font-wide numbers — is dropped
+//     rather than applied, so those stay at the default instance's values. For
+//     the bundled face the whole of MVAR moves the ascent by at most a few
+//     units across the weight axis; it is a real gap and a small one, and it is
+//     stated here rather than guessed at in the code.
 //   - Hinting is dropped: cvt, fpgm, prep and every glyph's instructions go,
 //     because 'cvar' — which varies the control values — is not read, and hinting
 //     a bold face by a thin one's control values is worse than not hinting it.
@@ -193,6 +205,21 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 			return nil, nil, err
 		}
 	}
+	// The vertical metrics, where the font has them: vmtx's advances and top
+	// side bearings, and VVAR, whose header begins as HVAR's does.
+	vhea, vmtx := tables["vhea"], tables["vmtx"]
+	var vAdvances, vBearings []int
+	var vvar *hvarTable
+	if len(vhea) >= 36 && vmtx != nil {
+		if vAdvances, vBearings, err = parseHmtx(vmtx, font.Be16(vhea, 34), numGlyphs); err != nil {
+			return nil, nil, fmt.Errorf("fonts: vmtx: %w", err)
+		}
+		if t := tables["VVAR"]; t != nil {
+			if vvar, err = parseHVAR(t); err != nil {
+				return nil, nil, fmt.Errorf("fonts: VVAR: %w", err)
+			}
+		}
+	}
 
 	budget := int64(maxInstanceWork)
 	newGlyf := make([]byte, 0, len(glyf))
@@ -202,6 +229,17 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 	// the outline afterwards.
 	origins := make([]float64, numGlyphs)
 	newAdvances := make([]int, numGlyphs)
+	// The top phantom point of each glyph, and its vertical advance, at the
+	// location: where it is hung and how far it moves the pen down.
+	var tops []int
+	var newVAdvances []int
+	if vAdvances != nil {
+		tops = make([]int, numGlyphs)
+		newVAdvances = make([]int, numGlyphs)
+	}
+	// Each glyph's four phantom points once gvar has moved them, which its
+	// advances and its bearings are read from.
+	phantoms := make([][4][2]float64, numGlyphs)
 	for gid := 0; gid < numGlyphs; gid++ {
 		start, end := offsets[gid], offsets[gid+1]
 		if start > end || int(end) > len(glyf) {
@@ -211,27 +249,21 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 		if err != nil {
 			return nil, nil, fmt.Errorf("fonts: glyph %d: %w", gid, err)
 		}
-		xMin := 0
-		if end > start {
+		xMin, yMax := 0, 0
+		if end-start >= 10 {
 			xMin = int(int16(uint16(font.Be16(glyf[start:end], 2))))
+			yMax = int(int16(uint16(font.Be16(glyf[start:end], 8))))
 		}
 		g.setPhantoms(xMin, bearings[gid], advances[gid])
+		if vAdvances != nil {
+			g.setVerticalPhantoms(yMax+vBearings[gid], vAdvances[gid])
+		}
 		if gvar != nil {
 			if err := gvar.applyGlyph(gid, g, coords, &budget); err != nil {
 				return nil, nil, err
 			}
 		}
-		left, adv := g.advance()
-		origins[gid] = left
-		switch {
-		case hvar != nil:
-			newAdvances[gid] = advances[gid] + otRound(hvar.advanceDelta(gid, coords))
-		default:
-			newAdvances[gid] = otRound(adv)
-		}
-		if newAdvances[gid] < 0 {
-			newAdvances[gid] = 0
-		}
+		phantoms[gid] = g.phantoms()
 		b, err := encodeVarGlyph(g)
 		if err != nil {
 			return nil, nil, fmt.Errorf("fonts: glyph %d: %w", gid, err)
@@ -243,6 +275,38 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 		}
 	}
 	newLoca[numGlyphs] = uint32(len(newGlyf))
+
+	// The metrics, from the phantom points. A composite's are its own, as
+	// fontTools' instancer reads them, where HarfBuzz reads a composite that
+	// takes its metrics from a component (USE_MY_METRICS) by that component's:
+	// see the note at the top of this file.
+	for gid := 0; gid < numGlyphs; gid++ {
+		ph := phantoms[gid]
+		origins[gid] = ph[0][0]
+		switch {
+		case hvar != nil:
+			newAdvances[gid] = advances[gid] + otRound(hvar.advanceDelta(gid, coords))
+		default:
+			newAdvances[gid] = otRound(ph[1][0] - ph[0][0])
+		}
+		newAdvances[gid] = max(newAdvances[gid], 0)
+		if vAdvances != nil {
+			// hb_ot_get_glyph_v_advances at the location: VVAR's delta where
+			// the font has one, the phantom points' distance where it has gvar
+			// instead, and vmtx's advance where it has neither.
+			top, bottom := ph[2][1], ph[3][1]
+			tops[gid] = otRound(top)
+			switch {
+			case vvar != nil:
+				newVAdvances[gid] = vAdvances[gid] + otRound(vvar.advanceDelta(gid, coords))
+			case gvar != nil:
+				newVAdvances[gid] = otRound(top - bottom)
+			default:
+				newVAdvances[gid] = vAdvances[gid]
+			}
+			newVAdvances[gid] = max(newVAdvances[gid], 0)
+		}
+	}
 
 	bounds, err := fillCompositeBounds(newGlyf, newLoca, numGlyphs, &budget)
 	if err != nil {
@@ -262,6 +326,9 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 	}
 	out["loca"] = locaBytes
 	out["hmtx"], out["hhea"] = buildMetrics(hhea, newAdvances, origins, bounds)
+	if vAdvances != nil {
+		out["vmtx"], out["vhea"] = buildVerticalMetrics(vhea, newVAdvances, tops, bounds)
+	}
 	out["head"] = instanceHead(head, bounds)
 	instanceDesign(out, axes, want)
 	name, err := instanceName(tables["name"], fvar, axes, want)
@@ -644,6 +711,16 @@ func accumulateBounds(glyf []byte, loca []uint32, numGlyphs, gid int, t transfor
 			a: c.scale[0], b: c.scale[1], c: c.scale[2], d: c.scale[3],
 			dx: g.x[i], dy: g.y[i],
 		}
+		// A component whose flags ask for its offset to be scaled has the
+		// offset put through its own two-by-two, as HarfBuzz and FreeType put
+		// it; the default, and a component that asks for it explicitly, is
+		// the offset as written. Reading every offset unscaled measured such
+		// a composite's box off by the difference, and wrote that box into
+		// the instance.
+		if c.flags&(compScaledOffset|compUnscaledOffset) == compScaledOffset {
+			inner.dx, inner.dy = float64(c.scale[0]*g.x[i])+float64(c.scale[2]*g.y[i]),
+				float64(c.scale[1]*g.x[i])+float64(c.scale[3]*g.y[i])
+		}
 		if err := accumulateBounds(glyf, loca, numGlyphs, c.glyph, t.concat(inner), box, depth+1, budget); err != nil {
 			return err
 		}
@@ -712,6 +789,58 @@ func buildMetrics(hhea []byte, advances []int, origins []float64, bounds []glyph
 	binary.BigEndian.PutUint16(newHhea[16:], uint16(int16(clampI16(maxExtent))))
 	binary.BigEndian.PutUint16(newHhea[34:], uint16(metrics))
 	return hmtx, newHhea
+}
+
+// buildVerticalMetrics writes vmtx and the fields of vhea that describe it:
+// each glyph's vertical advance, and the top side bearing that hangs it from
+// its top phantom point at the location, measured from the top of its
+// instanced box — which is how a reader finds the point again (see
+// verticalTables.glyfTopPhantom). A glyph with no outline has no box, and its
+// bearing is the point itself.
+func buildVerticalMetrics(vhea []byte, advances, tops []int, bounds []glyphBounds) (vmtx, newVhea []byte) {
+	n := len(advances)
+	tsb := make([]int, n)
+	for gid := range advances {
+		if bounds[gid].empty {
+			tsb[gid] = tops[gid]
+			continue
+		}
+		tsb[gid] = tops[gid] - bounds[gid].yMax
+	}
+	metrics := n
+	for metrics > 1 && advances[metrics-1] == advances[metrics-2] {
+		metrics--
+	}
+	vmtx = make([]byte, 4*metrics+2*(n-metrics))
+	for gid := 0; gid < n; gid++ {
+		if gid < metrics {
+			binary.BigEndian.PutUint16(vmtx[4*gid:], uint16(clampU16(advances[gid])))
+			binary.BigEndian.PutUint16(vmtx[4*gid+2:], uint16(int16(clampI16(tsb[gid]))))
+			continue
+		}
+		binary.BigEndian.PutUint16(vmtx[4*metrics+2*(gid-metrics):], uint16(int16(clampI16(tsb[gid]))))
+	}
+	newVhea = append([]byte(nil), vhea...)
+	maxAdv, minTSB, minBSB, maxExtent := 0, math.MaxInt32, math.MaxInt32, math.MinInt32
+	for gid := 0; gid < n; gid++ {
+		maxAdv = max(maxAdv, advances[gid])
+		if bounds[gid].empty {
+			continue
+		}
+		height := bounds[gid].yMax - bounds[gid].yMin
+		minTSB = min(minTSB, tsb[gid])
+		minBSB = min(minBSB, advances[gid]-tsb[gid]-height)
+		maxExtent = max(maxExtent, tsb[gid]+height)
+	}
+	if minTSB == math.MaxInt32 {
+		minTSB, minBSB, maxExtent = 0, 0, 0
+	}
+	binary.BigEndian.PutUint16(newVhea[10:], uint16(clampU16(maxAdv)))
+	binary.BigEndian.PutUint16(newVhea[12:], uint16(int16(clampI16(minTSB))))
+	binary.BigEndian.PutUint16(newVhea[14:], uint16(int16(clampI16(minBSB))))
+	binary.BigEndian.PutUint16(newVhea[16:], uint16(int16(clampI16(maxExtent))))
+	binary.BigEndian.PutUint16(newVhea[34:], uint16(metrics))
+	return vmtx, newVhea
 }
 
 func clampU16(v int) int {

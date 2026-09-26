@@ -748,7 +748,7 @@ type shaper struct {
 	// asked to see a non-joiner in its context. The Indic features ask for both,
 	// because a joiner is written precisely to force or forbid the forms they
 	// make; the Myanmar, universal and Arabic features ask for the first alone.
-	// See stepsOverJoiner, and plan.go for where each lookup's come from.
+	// See stepsOver, and plan.go for where each lookup's come from.
 	manualZWJ, manualZWNJ bool
 
 	// lookupMask is the glyphs the lookup being applied is for, or zero for
@@ -1104,10 +1104,11 @@ func (c *layoutCache) layoutFor(gsubKey, gposKey string, build func() *layout) *
 // caller wanting the whole story asks after shaping. An empty answer means
 // every table read so far was read whole.
 //
-// The ink of a CFF face's glyphs is measured as they are shaped too — to place
-// the marks of a face that positions none, and to hang a glyph set upright —
-// and the bounds that measuring runs into are reported here with the rest,
-// since a glyph left without its ink is placed otherwise than the font says.
+// The ink of a CFF face's glyphs, and of a face's colour glyphs, is measured
+// as they are shaped too — to place the marks of a face that positions none,
+// and to hang a glyph set upright — and the bounds that measuring runs into
+// are reported here with the rest, since a glyph left without its ink is
+// placed otherwise than the font says.
 func (f *Face) LayoutLimits() []string {
 	var out []string
 	seen := map[string]bool{}
@@ -1125,6 +1126,9 @@ func (f *Face) LayoutLimits() []string {
 	add(f.layout)
 	if f.ink != nil {
 		out = append(out, f.ink.limits()...)
+	}
+	if f.colr != nil {
+		out = append(out, f.colr.limits()...)
 	}
 	if f.cache != nil {
 		f.cache.mu.Lock()

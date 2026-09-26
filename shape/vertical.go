@@ -54,10 +54,9 @@ import "github.com/mgilbir/forme/font"
 // vertical text states VORG almost without exception; the Noto CJK faces all
 // do.
 //
-// # What is not here
-//
-// A face from LoadInstance keeps its default instance's vertical metrics:
-// VVAR and the phantom points gvar moves are not read (see instance.go).
+// A face from LoadInstance has the vertical metrics of the location it was cut
+// at: instance.go rewrites vmtx from VVAR or the vertical phantom points gvar
+// moves, as HarfBuzz reads them there.
 
 // verticalTables is what a face keeps of the tables its vertical metrics are
 // read from, each checked once at load so that a glyph's metrics are a few
@@ -281,7 +280,7 @@ func (v *verticalTables) resolveComposites(budget *font.Budget) {
 		if !placed || len(g) < 10 || signed16(font.Be16(g, 0)) >= 0 || !usesComponentMetrics(g) {
 			continue
 		}
-		w := phantomWalk{budget: budget, tortoise: -1}
+		w := phantomWalk{budget: budget, decycler: decycler{tortoise: -1}}
 		top, ok, spent := v.topPhantomAt(gid, 0, &w)
 		if spent {
 			return
@@ -345,20 +344,28 @@ func eachComponent(g []byte, fn func(flags, gid int) bool) {
 // phantomWalk is what one walk for a glyph's top phantom point keeps as it
 // goes: how many glyphs it has visited, the font's budget it is charged to,
 // and HarfBuzz's decycler over the composites it is inside.
-//
-// The decycler is HarfBuzz's own, and not a set of the glyphs on the path,
-// because the two answer differently for a font whose components name each
-// other and the answer is compared unit for unit. HarfBuzz keeps one node per
-// composite it is inside, each holding the component it is visiting, and
-// checks a component only against the node halfway up the stack — a
-// tortoise that moves down one node for every two a walk goes in — which
-// finds every cycle, a little later than a set would.
 type phantomWalk struct {
 	edges  int
 	budget *font.Budget
-	// visiting is each node's component, from the outermost composite in;
-	// tortoise is the node a component is checked against, and awake
-	// whether it moves on the next node in or out.
+	decycler
+}
+
+// decycler is HarfBuzz's hb_decycler_t, for a walk through a structure a font
+// can make cyclic: a composite's components, a colour glyph's layers and the
+// colour glyphs it paints.
+//
+// It is HarfBuzz's own, and not a set of what is on the path, because the two
+// answer differently for a font whose parts name each other and the answer is
+// compared unit for unit. HarfBuzz keeps one node per level the walk is inside,
+// each holding what it is visiting, and checks a visit only against the node
+// halfway up the stack — a tortoise that moves down one node for every two a
+// walk goes in — which finds every cycle, a little later than a set would. A
+// walk that goes round a cycle before it is found does whatever the cycle does
+// that many times, and HarfBuzz's answer is the one that does.
+type decycler struct {
+	// visiting is each node's value, from the outermost level in; tortoise is
+	// the node a visit is checked against, and awake whether it moves on the
+	// next node in or out.
 	visiting []int
 	tortoise int
 	awake    bool
@@ -366,31 +373,31 @@ type phantomWalk struct {
 
 // enter and leave are a node's construction and destruction in HarfBuzz's
 // hb_decycler_node_t.
-func (w *phantomWalk) enter() {
-	w.awake = !w.awake
-	if len(w.visiting) == 0 {
-		w.tortoise = 0
-	} else if w.awake {
-		w.tortoise++
+func (d *decycler) enter() {
+	d.awake = !d.awake
+	if len(d.visiting) == 0 {
+		d.tortoise = 0
+	} else if d.awake {
+		d.tortoise++
 	}
-	w.visiting = append(w.visiting, -1)
+	d.visiting = append(d.visiting, -1)
 }
 
-func (w *phantomWalk) leave() {
-	w.visiting = w.visiting[:len(w.visiting)-1]
-	if w.awake {
-		w.tortoise--
+func (d *decycler) leave() {
+	d.visiting = d.visiting[:len(d.visiting)-1]
+	if d.awake {
+		d.tortoise--
 	}
-	w.awake = !w.awake
+	d.awake = !d.awake
 }
 
-// visit records that the innermost node is visiting a component, and reports
+// visit records that the innermost node is visiting a value, and reports
 // whether it may: false where the tortoise is visiting the same one, which is
 // a cycle.
-func (w *phantomWalk) visit(gid int) bool {
-	me := len(w.visiting) - 1
-	w.visiting[me] = gid
-	return w.tortoise == me || w.visiting[w.tortoise] != gid
+func (d *decycler) visit(v int) bool {
+	me := len(d.visiting) - 1
+	d.visiting[me] = v
+	return d.tortoise == me || d.visiting[d.tortoise] != v
 }
 
 // topPhantomAt is one level of glyfTopPhantom's walk, which w — nil for a
