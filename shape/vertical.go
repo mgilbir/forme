@@ -489,6 +489,37 @@ func (f *Face) StatesVerticalMetrics() bool {
 	return f != nil && f.std == nil && f.vert.longMetrics > 0
 }
 
+// GlyphVerticalMetrics is a glyph's own vertical metrics, in thousandths of an
+// em as GlyphAdvance's advance is: how far the pen moves along a line set
+// upright after the glyph, and where the glyph is hung from, measured from its
+// horizontal origin.
+//
+// They are what a writer states for a glyph of vertical text — in PDF the
+// glyph's /W2 entry, [w1y vx vy] (ISO 32000-2 §9.7.4.3), which is the three
+// numbers in this order — and they are the numbers a run set upright starts
+// from: Glyph.YAdvance, VOriginX and VOriginY, before any feature moves a
+// glyph. A mark's advance is taken away by shaping, and 'vkrn' and 'vpal'
+// move the pen where a document asks for them, so a run's advances are not
+// always these; a glyph's own metrics are, and the font's /W2 describes the
+// glyph. The advance is negative, as YAdvance and /W2 state it: up is
+// positive and the pen moves down.
+//
+// The answers are sought in the order the top of this file gives, which is
+// HarfBuzz's: vmtx and VORG where the face has them; where it has no VORG, a
+// TrueType glyph's top phantom point, or else the glyph's ink — a CFF glyph's
+// charstring's, a colour glyph's painted box — centred in the face's line;
+// where it has no vmtx, the line's height for the advance. A face from
+// LoadInstance answers at its instance, from VVAR and the phantom points gvar
+// moves. A glyph index the face does not have answers zero, as GlyphAdvance
+// does, and so does every index of a standard face, which has none.
+func (f *Face) GlyphVerticalMetrics(gid int) (advance, originX, originY float64) {
+	if f == nil || gid < 0 || gid >= f.NumGlyphs() {
+		return 0, 0, 0
+	}
+	a, x, y := f.verticalUnits(gid)
+	return -f.scale(a), f.scale(x), f.scale(y)
+}
+
 // fontExtentsUnits is the face's ascender and descender as HarfBuzz reads them
 // for its font extents, in font units: OS/2's typographic pair where the font
 // asks for it to be used, hhea's otherwise, and four fifths of an em and the
