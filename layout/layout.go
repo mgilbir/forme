@@ -785,18 +785,15 @@ func absolutise(f *Fragment, x, y style.Unit) {
 	// lines are, so they take the same translation. Their §9.4.3 offset is folded
 	// in here for the reason the walk applies every other one here — it moves the
 	// box and nothing that was measured against it.
+	//
+	// A link's area on the line is sliced as those are and moves with them;
+	// LineFragment.placed is every such list.
 	for i := range f.Lines {
-		for _, ib := range f.Lines[i].Boxes {
-			ib.BorderRect.X = ib.BorderRect.X.Add(content.X).Add(ib.Offset.X)
-			ib.BorderRect.Y = ib.BorderRect.Y.Add(content.Y).Add(ib.Offset.Y)
-			ib.absolute = true
-		}
-		// A link's area on the line, which is sliced as those are and moves
-		// with them. See LineFragment.links.
-		for _, lf := range f.Lines[i].links {
-			lf.BorderRect.X = lf.BorderRect.X.Add(content.X).Add(lf.Offset.X)
-			lf.BorderRect.Y = lf.BorderRect.Y.Add(content.Y).Add(lf.Offset.Y)
-			lf.absolute = true
+		for _, list := range f.Lines[i].placed() {
+			for _, ib := range *list {
+				translate(ib, content.X.Add(ib.Offset.X), content.Y.Add(ib.Offset.Y))
+				ib.absolute = true
+			}
 		}
 	}
 	for _, c := range f.Children {

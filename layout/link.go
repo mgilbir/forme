@@ -2,7 +2,6 @@ package layout
 
 import (
 	"github.com/mgilbir/forme/html"
-	"github.com/mgilbir/forme/style"
 )
 
 // Hyperlinks: where an <a href> is on the page, for a backend to make a link
@@ -256,33 +255,4 @@ func gatherLinks(ops []Op) []Op {
 		ops[i] = nil
 	}
 	return kept
-}
-
-// movedLinks is a line's link areas moved by dx and dy, for code that moves
-// the line after it was laid out: a table cell's vertical-align, and a
-// multi-column pour cutting a block into columns.
-//
-// The areas are in the block's content coordinates, as a line's Boxes are and
-// not relative to the line, so a line that moves leaves them behind unless
-// they are moved with it. They are copies rather than moved in place, because
-// a pour copies the lines of a block it may pour again at another height, and
-// an area moved in place would be moved once per attempt.
-//
-// A line's Boxes are not moved by those two, and have the same fault: a
-// background on an inline box in a middle-aligned cell, or in the second
-// column of a pour, stays where the line was laid out. That is recorded here
-// rather than fixed, because it changes what is drawn and this is about links,
-// which draw nothing.
-func movedLinks(links []*Fragment, dx, dy style.Unit) []*Fragment {
-	if len(links) == 0 || dx == 0 && dy == 0 {
-		return links
-	}
-	out := make([]*Fragment, len(links))
-	for i, lf := range links {
-		m := *lf
-		m.BorderRect.X = m.BorderRect.X.Add(dx)
-		m.BorderRect.Y = m.BorderRect.Y.Add(dy)
-		out[i] = &m
-	}
-	return out
 }

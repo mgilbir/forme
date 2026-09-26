@@ -345,8 +345,10 @@ func (n *pending) materialise() *Fragment {
 		if n.lineGone[i] {
 			continue
 		}
-		line.Rect.Y = line.Rect.Y.Sub(n.shift)
-		line.links = movedLinks(line.links, 0, -n.shift)
+		// A copy that owns what hangs off it, because src may be poured
+		// again at another height. See LineFragment.detached.
+		line = line.detached()
+		line.move(0, -n.shift)
 		f.Lines = append(f.Lines, line)
 	}
 	kids := make([]cutKid, 0, n.kidsLeft+len(n.cut))
@@ -411,9 +413,8 @@ func (n *pending) split(y style.Unit) (top *Fragment, below, ok bool) {
 	}
 	slices.Sort(took)
 	for _, i := range took {
-		line := n.src.Lines[i]
-		line.Rect.Y = line.Rect.Y.Sub(n.shift)
-		line.links = movedLinks(line.links, 0, -n.shift)
+		line := n.src.Lines[i].detached()
+		line.move(0, -n.shift)
 		above.Lines = append(above.Lines, line)
 	}
 
@@ -774,8 +775,9 @@ func fillColumnsWith(f *Fragment, c columns, height style.Unit, ends *columnEnds
 		}
 		dx := c.width.Add(c.gap).Mul(float64(i))
 		for _, line := range band.Lines {
-			line.Rect.X = line.Rect.X.Add(dx)
-			line.links = movedLinks(line.links, dx, 0)
+			// In place: a band's lines were detached from f's when split or
+			// materialise copied them out, and each band is placed once.
+			line.move(dx, 0)
 			f.Lines = append(f.Lines, line)
 		}
 		for _, child := range band.Children {
