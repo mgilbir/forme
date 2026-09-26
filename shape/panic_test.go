@@ -428,6 +428,8 @@ func useFace(face *Face) {
 	_ = face.HasJoiningForms()
 	_, _, _, _ = face.CharacterCollection()
 	_ = face.IsCIDKeyed()
+	_, _ = face.EmbeddingPermissions()
+	_ = face.Program()
 	_ = face.GlyphAdvances()
 
 	// Per glyph, past the end of the table as well: a count a font states and a

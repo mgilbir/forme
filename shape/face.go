@@ -101,8 +101,16 @@ type Face struct {
 	// because empty here has two meanings and one branch tells them apart.
 	registry, ordering string
 	supplement         int
-	data               []byte
-	prog               *font.Program
+	// data is the font program as Load read it — after a WOFF or WOFF 2 is
+	// unwrapped, and for LoadInstance the instance it cut — and is what
+	// Program hands out. Nothing here writes to it.
+	data []byte
+	prog *font.Program
+	// fsType is OS/2 fsType, the font's embedding permissions, and
+	// fsTypeStated whether the font has an OS/2 table long enough to state
+	// them. See EmbeddingPermissions.
+	fsType       FSType
+	fsTypeStated bool
 
 	name       string
 	unitsPerEm int
@@ -408,6 +416,12 @@ func (f *Face) IsVariable() bool { return len(f.axes) > 0 }
 // arrived in version 2, and a version 0 table simply stops before it. Reading
 // it anyway would return whatever followed the table in the file.
 func (f *Face) readOS2(os2 []byte) {
+	// fsType is at offset 8 in every version, and read on its own before the
+	// length the rest needs: Apple's original version 0 table stops at 68
+	// bytes, and a font that states a restriction in one has stated it.
+	if len(os2) >= 10 {
+		f.fsType, f.fsTypeStated = FSType(font.Be16(os2, 8)), true
+	}
 	if len(os2) < 78 { // through usWinDescent, which every version has
 		return
 	}

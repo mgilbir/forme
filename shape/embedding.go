@@ -222,6 +222,77 @@ func (f *Face) IsCFF() bool { return f.cff }
 // answer. A face from LoadSimple or Standard is never CID-keyed.
 func (f *Face) IsCIDKeyed() bool { return f.gidToCID != nil }
 
+// FSType is a font's OS/2 fsType: what its licence says a document may do with
+// it when embedding it. It is the font's own sixteen bits, as the font wrote
+// them, reserved bits and all.
+//
+// The OpenType OS/2 table defines it. Bits 0 to 3 are the usage permission,
+// and a value with none of them set is Installable embedding, which permits
+// everything. From OS/2 version 3 a font may set at most one of them; versions
+// 0 to 2 allowed several, and the specification says to honour the least
+// restrictive of those present — Editable over Preview & Print over
+// Restricted. Bits 8 and 9 are independent of the usage and restrict how the
+// font is embedded rather than whether.
+type FSType uint16
+
+const (
+	// FSTypeRestricted is Restricted License embedding: the font must not be
+	// embedded unless a less restrictive usage bit is also set (see FSType).
+	FSTypeRestricted FSType = 0x0002
+	// FSTypePreviewPrint is Preview & Print embedding: the font may be
+	// embedded, and the document opened read-only.
+	FSTypePreviewPrint FSType = 0x0004
+	// FSTypeEditable is Editable embedding: the font may be embedded, and the
+	// document edited.
+	FSTypeEditable FSType = 0x0008
+	// FSTypeNoSubsetting says the font must not be subsetted before it is
+	// embedded: a document may carry it whole or not at all. Program is the
+	// whole of it.
+	FSTypeNoSubsetting FSType = 0x0100
+	// FSTypeBitmapOnly says only bitmaps the font contains may be embedded,
+	// and no outlines. A font carrying no bitmaps may therefore not be
+	// embedded at all.
+	FSTypeBitmapOnly FSType = 0x0200
+)
+
+// EmbeddingPermissions is the face's OS/2 fsType, and whether the font states
+// one.
+//
+// It is read at load, from the program the face was loaded from, so a caller
+// embedding a face need not read the OS/2 table again — and a caller handed a
+// face rather than bytes has the answer too. fsType is at the same place in
+// every version of the table, so a version 0 table states it as a version 5
+// one does; the value comes back as the font wrote it, and what the usage bits
+// mean together is described at FSType.
+//
+// stated is false for a face whose program has no OS/2 table, or one too short
+// to reach the field, and for a standard face, which has no program. OS/2 is
+// required of an OpenType font but optional in a TrueType one, and a font that
+// states nothing has placed no restriction; stated is here so that a caller
+// that wants to treat the two differently can. The subset carries the OS/2
+// table through unchanged, so it states the same permissions.
+func (f *Face) EmbeddingPermissions() (fsType FSType, stated bool) {
+	return f.fsType, f.fsTypeStated
+}
+
+// Program is the whole font program the face was loaded from: what a document
+// embeds when it may not subset the face (FSTypeNoSubsetting), or chooses not
+// to.
+//
+// It is an sfnt, TrueType or OpenType, and it is the program the face reads
+// its own tables from. A face loaded from a WOFF or WOFF 2 returns the sfnt
+// the container held, since that is the program and a document format carries
+// the program; a face from LoadInstance returns the instance it cut, which is
+// what it draws. A standard face has no program and returns nil. A clone
+// returns its face's.
+//
+// It is not a copy, because a CJK program is megabytes and a document may ask
+// for it once per face it embeds. For a face from Load it is the very slice
+// Load was given, which Load keeps rather than copies. So it must not be
+// modified: the face goes on reading it, and a change shows up as a font that
+// says something else.
+func (f *Face) Program() []byte { return f.data }
+
 // CharacterCollection is the collection this face's CIDs are numbered in — the
 // CFF's ROS — and whether it has one to state.
 //
