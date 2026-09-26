@@ -464,7 +464,8 @@ func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 		// that is neither and "align-items: left" are not CSS, and the cascade
 		// drops them before this gate is reached — see
 		// TestAValueThatIsNotCSSIsDroppedByTheCascade.
-		{"a fit-content", `#g { grid-template-columns: fit-content(100px) }`, "does not size"},
+		// fit-content() was here, in the columns and in grid-auto-rows. It is
+		// sized now; see layout/gridfitcontent_test.go.
 		{"two automatic repeats",
 			`#g { grid-template-columns: repeat(auto-fill, 50px) repeat(auto-fill, 50px) }`,
 			"does not size"},
@@ -473,17 +474,28 @@ func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 		// each an invalid declaration, and the cascade now drops them with
 		// the rest of what is not CSS, so the gate never sees them from a
 		// stylesheet; see TestATemplateThatDoesNotDrawAGridIsRefused.
-		{"implicit tracks sized by a function this engine cannot read",
-			`#g { grid-auto-rows: fit-content(50px) }`, "implicit tracks"},
-		{"tracks on a baseline", `#g { align-content: baseline }`, "aligned by a rule"},
-		{"items on a baseline", `#g { align-items: baseline }`, "aligned by a rule"},
+		// Tracks and items aligned by a baseline down the rows are laid out
+		// now (layout/gridbaseline_test.go). What is still refused is a
+		// baseline across the columns, baseline content alignment, and a
+		// baseline in a vertical writing mode.
+		{"tracks on a baseline", `#g { align-content: baseline }`, "baseline this engine does not find"},
+		{"items on a baseline across the columns", `#g { justify-items: baseline }`,
+			"baseline this engine does not find"},
+		{"items on a baseline, written vertically",
+			`#g { align-items: baseline; writing-mode: vertical-rl }`, "vertical writing mode"},
+		// An item written vertically is refused the same way; its block is
+		// not the width this test measures, so it is asked in
+		// TestABaselineThisEngineDoesNotFindIsRefused.
 		{"a safe alignment", `#g { justify-content: safe center }`, "aligned by a rule"},
 		{"an item in an area nobody drew", `#g > div:first-child { grid-area: header }`,
 			"the template does not draw"},
 		{"an item at a named line", `#g > div:first-child { grid-column: main }`, "cannot find"},
 		{"an item counting from the end", `#g > div:first-child { grid-column: -1 }`, "cannot find"},
 		{"an item spanning to a name", `#g > div:first-child { grid-row: span main }`, "cannot find"},
-		{"an item on a baseline", `#g > div:first-child { align-self: baseline }`, "aligned by a rule"},
+		{"an item on a baseline across its column",
+			`#g > div:first-child { justify-self: last baseline }`, "baseline this engine does not find"},
+		{"an item's content on a baseline",
+			`#g > div:first-child { align-content: baseline }`, "baseline this engine does not find"},
 		{"an automatic margin", `#g > div:first-child { margin-left: auto }`, "automatic margin"},
 	} {
 		t.Run(c.what, func(t *testing.T) {

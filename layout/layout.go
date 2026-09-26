@@ -73,6 +73,12 @@ type Fragment struct {
 	// takes its first baseline from, where its layout has named one, and zero
 	// otherwise. See containerFirstBaseline.
 	baselineChild int
+	// gridBaseline is a grid container's first baseline where its items share
+	// one — Grid §11.6's first two steps — measured down its content box, and
+	// hasGridBaseline says there is one. It is asked before baselineChild.
+	// See gridSharedBaseline.
+	gridBaseline    style.Unit
+	hasGridBaseline bool
 
 	// Marker is the bullet or number a list item generates, nil otherwise. It
 	// is on the fragment rather than in the box tree because its text depends

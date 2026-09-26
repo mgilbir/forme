@@ -31,22 +31,26 @@ import (
 // "grid-template-areas", and the implicit tracks the items reach into, before
 // the explicit grid as well as after it, sized by "grid-auto-columns" and
 // "grid-auto-rows". A track size may be a length, a percentage, a fraction of
-// the free space, one of the three content keywords, or a minmax() of two of
-// them; "repeat()" writes a list more than once, a counted number of times or
-// as many as fit ("auto-fill" and "auto-fit"). Items are placed by §8.5 in
+// the free space, one of the three content keywords, a minmax() of two of
+// them, or a fit-content() of a length or a percentage; "repeat()" writes a
+// list more than once, a counted number of times or as many as fit
+// ("auto-fill" and "auto-fit"). Items are placed by §8.5 in
 // order-modified document order: where their grid-row-start, grid-row-end,
 // grid-column-start and grid-column-end put them — a line number, a span, or
 // the name of a template area — and by the automatic flow, sparse or dense,
 // along the rows or down the columns, for whatever they left to it. The gaps
 // are "row-gap" and "column-gap", which a grid reads on both axes rather than
-// one, and the tracks and items are aligned by Box Alignment's keywords.
+// one, and the tracks and items are aligned by Box Alignment's keywords —
+// down the rows by a first or last baseline too, which §12.5 sizes the rows
+// for (see shimBaselineGroups).
 //
-// What is refused: a named line in a track list, fit-content(), a repeat()
-// inside a repeat() or two automatic ones in a list, a flexible minimum, a
-// list or a template of more than maxRepeatedTracks tracks, a template that
-// does not draw rectangles, a line counted back from the end of the grid or
-// named by anything but a template area, a baseline or "safe" alignment, and
-// an automatic margin on an item. Each is refused with a finding and laid out
+// What is refused: a named line in a track list, a repeat() inside a repeat()
+// or two automatic ones in a list, a flexible minimum, a list or a template of
+// more than maxRepeatedTracks tracks, a template that does not draw
+// rectangles, a line counted back from the end of the grid or named by
+// anything but a template area, a baseline across the columns or of the
+// content inside a box, a baseline in a vertical writing mode, a "safe" or
+// "unsafe" alignment, and an automatic margin on an item. Each is refused with a finding and laid out
 // as it was before this file existed, which is as a column of blocks. The gate is the same shape as
 // flex's and multicol's, and for the same reason: a box refused here is the
 // page this engine drew yesterday and is *reported*, while a box laid out
@@ -78,14 +82,24 @@ const (
 	trackMax
 	// trackFlex is a fraction of the space the other tracks left over.
 	trackFlex
+	// trackFit is §7.2's fit-content(<length-percentage>), and is only ever a
+	// maximum: the track's minimum is "auto". Its size is the argument, the
+	// limit. §7.2.4 writes the whole of it as max(minimum, min(limit,
+	// max-content)), and §12.5 gets there by treating it as "max-content"
+	// everywhere but three places: a growth limit it accommodates is clamped
+	// by the argument, the argument is the limit a distribution freezes it at
+	// (see trackSizer.limit), and once it has reached the argument it takes no
+	// more space past its limits, as though it were a fixed track of that size
+	// (see trackSizer.pastLimit).
+	trackFit
 )
 
 // trackSize is one of §7.2's sizing functions: what a track asks for at one of
 // its two ends.
 type trackSize struct {
 	kind trackKind
-	// size is the stated length of a trackFixed, and factor the number in front
-	// of the "fr" of a trackFlex.
+	// size is the stated length of a trackFixed and the argument of a
+	// trackFit, and factor the number in front of the "fr" of a trackFlex.
 	size   style.Unit
 	factor float64
 }
@@ -135,6 +149,18 @@ type gridItem struct {
 	across, down  flexAlign
 	width, height style.Unit
 	frag          *Fragment
+	// baseline is the preference the item aligns down its row by, and
+	// baselineNone where it takes no part in baseline alignment — it did not
+	// ask, or it asked and its height depends on the rows (see
+	// baselineParticipation). depth is how far its alignment baseline is from
+	// the edge of its margin box that the alignment starts from: the top for a
+	// first baseline, the bottom for a last. shim is §12.5's: how far the item
+	// is moved from that edge of its area so that its baseline meets the
+	// deepest in its group. cellHeight is its area's height, once the rows are
+	// sized.
+	baseline    baselinePref
+	depth, shim style.Unit
+	cellHeight  style.Unit
 }
 
 // horizontal and vertical are the room around the item's content on each axis.
@@ -214,6 +240,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	for _, it := range items {
 		it.across = l.itemAlignment(it, "justify-self", across, axis)
 		it.down = l.itemAlignment(it, "align-self", down, flexAxis{})
+		it.baseline = l.baselineParticipation(it, rows, definite)
 		cell := areaSpan(columns, it.column, it.place[1].span, columnGap, columnBetween)
 		switch declared, stated := l.gridDeclaredSize(it, "width", cell, true); {
 		case stated:
@@ -243,8 +270,13 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 	for _, it := range items {
 		frag := l.layOutGridItem(it, it.width, 0, false, width, origin)
 		it.height = frag.BorderRect.H.Add(it.margin.Vertical())
+		it.depth = itemBaselineDepth(it, frag)
 	}
 	l.rollback(before)
+	// §12.5's step 1, before the rows are sized: the shims that make the
+	// items of a baseline-sharing group, start- or end-aligned together, meet
+	// at their baselines. See rowAsk, which counts them.
+	shimBaselineGroups(items)
 
 	// The container's own min-height and max-height, which an auto-height
 	// grid's flexible rows are sized within; see resolveTracks.
@@ -266,8 +298,10 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 
 	columnEdges, rowEdges := trackEdgesOf(columns), trackEdgesOf(rows)
 	parent.baselineChild = 0
+	parent.hasGridBaseline = false
 	for _, it := range items {
-		cellHeight := areaSpan(rows, it.row, it.place[0].span, rowGap, rowBetween)
+		it.cellHeight = areaSpan(rows, it.row, it.place[0].span, rowGap, rowBetween)
+		cellHeight := it.cellHeight
 		// The same clause on the other axis. it.height already holds what the
 		// item's own layout came to, which honours a declared height; stretch
 		// was overwriting it.
@@ -279,7 +313,14 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		}
 		it.frag = l.layOutGridItem(it, it.width,
 			maxZero(it.height.Sub(it.margin.Vertical())), true, width, origin)
-
+		it.depth = itemBaselineDepth(it, it.frag)
+	}
+	// The baselines again, from the layouts that are kept: the shims sized the
+	// rows, and these place the items. They are the same numbers unless a
+	// height the item states resolved differently against its sized area.
+	shimBaselineGroups(items)
+	for _, it := range items {
+		cellHeight := it.cellHeight
 		x := columnEdges.start(it.column, columnGap).
 			Add(columnLead).Add(columnBetween.Mul(float64(it.column)))
 		y := rowEdges.start(it.row, rowGap).
@@ -294,9 +335,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		// reason it is one step: every position on the axis reverses together.
 		it.frag.BorderRect.X = axis.mainAt(x, it.width.Add(it.margin.Horizontal()),
 			width).Add(it.margin.Left)
-		it.frag.BorderRect.Y = y.
-			Add(alignmentOffset(it.down, cellHeight, it.height)).
-			Add(it.margin.Top)
+		it.frag.BorderRect.Y = y.Add(it.blockOffset(cellHeight)).Add(it.margin.Top)
 		if it.row == 0 && parent.baselineChild == 0 {
 			// Grid §11.8: the container's first baseline is the first item in
 			// grid order whose area is in the first row, which is not always
@@ -305,6 +344,7 @@ func (l *layouter) gridContent(b *Box, parent *Fragment, width style.Unit,
 		}
 		parent.Children = append(parent.Children, it.frag)
 	}
+	l.gridSharedBaseline(parent, items)
 	content := inner
 	if definite {
 		content = height
@@ -474,7 +514,12 @@ func (l *layouter) deferGridOutOfFlow(b *Box, parent *Fragment, width, height st
 // sized by its own width and height rather than by the area.
 func alignmentFraction(a flexAlign) float64 {
 	switch a {
-	case crossEnd:
+	case crossEnd, crossLastBaseline:
+		// A box out of flow shares no alignment context, and Box Alignment
+		// §4.2 aligns it by the fallback: self-end for a last baseline, and
+		// self-start — nought — for a first. The fallback is "safe", which
+		// this does not apply: a box larger than the rectangle is still
+		// aligned to its end, as "end" itself is here.
 		return 1
 	case crossCenter:
 		return 0.5
@@ -1252,7 +1297,7 @@ func (e trackEdges) start(at int, gap style.Unit) style.Unit {
 // back as a flexAlign — it is the same value, and having two of them would be
 // two ways to spell one specification.
 func (l *layouter) gridAlignment(b *Box, property string, a flexAxis) flexAlign {
-	return crossAlignment(gridAlignmentValue(b.Style.Get(property), a), flexAxis{})
+	return gridAlign(gridAlignmentValue(b.Style.Get(property), a))
 }
 
 func (l *layouter) itemAlignment(it *gridItem, property string, container flexAlign,
@@ -1261,6 +1306,16 @@ func (l *layouter) itemAlignment(it *gridItem, property string, container flexAl
 	value := gridAlignmentValue(it.box.Style.Get(property), a)
 	if value == "" || value == "auto" {
 		return container
+	}
+	return gridAlign(value)
+}
+
+// gridAlign is crossAlignment with the one keyword a grid has and a flex
+// container does not: "last baseline". See gridAlignmentValue for the
+// spellings.
+func gridAlign(value string) flexAlign {
+	if value == "last baseline" {
+		return crossLastBaseline
 	}
 	return crossAlignment(value, flexAxis{})
 }
@@ -1283,7 +1338,51 @@ func gridAlignmentValue(raw string, a flexAxis) string {
 		}
 		return "start"
 	}
+	if pref, ok := baselinePreference(value); ok {
+		// Box Alignment §4.2's <baseline-position>, "[ first | last ]? &&
+		// baseline", in either order: "baseline" and "baseline first" are
+		// "first baseline", and "baseline last" is "last baseline". One
+		// spelling each, so a reader compares one string.
+		if pref == baselineLast {
+			return "last baseline"
+		}
+		return "baseline"
+	}
 	return value
+}
+
+// baselinePref is Box Alignment §4.2's baseline alignment preference.
+type baselinePref uint8
+
+const (
+	baselineNone baselinePref = iota
+	baselineFirst
+	baselineLast
+)
+
+// baselinePreference reads a <baseline-position>, in any of its spellings,
+// and says whether the value was one.
+func baselinePreference(value string) (baselinePref, bool) {
+	words := ascii.CSSFields(value)
+	switch {
+	case len(words) == 1 && words[0] == "baseline":
+		return baselineFirst, true
+	case len(words) != 2:
+		return baselineNone, false
+	}
+	other := words[0]
+	if other == "baseline" {
+		other = words[1]
+	} else if words[1] != "baseline" {
+		return baselineNone, false
+	}
+	switch other {
+	case "first":
+		return baselineFirst, true
+	case "last":
+		return baselineLast, true
+	}
+	return baselineNone, false
 }
 
 // gridContentAlignment reports whether the tracks on an axis are stretched,
@@ -1325,6 +1424,183 @@ func (l *layouter) trackSpacing(b *Box, property string, a flexAxis,
 		between = justifyOffset(align, free, len(tracks), 1).Sub(lead)
 	}
 	return lead, between
+}
+
+// baselineParticipation is whether an item takes part in baseline alignment
+// down its row, and with which preference.
+//
+// Grid §11.4: "If baseline alignment is specified on a grid item whose size in
+// that axis depends on the size of an intrinsically-sized track (whose size is
+// therefore dependent on both the item's size and baseline alignment, creating
+// a cyclic dependency), that item does not participate in baseline alignment,
+// and instead uses its fallback alignment as if that were originally
+// specified", and a flexible track counts as intrinsically sized where the
+// container's height is indefinite. An item aligned by a baseline is not
+// stretched, so its height depends on its rows only where it, its min-height
+// or its max-height is a percentage of its area. The fallback is Box Alignment
+// §4.2's: "safe self-start" for a first baseline and "safe self-end" for a
+// last; see blockOffset.
+func (l *layouter) baselineParticipation(it *gridItem, rows []gridTrack,
+	definite bool) baselinePref {
+
+	pref := baselineNone
+	switch it.down {
+	case crossBaseline:
+		pref = baselineFirst
+	case crossLastBaseline:
+		pref = baselineLast
+	default:
+		return baselineNone
+	}
+	percent := false
+	for _, p := range [...]string{"height", "min-height", "max-height"} {
+		if length, ok := l.parseLength(it.box, p); ok &&
+			(length.Kind == style.LengthPercent || length.Kind == style.LengthCalc) {
+			percent = true
+		}
+	}
+	if !percent {
+		return pref
+	}
+	for i := it.row; i < it.row+it.place[0].span && i < len(rows); i++ {
+		t := rows[i]
+		if t.min.kind.intrinsic() || t.max.kind.intrinsic() || (t.flexible() && !definite) {
+			return baselineNone
+		}
+	}
+	return pref
+}
+
+// itemBaselineDepth is how far an item's alignment baseline is from the edge
+// of its margin box that its group aligns from, laid out as frag.
+//
+// A first baseline is the first line's, measured from the top of the margin
+// box. A last baseline is the last line's, measured up from the bottom; Box
+// Alignment §9.1 keeps the legacy rule that a block container that scrolls has
+// its last baseline at its block-end margin edge, and so a depth of nought. An
+// item with no line at all has its baseline synthesized from its border box —
+// §9.1: "grid and flex items synthesize from their border edges", the
+// alphabetic baseline from the line-under edge — which is the bottom of its
+// border box for either preference, as layout/flex.go's baselineOf does for a
+// first one.
+func itemBaselineDepth(it *gridItem, frag *Fragment) style.Unit {
+	switch it.baseline {
+	case baselineFirst:
+		if v, ok := firstBaseline(frag); ok {
+			return it.margin.Top.Add(v)
+		}
+		return it.margin.Top.Add(frag.BorderRect.H)
+	case baselineLast:
+		if hasLegacyScrollBaseline(it.box) {
+			return 0
+		}
+		if v, ok := lastLineBaseline(frag); ok {
+			return maxZero(frag.BorderRect.H.Sub(v)).Add(it.margin.Bottom)
+		}
+		return it.margin.Bottom
+	}
+	return 0
+}
+
+// baselineGroup is the row whose baseline-sharing group an item is in. Box
+// Alignment §9.2: grid items in the same row share an alignment context down
+// the grid, and an item that spans several rows "participates in first/last
+// baseline alignment within its start-most/end-most shared alignment context".
+// The group is the row and the preference: two boxes' preferences are
+// compatible where they have the same block flow direction and the same
+// preference, and every item here flows the container's way (the gate refuses
+// the rest).
+type baselineGroup struct {
+	row  int
+	pref baselinePref
+}
+
+func (it *gridItem) baselineGroup() baselineGroup {
+	if it.baseline == baselineLast {
+		return baselineGroup{row: it.row + it.place[0].span - 1, pref: baselineLast}
+	}
+	return baselineGroup{row: it.row, pref: it.baseline}
+}
+
+// shimBaselineGroups is §12.5's step 1: "For the items in each
+// baseline-sharing group, add a 'shim' (effectively, additional margin) on the
+// start/end side (for first/last-baseline alignment) of each item so that,
+// when start/end-aligned together their baselines align as specified." The
+// shim is the group's deepest baseline less the item's own, and it is also
+// where the item sits in its area once the rows are sized: a group aligned by
+// its first baselines is placed at the start of the row by its fallback
+// alignment, and one aligned by its last at the end. See blockOffset.
+//
+// One pass to find each group's deepest and one to shim, over a map keyed by
+// row: the items are visited twice whatever their number.
+func shimBaselineGroups(items []*gridItem) {
+	deepest := map[baselineGroup]style.Unit{}
+	for _, it := range items {
+		if it.baseline == baselineNone {
+			continue
+		}
+		g := it.baselineGroup()
+		deepest[g] = style.Max(deepest[g], it.depth)
+	}
+	for _, it := range items {
+		it.shim = 0
+		if it.baseline != baselineNone {
+			it.shim = deepest[it.baselineGroup()].Sub(it.depth)
+		}
+	}
+}
+
+// blockOffset is how far down its area an item sits.
+//
+// An item in a first-baseline group is its shim below the top of its area:
+// that is what puts its baseline level with the deepest in the group, whose
+// shim is nought. An item in a last-baseline group is its shim above the
+// bottom. §9.3 positions the group by its fallback alignment, which is "safe":
+// a last-baseline item that would stick out of the top of its area is put at
+// the top instead. An item that asked for a baseline and takes no part (see
+// baselineParticipation) is placed by that fallback alone.
+func (it *gridItem) blockOffset(cell style.Unit) style.Unit {
+	switch {
+	case it.baseline == baselineFirst:
+		return it.shim
+	case it.baseline == baselineLast:
+		return maxZero(cell.Sub(it.height).Sub(it.shim))
+	case it.down == crossLastBaseline:
+		return maxZero(cell.Sub(it.height))
+	case it.down == crossBaseline:
+		return 0
+	}
+	return alignmentOffset(it.down, cell, it.height)
+}
+
+// gridSharedBaseline is Grid §11.6's first two steps for the container's own
+// first baseline: "If any grid items intersecting the first (block-start–most)
+// non-empty track participate in first baseline alignment along the relevant
+// axis, generate a baseline set from their shared alignment baseline ...
+// after alignment has been performed. Otherwise, if any grid items
+// intersecting that track participate in last baseline alignment along the
+// relevant axis, generate from that alignment baseline." An item spanning
+// several rows counts only where its span starts in the track, and for the
+// second step only where it ends there. The third step — the first item in
+// grid order — is baselineChild's.
+//
+// The track is the first row, as it is for baselineChild; a first row that is
+// empty is a gap in both.
+func (l *layouter) gridSharedBaseline(parent *Fragment, items []*gridItem) {
+	for _, pref := range [...]baselinePref{baselineFirst, baselineLast} {
+		for _, it := range items {
+			if it.baseline != pref || it.baselineGroup().row != 0 {
+				continue
+			}
+			top := it.frag.BorderRect.Y.Sub(it.margin.Top)
+			at := top.Add(it.shim).Add(it.depth)
+			if pref == baselineLast {
+				at = top.Add(it.height).Sub(it.depth)
+			}
+			parent.gridBaseline, parent.hasGridBaseline = at, true
+			return
+		}
+	}
 }
 
 // alignmentOffset is how far into its cell an aligned item sits: nothing at the
@@ -1737,14 +2013,20 @@ func (l *layouter) columnAsk(it *gridItem) trackAsk {
 // states one, its min-height where it states that instead, and otherwise its
 // automatic minimum, whose content-based size is the laid-out height again: a
 // block is as short as its content can be at the width it was given.
+//
+// An item in a baseline-sharing group carries its shim into all three, as
+// §12.5's step 1 says: "Consider these 'shims' as part of the items' intrinsic
+// size contribution for the purpose of track sizing". The shim is margin, and
+// a minimum contribution is an outer size.
 func (l *layouter) rowAsk(it *gridItem) trackAsk {
-	a := trackAsk{from: it.row, span: it.place[0].span, min: it.height, max: it.height}
+	outer := it.height.Add(it.shim)
+	a := trackAsk{from: it.row, span: it.place[0].span, min: outer, max: outer}
 	b := it.box
 	if length, ok := l.parseLength(b, "height"); ok && length.Kind == style.LengthAbsolute {
-		a.minimum = it.height
+		a.minimum = outer
 		return a
 	}
-	a.minimum = it.vertical()
+	a.minimum = it.vertical().Add(it.shim)
 	length, ok := l.parseLength(b, "min-height")
 	if !ok || length.Kind == style.LengthAuto {
 		a.automatic = !isScrollContainer(b.Style)
@@ -2042,11 +2324,15 @@ func newTrackSizer(tracks []gridTrack, gap style.Unit, under sizingConstraint) *
 
 // intrinsic is a sizing function that asks the content: "auto" and the two
 // content keywords. A flexible one is not, and a fixed one is not.
-func (k trackKind) intrinsic() bool { return k == trackAuto || k == trackMin || k == trackMax }
+func (k trackKind) intrinsic() bool {
+	return k == trackAuto || k == trackMin || k == trackMax || k == trackFit
+}
 
 // maxContentMaximum is a maximum §12.5 treats as "max-content", which "auto"
-// is wherever the specification does not say otherwise.
-func (k trackKind) maxContentMaximum() bool { return k == trackAuto || k == trackMax }
+// and fit-content() are wherever the specification does not say otherwise.
+func (k trackKind) maxContentMaximum() bool {
+	return k == trackAuto || k == trackMax || k == trackFit
+}
 
 // accommodation is what a distribution is growing, which decides where the
 // space goes once every track has reached its limit.
@@ -2171,12 +2457,17 @@ func (s *trackSizer) minimumContribution(a trackAsk) style.Unit {
 // limited is §12.5's limited min-content or max-content contribution: c, held
 // to the sum of the fixed maximums of the tracks the item spans where every one
 // of them has one — the gaps between them are fixed tracks too — and never
-// below the item's minimum contribution.
+// below the item's minimum contribution. The fixed maximum of a fit-content()
+// track is its argument: §12.5 says so of "the max track sizing function
+// (which could be the argument to a fit-content() track sizing function)".
+// §6.6's clamp of the content-based minimum is the other clamp of this shape,
+// and its note says the argument does not count there; see
+// minimumContribution.
 func (s *trackSizer) limited(a trackAsk, c style.Unit) style.Unit {
 	floor := s.minimumContribution(a)
 	sum := s.gap.Mul(float64(a.span - 1))
 	for _, t := range s.tracks[a.from : a.from+a.span] {
-		if t.max.kind != trackFixed {
+		if t.max.kind != trackFixed && t.max.kind != trackFit {
 			return style.Max(c, floor)
 		}
 		sum = sum.Add(maxZero(t.max.size))
@@ -2194,17 +2485,64 @@ func (s *trackSizer) affectedSize(i int, what accommodation) style.Unit {
 }
 
 // limit is how far a round may grow a track's affected size before it is
-// frozen, and false where it may grow without one. A base size stops at its
-// growth limit. A growth limit stops where it is, unless it is infinite or
-// infinitely growable.
+// frozen, and false where it may grow without one. §12.5.1: "For base sizes,
+// the limit is its growth limit, capped by its fit-content() argument if any.
+// For growth limits, the limit is the growth limit if the growth limit is
+// finite and the track is not infinitely growable, otherwise its
+// fit-content() argument if it has a fit-content() track sizing function, and
+// infinity otherwise."
 func (s *trackSizer) limit(i int, what accommodation) (style.Unit, bool) {
-	if s.infinite[i] {
-		return 0, false
+	fit, hasFit := s.fitArgument(i)
+	if what != intoLimits {
+		switch {
+		case s.infinite[i] && hasFit:
+			return fit, true
+		case s.infinite[i]:
+			return 0, false
+		case hasFit:
+			return style.Min(s.limits[i], fit), true
+		}
+		return s.limits[i], true
 	}
-	if what == intoLimits && s.growable[i] {
-		return 0, false
+	if !s.infinite[i] && !s.growable[i] {
+		return s.limits[i], true
 	}
-	return s.limits[i], true
+	if hasFit {
+		return fit, true
+	}
+	return 0, false
+}
+
+// fitArgument is the argument of a fit-content() track, and false for every
+// other kind of track.
+func (s *trackSizer) fitArgument(i int) (style.Unit, bool) {
+	if t := s.tracks[i]; t.max.kind == trackFit {
+		return maxZero(t.max.size), true
+	}
+	return 0, false
+}
+
+// pastLimit reports whether a track takes space past the limits in a round, in
+// §12.5.1's step "distribute space beyond limits": one with an intrinsic
+// maximum when a minimum or min-content contribution is accommodated into base
+// sizes or any contribution into growth limits, and one with a max-content
+// maximum when a max-content contribution is accommodated into base sizes.
+//
+// A fit-content() maximum is max-content "until the track reaches the limit
+// specified as the fit-content() argument, after which its max track sizing
+// function is treated as being a fixed sizing function of that argument": so
+// it takes no more past its limits once its affected size and what the item
+// has given it already reach the argument, and a fixed maximum takes none in
+// any round. grown is that affected size and increase.
+func (s *trackSizer) pastLimit(i int, what accommodation, grown style.Unit) bool {
+	kind := s.tracks[i].max.kind
+	if fit, ok := s.fitArgument(i); ok && grown >= fit {
+		return false
+	}
+	if what == intoBaseForMaxContent {
+		return kind.maxContentMaximum()
+	}
+	return kind.intrinsic()
 }
 
 // distribute is §12.5.1, "distribute extra space", for one round: the tracks
@@ -2266,10 +2604,7 @@ func (s *trackSizer) distribute(items []trackAsk, flexible bool, what accommodat
 		if space > 0 {
 			s.gets = s.gets[:0]
 			for _, i := range s.affected {
-				t := s.tracks[i]
-				switch {
-				case what == intoBaseForMaxContent && t.max.kind.maxContentMaximum(),
-					what != intoBaseForMaxContent && t.max.kind.intrinsic():
+				if s.pastLimit(i, what, s.affectedSize(i, what).Add(inc[i-from])) {
 					s.gets = append(s.gets, i)
 				}
 			}
@@ -2663,9 +2998,9 @@ type trackRoom struct {
 type autoFit struct{ from, to int }
 
 // tracksFrom turns a track list into tracks, or returns false for anything in
-// it this slice does not size: a named line, a fit-content(), a subgrid, a
-// repeat() inside a repeat(), a flexible minimum in a minmax(), or a list
-// longer than maxRepeatedTracks.
+// it this slice does not size: a named line, a subgrid, a repeat() inside a
+// repeat(), a flexible minimum in a minmax(), or a list longer than
+// maxRepeatedTracks.
 func (l *layouter) tracksFrom(b *Box, vals []css.ComponentValue, width style.Unit,
 	room trackRoom, mayRepeat bool) (tracks []gridTrack, fit autoFit, ok bool) {
 
@@ -2924,6 +3259,9 @@ func (l *layouter) trackFrom(b *Box, v css.ComponentValue, room trackRoom) (grid
 	if v.IsFunction() && ascii.EqualFold(v.Token.Value, "minmax") {
 		return l.minmaxTrack(b, v.Values, room)
 	}
+	if v.IsFunction() && ascii.EqualFold(v.Token.Value, "fit-content") {
+		return l.fitContentTrack(b, v.Values, room)
+	}
 	size, ok := l.trackSizeFrom(b, v, room)
 	if !ok {
 		return gridTrack{}, false
@@ -2933,6 +3271,39 @@ func (l *layouter) trackFrom(b *Box, v css.ComponentValue, room trackRoom) (grid
 		return gridTrack{min: trackSize{kind: trackAuto}, max: size}, true
 	}
 	return gridTrack{min: size, max: size}, true
+}
+
+// fitContentTrack reads §7.2's fit-content(<length-percentage>): "auto" at
+// the low end and, at the high end, max-content held to the argument.
+//
+// A percentage of a size that is not definite is not a limit. §7.2.1 treats
+// such a percentage as "auto", and a fit-content() whose limit is nothing is
+// minmax(auto, max-content) — the smaller of that and minmax(auto, limit),
+// which is how §7.2 says the function is calculated, with no limit to be
+// smaller than. It is not "auto" at the high end: the space §12.8 stretches
+// the automatic tracks with is not the content's, and fit-content() asks for
+// no more than the content.
+func (l *layouter) fitContentTrack(b *Box, args []css.ComponentValue,
+	room trackRoom) (gridTrack, bool) {
+
+	parts := splitValuesOnWhitespace(args)
+	if len(parts) != 1 {
+		return gridTrack{}, false
+	}
+	length, ok := l.lengthOfValues(b, parts[0])
+	if !ok || length.Kind == style.LengthAuto {
+		return gridTrack{}, false
+	}
+	out := gridTrack{min: trackSize{kind: trackAuto}, max: trackSize{kind: trackMax}}
+	size, ok := length.Resolve(room.size, room.definite)
+	if !ok {
+		return out, true
+	}
+	if size < 0 {
+		return gridTrack{}, false
+	}
+	out.max = trackSize{kind: trackFit, size: size}
+	return out, true
 }
 
 // minmaxTrack reads §7.2.2's minmax(), whose two arguments are the track's two
@@ -3058,14 +3429,14 @@ func splitValuesOnWhitespace(vals []css.ComponentValue) [][]css.ComponentValue {
 func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 	if _, _, ok := l.trackList(b, "grid-template-columns", width, trackRoom{}); !ok {
 		return "its columns are written with something this engine does not " +
-			"size — a named line, fit-content(), a repeat() inside a repeat(), " +
-			"two automatic repeat()s, or a flexible minimum in a minmax() — or " +
+			"size — a named line, a repeat() inside a repeat(), two automatic " +
+			"repeat()s, or a flexible minimum in a minmax() — or " +
 			"are more than " + strconv.Itoa(maxRepeatedTracks)
 	}
 	if _, _, ok := l.trackList(b, "grid-template-rows", width, trackRoom{}); !ok {
 		return "its rows are written with something this engine does not size " +
-			"— a named line, fit-content(), a repeat() inside a repeat(), two " +
-			"automatic repeat()s, or a flexible minimum in a minmax() — or are " +
+			"— a named line, a repeat() inside a repeat(), two automatic " +
+			"repeat()s, or a flexible minimum in a minmax() — or are " +
 			"more than " + strconv.Itoa(maxRepeatedTracks)
 	}
 	areas, ok := l.areasOf(b)
@@ -3088,7 +3459,7 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 				"does not size"
 		}
 	}
-	if why := refusesGridAlignment(b); why != "" {
+	if why := refusesGridAlignment(b, nil); why != "" {
 		return why
 	}
 	for _, c := range b.Children {
@@ -3103,7 +3474,7 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 				"number counted back from the end of the grid, or a span of a " +
 				"named line"
 		}
-		if why := refusesGridAlignment(c); why != "" {
+		if why := refusesGridAlignment(c, b); why != "" {
 			return why
 		}
 		if auto := l.autoMarginEdges(c); auto != (Edges{}) {
@@ -3118,18 +3489,49 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 }
 
 // refusesGridAlignment is the alignment half of the gate, which is the same six
-// properties on the container and on an item.
+// properties on the container and on an item. container is the grid container
+// when b is one of its items, and nil when b is the container.
 //
-// What is left to refuse is the two that name something other than an end of an
-// axis. A baseline alignment lines the *text* of the items in a row up with
-// each other, which is a measurement across a row rather than a position in a
-// cell; "safe" and "unsafe" are a second answer to what happens when an item
-// does not fit, and this has one already — the overflow falls where the
-// arithmetic puts it.
-func refusesGridAlignment(b *Box) string {
+// What is left to refuse is what names something other than an end of an
+// axis, where this does not measure it:
+//
+//   - A baseline across the columns, justify-self or justify-items. A grid
+//     item's text runs along the row, so its baselines are lines across the
+//     column axis, and an item with none in that axis has one synthesized
+//     from an edge chosen by an axis-compatible writing mode (Box Alignment
+//     §9.1). This engine finds neither.
+//   - Baseline content alignment, align-content or justify-content with a
+//     <baseline-position>. On an item it moves the item's content inside its
+//     box and takes part in the row's group with it (§5.4 and §12.5's note),
+//     and this engine aligns no block's content inside it.
+//   - A baseline down the rows where the container or the item is in a
+//     vertical writing mode. The group's baselines have to be found in the
+//     container's block axis, and a box laid out sideways, or a container
+//     that is, measures its lines across another.
+//   - "safe" and "unsafe", which are a second answer to what happens when an
+//     item does not fit, and this has one already — the overflow falls where
+//     the arithmetic puts it.
+//
+// A baseline down the rows, align-self or align-items, is laid out: see
+// baselineParticipation.
+func refusesGridAlignment(b, container *Box) string {
 	for _, p := range [...]string{"justify-content", "align-content",
 		"justify-items", "align-items", "justify-self", "align-self"} {
-		switch value := trimmedLower(b.Style.Get(p)); value {
+		value := trimmedLower(b.Style.Get(p))
+		if _, ok := baselinePreference(value); ok {
+			if p != "align-items" && p != "align-self" {
+				return "its tracks or its items are aligned by a baseline this " +
+					"engine does not find: across the columns, or of the content " +
+					"inside a box"
+			}
+			if writingModeOf(b).vertical() ||
+				(container != nil && writingModeOf(container).vertical()) {
+				return "its items are aligned to a shared baseline in a vertical " +
+					"writing mode"
+			}
+			continue
+		}
+		switch value {
 		case "", "normal", "stretch", "auto", "legacy", "start", "end", "center",
 			"flex-start", "flex-end", "self-start", "self-end",
 			"space-between", "space-around", "space-evenly":
@@ -3145,7 +3547,18 @@ func refusesGridAlignment(b *Box) string {
 			}
 		default:
 			return "its tracks or its items are aligned by a rule this engine " +
-				"does not apply, such as to a shared baseline"
+				"does not apply, such as a safe or unsafe alignment"
+		}
+	}
+	if container != nil && writingModeOf(b).vertical() {
+		// An item that says "auto" is aligned by the container's align-items,
+		// which the container's own check read in its own writing mode.
+		self := trimmedLower(b.Style.Get("align-self"))
+		if self == "" || self == "auto" {
+			if _, ok := baselinePreference(trimmedLower(container.Style.Get("align-items"))); ok {
+				return "its items are aligned to a shared baseline in a vertical " +
+					"writing mode"
+			}
 		}
 	}
 	return ""

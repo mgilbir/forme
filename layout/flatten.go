@@ -240,11 +240,15 @@ func hasLegacyScrollBaseline(b *Box) bool {
 		overflowClipsContent(b.Style)
 }
 
-// containerFirstBaseline is the first baseline of a flex or grid container: the
-// baseline of the item its layout named, or firstBaseline's walk over the items
-// in the order they were placed — which for a flex container is its first
-// item on its first line.
+// containerFirstBaseline is the first baseline of a flex or grid container: a
+// grid's items' shared baseline where they have one (see gridSharedBaseline),
+// the baseline of the item its layout named, or firstBaseline's walk over the
+// items in the order they were placed — which for a flex container is its
+// first item on its first line.
 func containerFirstBaseline(f *Fragment) (style.Unit, bool) {
+	if f.hasGridBaseline {
+		return f.Border.Top.Add(f.Padding.Top).Add(f.gridBaseline), true
+	}
 	if i := f.baselineChild - 1; i >= 0 && i < len(f.Children) {
 		c := f.Children[i]
 		if v, ok := firstBaseline(c); ok {

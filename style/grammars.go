@@ -518,13 +518,18 @@ var (
 	selfPositionOrAnchor = either(selfPosition, kw("anchor-center"))
 )
 
-// baselinePosition is "[ first | last ]? baseline".
+// baselinePosition is "[ first | last ]? && baseline": css-align-3 §4.2's
+// <baseline-position>, whose two words come in either order. It was read as
+// "[ first | last ]? baseline", so "baseline last" was dropped as invalid.
 func baselinePosition(it []css.ComponentValue) verdict {
 	switch len(it) {
 	case 1:
 		return baselineKeyword(it[0])
 	case 2:
-		return firstLast(it[0]).and(baselineKeyword(it[1]))
+		if got := firstLast(it[0]).and(baselineKeyword(it[1])); got.ok {
+			return got
+		}
+		return baselineKeyword(it[0]).and(firstLast(it[1]))
 	}
 	return invalid
 }
