@@ -79,6 +79,12 @@ type Fragment struct {
 	// See gridSharedBaseline.
 	gridBaseline    style.Unit
 	hasGridBaseline bool
+	// column is which column of its parent's pour this fragment was put in,
+	// counted from one, and nought where its parent was not poured — a box
+	// whose parent is not a multicol container, or is one that laid its
+	// content out in one column. It is what tells an outer multicol which of
+	// an inner one's children share a column; see avoidZones.
+	column int
 
 	// Marker is the bullet or number a list item generates, nil otherwise. It
 	// is on the fragment rather than in the box tree because its text depends

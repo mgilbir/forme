@@ -358,3 +358,98 @@ func TestABreakInsideAvoidInsideANestedMulticolIsHonoured(t *testing.T) {
 	}
 	wantPlaced(t, "with it", doc, css+`#k { break-inside: avoid }`, "in", [2]float64{100, 0})
 }
+
+// TestAnAvoidBetweenTwoBoxesInOneInnerColumnIsHonouredOutside. Two children
+// of a nested multicol container that its pour left in one column are one
+// sequence down that column, and an outer column ending between them separates
+// them as surely as an inner one would. "break-before: avoid" on the second
+// was honoured by the inner pour and not by the outer, which could not tell
+// which children shared a column.
+//
+// Four two-line children balance into two inner columns of two, #x over #y in
+// the first. The outer 40px column ends between them; with the declaration it
+// ends a line earlier, through #x, and #y begins the outer second column a
+// line down — and, that column ending at 60, is cut there in turn, its second
+// line in the overflow column after it. (The break between the two children of
+// the other inner column is at the same height, 40, and an avoid there would
+// move the cut too: the outer cut goes through both inner columns at once.)
+func TestAnAvoidBetweenTwoBoxesInOneInnerColumnIsHonouredOutside(t *testing.T) {
+	const doc = `<div id="d"><div id="in"><div id="x">a<br>b</div><div id="y">c<br>d</div>` +
+		`<div>e<br>f</div><div>g<br>h</div></div></div>`
+	css := colCSS + `#d { column-count: 2; column-fill: auto; height: 40px }
+		#in { column-count: 2 }`
+	wantPlaced(t, "without the declaration", doc, css, "y", [2]float64{100, 0})
+	wantPlaced(t, "break-before: avoid", doc, css+`#y { break-before: avoid }`,
+		"y", [2]float64{100, 20}, [2]float64{200, 0})
+	wantPlaced(t, "break-after: avoid", doc, css+`#x { break-after: avoid }`,
+		"y", [2]float64{100, 20}, [2]float64{200, 0})
+}
+
+// TestAnAvoidInsideAnUnpouredNestedMulticolIsHonouredOutside. A nested
+// container in one column is not poured, and its children are one flow: the
+// avoid between #x and #y holds against the outer cut the same way.
+func TestAnAvoidInsideAnUnpouredNestedMulticolIsHonouredOutside(t *testing.T) {
+	const doc = `<div id="d"><div id="in"><div id="x">a<br>b</div><div id="y">c<br>d</div>` +
+		`<div>e<br>f</div></div></div>`
+	css := colCSS + `#d { column-count: 2; column-fill: auto; height: 40px }
+		#in { column-count: 1 }`
+	wantPlaced(t, "without the declaration", doc, css, "y", [2]float64{100, 0})
+	wantPlaced(t, "with it", doc, css+`#y { break-before: avoid }`, "y",
+		[2]float64{100, 20}, [2]float64{200, 0})
+}
+
+// TestAnAvoidInsideARefusedNestedMulticolIsHonouredOutside. A nested container
+// whose pour is refused is laid out again in one column, and its children are
+// one flow like any block's. The inner forced breaks ask for three columns of
+// two, and with no overflow columns allowed the inner pour is refused; the
+// outer one, which needs none, is not. The outer 60px column ends between #y
+// and #z; "break-after: avoid" on #y moves it a line up, between #x and #y.
+func TestAnAvoidInsideARefusedNestedMulticolIsHonouredOutside(t *testing.T) {
+	defer func(n int) { maxOverflowColumns = n }(maxOverflowColumns)
+	maxOverflowColumns = 0
+	const doc = `<div id="d"><div>p</div><div id="in"><div id="x">a</div>` +
+		`<div id="y">b</div><div id="z">c</div></div></div>`
+	css := colCSS + `#d { column-count: 2; column-fill: auto; height: 60px }
+		#in { column-count: 2 } #y, #z { break-before: column }`
+	got := Compose(Input{HTML: doc, CSS: []Stylesheet{{Source: css}}}, Options{})
+	refused := false
+	for _, f := range got.Findings {
+		if strings.Contains(f.Message, "asked for 2 columns and was laid out in one") &&
+			strings.Contains(f.Path, "in") {
+			refused = true
+		}
+	}
+	if !refused {
+		t.Fatalf("the fixture needs the inner pour refused: %v", got.Findings)
+	}
+	wantPlaced(t, "without the declaration", doc, css, "z", [2]float64{100, 0})
+	wantPlaced(t, "with it", doc, css+`#y { break-after: avoid }`, "z", [2]float64{100, 20})
+	wantPlaced(t, "with it, the box it holds back", doc, css+`#y { break-after: avoid }`,
+		"y", [2]float64{100, 0})
+}
+
+// TestNestedAvoidZonesAreLinearInTheContent is the cost of reading the inner
+// columns: one pass over a nested container's children, grouping each run of
+// one column, whatever their number.
+func TestNestedAvoidZonesAreLinearInTheContent(t *testing.T) {
+	content := func(n int) *Fragment {
+		doc := `<div id="d"><div id="in">` + strings.Repeat(`<div class="k">a</div>`, n) +
+			`</div></div>`
+		return find(t, layoutOf(t, 400, doc, colCSS+
+			`#in { column-count: 4 } .k { break-before: avoid; margin-bottom: 10px }`), "d")
+	}
+	ask := func(f *Fragment) func() {
+		return func() {
+			avoidZonesOf(f, func(b *Box) bool { _, ok := columnCount(b); return ok })
+		}
+	}
+	small, large := content(500), content(2000)
+	if z := avoidZonesOf(small, func(b *Box) bool { _, ok := columnCount(b); return ok }); z == nil {
+		t.Fatal("the fixture drew no zones, so this measures nothing")
+	}
+	c := costtest.Time(t, "the avoid zones of a nested container of n boxes", ask(small), ask(large))
+	if c.Ratio > 8 {
+		t.Errorf("four times the boxes took %.1f times as long (%v against %v); "+
+			"linear is about four", c.Ratio, c.Large, c.Small)
+	}
+}
