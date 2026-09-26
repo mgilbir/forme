@@ -6,13 +6,16 @@ import (
 	"github.com/mgilbir/forme/fonttest"
 )
 
-// The three things the cursive model does and this engine does not.
+// The things the cursive model does that this engine once did not.
 //
-// They are named in arabic.go's header, and the reason to test an absence is
+// They were named in arabic.go's header, and the reason to test an absence is
 // that a list of what is missing goes stale the moment something stops being
-// missing. Each of these declares the feature in a font and requires that
-// nothing happen — so implementing one fails the test that says it is absent,
-// and whoever implements it is sent to the list.
+// missing. Each of these declared the feature in a font and required that
+// nothing happen — so implementing one failed the test that said it was
+// absent, and whoever implemented it was sent to the list. All three have been
+// implemented that way: each test failed, the header was changed, and each now
+// says what the engine does. The full answers, against HarfBuzz, are in
+// arabicfallback_test.go and syriac_test.go.
 
 // The Syriac letter whose final form is chosen by what precedes it, and the
 // three feature tags the model states that rule with.
@@ -63,16 +66,22 @@ func applied(t *testing.T, f *Face, s string) bool {
 	return false
 }
 
-// TestSyriacsAlaphIsNotShaped. The letter takes a final form decided by what
-// comes before it, which the model states as three features of its own. None of
-// them is applied here.
-func TestSyriacsAlaphIsNotShaped(t *testing.T) {
+// TestSyriacsAlaphIsShaped. The letter takes a final form decided by what
+// comes before it, which the model states as three features of its own: an
+// Alaph after a letter that does not join forward is in its second final form
+// ('fin2'), which is what the second of two Alaphs is. It was the test that
+// none of them was applied.
+func TestSyriacsAlaphIsShaped(t *testing.T) {
 	f := declaringFace(t, "syrc", syriacAlaph, syriacBeth, "fin2", "fin3", "med2")
-	if applied(t, f, string([]rune{syriacBeth, syriacAlaph})) {
-		t.Error("a Syriac Alaph was given one of its own final forms; arabic.go " +
-			"says that rule is absent, and the header has to say so no longer")
+	if !applied(t, f, string([]rune{syriacAlaph, syriacAlaph})) {
+		t.Error("the second of two Syriac Alaphs was not given its second final form")
 	}
-	// The control: the four ordinary forms *are* applied, so the fixture is not
+	// After a Beth, which joins forward, an Alaph is final in the ordinary way,
+	// and none of the three is for it.
+	if applied(t, f, string([]rune{syriacBeth, syriacAlaph})) {
+		t.Error("an Alaph after a Beth was given one of its own final forms")
+	}
+	// The control: the four ordinary forms are applied, so the fixture is not
 	// silent for want of a working font. Two Beths, because Beth joins forward
 	// and Alaph does not — the second of them is the one in final position.
 	g := declaringFace(t, "syrc", syriacBeth, syriacAlaph, "fina")
@@ -82,26 +91,30 @@ func TestSyriacsAlaphIsNotShaped(t *testing.T) {
 	}
 }
 
-// TestStchIsNotApplied. Syriac stretches a letter to fill a line rather than
-// spacing its words, and the feature that says which letter is not applied.
-func TestStchIsNotApplied(t *testing.T) {
+// TestStchIsApplied. Syriac's abbreviation mark is drawn stretched over its
+// word, and the feature that takes it apart into the pieces it is stretched
+// with is applied. It was the test that it was not.
+func TestStchIsApplied(t *testing.T) {
 	f := declaringFace(t, "syrc", syriacBeth, syriacAlaph, "stch")
-	if applied(t, f, string([]rune{syriacBeth, syriacAlaph})) {
-		t.Error("'stch' was applied; arabic.go says it is absent")
+	if !applied(t, f, string([]rune{syriacBeth, syriacAlaph})) {
+		t.Error("'stch' was not applied")
 	}
 }
 
-// TestThereIsNoFallbackShaping. A font that declares none of the four positional
-// features is set in the letters as written — Unicode's presentation forms hold
-// those shapes as characters, and a shaper with nothing else to go on maps to
-// them. This one does not.
-func TestThereIsNoFallbackShaping(t *testing.T) {
+// TestAFaceWithNoFormsTakesThemFromItsCharacterMap. A font that declares none
+// of the four positional features is set in the forms its character map holds:
+// Unicode's presentation forms hold those shapes as characters, and HarfBuzz
+// maps to them. This one declares none and maps the initial form of beh, so the
+// first of two behs is drawn in it and the second, whose final form the face
+// does not map, is drawn as the letter. HarfBuzz 14.5.0 draws the same. It was
+// the test that the fallback was absent; see arabicfallback.go.
+func TestAFaceWithNoFormsTakesThemFromItsCharacterMap(t *testing.T) {
 	data := fonttest.SFNT(fonttest.SFNTOptions{
 		Name: "NoForms",
 		Glyphs: []fonttest.Glyph{
 			{Rune: beh, Advance: 500, HasShape: true},
-			// The initial form of beh as a character of its own, which a
-			// fallback would map to.
+			// The initial form of beh as a character of its own, which the
+			// fallback maps to.
 			{Rune: 0xFE91, Advance: 300, HasShape: true},
 		},
 	})
@@ -109,16 +122,7 @@ func TestThereIsNoFallbackShaping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.HasJoiningForms() {
-		t.Fatal("the fixture declares positional forms after all")
-	}
 	glyphs, _ := f.ShapeGlyphs(string([]rune{beh, beh}))
-	if len(glyphs) != 2 {
-		t.Fatalf("two letters came to %d glyphs", len(glyphs))
-	}
-	if glyphs[0].GID != glyphs[1].GID {
-		t.Errorf("the two letters were drawn as %d and %d: something chose a "+
-			"form for them, and arabic.go says nothing does",
-			glyphs[0].GID, glyphs[1].GID)
-	}
+	// Drawn right to left: the final beh, then the initial form.
+	checkShaped(t, "two behs in a face with no forms", glyphs, []shapedAs{{1, 500, 0, 0}, {2, 300, 0, 0}})
 }

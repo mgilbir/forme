@@ -1,0 +1,4 @@
+go test fuzz v1
+string("a\u00adaa")
+string("2")
+byte('.')

@@ -344,6 +344,25 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 	// ordinary opportunity earlier in the line beats a hyphen later in it, which
 	// is the whole of what suppressing hyphenation means. See Item.HyphenLastResort.
 	hypAt, hypLine, hypFlow := -1, 0, 0
+	// And the same three for an opportunity whose hyphen did not fit in the room
+	// the line had: the last place of all a line is sent back to, where it has
+	// no other.
+	//
+	// The branch below that meets such an opportunity with the next unit in
+	// hand ends the line there anyway when there is nowhere earlier to go — the
+	// hyphen overflows, and holding the next unit as well would overflow by
+	// more. That is only half of the rule, because the next unit need not
+	// arrive as one item. A box edge cuts it into several with no opportunity
+	// between them, and so do the cuts a run takes for its own reasons — where
+	// synthesised small capitals change size, where the face changes — and the
+	// first of those pieces can fit where the hyphen does not: a small capital
+	// is narrower than the full-size hyphen in front of it. Then it is a later
+	// piece that overflows, and a line that remembered only the opportunities
+	// whose hyphen fitted had nowhere to go back to. "a&shy;aa" under
+	// small-caps in sixteen pixels of Courier broke at the soft hyphen written
+	// as one text and set all three letters on one line written as
+	// "<span>a&shy;a</span><span>a</span>", which §8.1's boundary may not do.
+	ovhAt, ovhLine, ovhFlow := -1, 0, 0
 	// Where the white space that ends this line begins.
 	//
 	// §4.1.2's third and fourth rules are both about white space "at the end of a
@@ -666,10 +685,19 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		// comment is a claim about both halves, and a reader given the code
 		// without it would have to rediscover which items the branch above lets
 		// through.
+		//
+		// Where the line has no opportunity it can end at with its hyphen in the
+		// room, the one whose hyphen overflows is still one: it is where the
+		// branch above ends the line when the unit after it arrives whole, and
+		// the unit arriving in pieces must end it at the same place. See ovhAt.
+		tailAt, tailLine, tailFlow := backAt, backLine, backFlow
+		if tailAt < 0 {
+			tailAt, tailLine, tailFlow = ovhAt, ovhLine, ovhFlow
+		}
 		if (item.Space || item.AtomicBox == nil) && !item.Collapsible &&
 			!item.Hangs && i < tailFrom && !item.Inset &&
-			(!item.BreakBefore || item.NoWrap) && backAt >= 0 && br.overflows(used, item, width, tail) {
-			return trimLineEdge(line[:backLine]), backAt, 0, outOfFlow[:backFlow], false
+			(!item.BreakBefore || item.NoWrap) && tailAt >= 0 && br.overflows(used, item, width, tail) {
+			return trimLineEdge(line[:tailLine]), tailAt, 0, outOfFlow[:tailFlow], false
 		}
 
 		// A single item wider than the line has nowhere to go. It is placed and
@@ -823,6 +851,10 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 					// clearing moved no test and no reftest, which is what a
 					// line of code that cannot be wrong looks like.
 				}
+			} else {
+				// Not one the line can be sent back to while it has another,
+				// but the last it can be where it has none. See ovhAt.
+				ovhAt, ovhLine, ovhFlow = i, len(line), len(outOfFlow)
 			}
 		}
 
@@ -1277,6 +1309,17 @@ func (br *Breaker) breakInsideWord(item Item, width style.Unit, content bool) (h
 		lo = 1
 	}
 	at = bounds.at(lo - 1)
+	if IsBidiControlOnly(item.Text[cutWithinText(item.Text, at):]) {
+		// What the cut would send to the next line is bidi controls and nothing
+		// else. They set no paper and take no room, which is why the fill does
+		// not count one as content, and a line of them is a line with nothing on
+		// it: "&#x212D;&#x202D;" in less room than the letter set the letter on
+		// one line and an empty line under it, where the same text written
+		// "<span>&#x212D;</span><span>&#x202D;</span>" — the control an item of
+		// its own — set one line. So this is not a cut. The item is placed whole
+		// and overflows, as the letter alone does.
+		return Item{}, 0, false
+	}
 	return br.SplitHead(item, at), at, true
 }
 

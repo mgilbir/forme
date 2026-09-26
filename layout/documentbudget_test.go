@@ -73,21 +73,28 @@ func TestADropDownIsBuiltOnceNotOncePerOption(t *testing.T) {
 //
 // The report is timed on its own, over documents built beforehand: the rest of
 // Build is linear in the leaves and would dilute the curve being measured.
+//
+// Timed through costtest.TimeCopies, over four documents at the smaller size:
+// the larger document is twelve thousand elements and their styles, which a
+// cache that holds the smaller one does not, and the linear walk read as 8.1 on
+// a GitHub runner and 9.0 and 10.6 here with memory being streamed on the
+// machine's other cores. Planted — the walk going on through a nested ruby —
+// it reads as 17.2.
 func TestNestedRubiesAreEachWalkedOnce(t *testing.T) {
-	built := map[int]Built{}
-	requireLinear(t, "nested rubies", 1, func(n int) {
-		b, ok := built[n]
-		if !ok {
-			depth, leaves := 60*n, 3000*n
-			b = Build(Input{
-				HTML: strings.Repeat("<s>", depth) + strings.Repeat("<i></i>", leaves) +
-					strings.Repeat("</s>", depth),
-				CSS: []Stylesheet{{Source: "s { display: ruby }"}},
-			})
-			built[n] = b
-		}
-		reportUnsupportedDisplays(b.Document, b.Styles, nil, NewRecorder(nil))
-	})
+	report := func(n int) func() {
+		depth, leaves := 60*n, 3000*n
+		b := Build(Input{
+			HTML: strings.Repeat("<s>", depth) + strings.Repeat("<i></i>", leaves) +
+				strings.Repeat("</s>", depth),
+			CSS: []Stylesheet{{Source: "s { display: ruby }"}},
+		})
+		return func() { reportUnsupportedDisplays(b.Document, b.Styles, nil, NewRecorder(nil)) }
+	}
+	r := costtest.TimeCopies(t, "nested rubies", func(int) func() { return report(1) }, report(4))
+	if r.Ratio > 8 {
+		t.Errorf("nested rubies: four times the input took %v; linear work is about "+
+			"four, and quadratic is about sixteen", r)
+	}
 }
 
 // TestTheInnermostRubyAloneReportsItsAnnotation is what stopping the walk at a

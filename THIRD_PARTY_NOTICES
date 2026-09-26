@@ -27,6 +27,7 @@ Files:   bidi/tables.go
          paragraph/verticaltable.go
          paragraph/widthtable.go
          segment/tables.go
+         shape/arabicforms.go
          shape/canonical.go
          shape/ignorabletable.go
          shape/indiccategory.go
@@ -1677,12 +1678,14 @@ Quoted from ${NOTICE_DIR}/w3c-software-license-2023.html:
 HarfBuzz
 ============================================================================
 
-Files:   shape/indicvowel.go
+Files:   shape/arabicforms.go
+         shape/indicvowel.go
          shape/langtags.go
          shape/usetable.go
 Source:  https://github.com/harfbuzz/harfbuzz at ${HARFBUZZ_VERSION}: src/hb-ot-tag-table.hh
-         (${HB_LANGTAGS_URL}, pinned by ${HB_LANGTAGS_SHA256}), and the three files of
-         src/ms-use (${MSUSE_URL}, each pinned by its SHA-256 in ${MSUSE_FILES})
+         (${HB_LANGTAGS_URL}, pinned by ${HB_LANGTAGS_SHA256}), the three files of
+         src/ms-use (${MSUSE_URL}, each pinned by its SHA-256 in ${MSUSE_FILES}),
+         and src/gen-arabic-table.py's list of ligatures
 Licence: the "Old MIT" licence, in HarfBuzz's COPYING
 
 shape/langtags.go is generated from hb-ot-tag-table.hh and carries the
@@ -1690,7 +1693,10 @@ notice below in its header. shape/usetable.go and shape/indicvowel.go are
 generated from the ms-use files, which HarfBuzz keeps from Microsoft's
 Universal Shaping Engine specification and which carry no notice of their
 own; they are fetched into testdata/ms-use at the release above, and
-NOTICE.md there says what they are.
+NOTICE.md there says what they are. shape/arabicforms.go is generated from
+Unicode's UnicodeData.txt as src/gen-arabic-table.py generates HarfBuzz's own
+table, and takes from that script the ligatures it makes and the three
+private-use ligatures it adds; cmd/genarabicforms carries them.
 
 Quoted whole from ${HB_COPYING}:
 
@@ -1904,3 +1910,19 @@ The CFF standard strings and predefined charsets, and the standard Latin
 encodings, are tables of names and numbers every reader of the formats has
 to hold. They are listed here for where they came from; neither source
 states a licence for them, and none is claimed.
+
+============================================================================
+Fonts built for the vertical shaping oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/VerticalComposites.ttf
+         testdata/harfbuzz/fonts/VerticalFallbacks.ttf
+         testdata/harfbuzz/fonts/VerticalHhea.ttf
+Source:  testdata/harfbuzz/vertical_fixture.py, in this repository, which
+         builds them with fontTools
+Licence: the licence in LICENSE; they are not anyone else's work
+
+Three small faces made from nothing by the script named above, for rules no
+published face at hand exercises. They are listed here because every font the
+repository keeps is, and for where they came from; no third party's work is
+in them.

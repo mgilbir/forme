@@ -73,6 +73,18 @@ type Fragment struct {
 	// takes its first baseline from, where its layout has named one, and zero
 	// otherwise. See containerFirstBaseline.
 	baselineChild int
+	// gridBaseline is a grid container's first baseline where its items share
+	// one — Grid §11.6's first two steps — measured down its content box, and
+	// hasGridBaseline says there is one. It is asked before baselineChild.
+	// See gridSharedBaseline.
+	gridBaseline    style.Unit
+	hasGridBaseline bool
+	// column is which column of its parent's pour this fragment was put in,
+	// counted from one, and nought where its parent was not poured — a box
+	// whose parent is not a multicol container, or is one that laid its
+	// content out in one column. It is what tells an outer multicol which of
+	// an inner one's children share a column; see avoidZones.
+	column int
 
 	// Marker is the bullet or number a list item generates, nil otherwise. It
 	// is on the fragment rather than in the box tree because its text depends
@@ -778,6 +790,13 @@ func absolutise(f *Fragment, x, y style.Unit) {
 			ib.BorderRect.X = ib.BorderRect.X.Add(content.X).Add(ib.Offset.X)
 			ib.BorderRect.Y = ib.BorderRect.Y.Add(content.Y).Add(ib.Offset.Y)
 			ib.absolute = true
+		}
+		// A link's area on the line, which is sliced as those are and moves
+		// with them. See LineFragment.links.
+		for _, lf := range f.Lines[i].links {
+			lf.BorderRect.X = lf.BorderRect.X.Add(content.X).Add(lf.Offset.X)
+			lf.BorderRect.Y = lf.BorderRect.Y.Add(content.Y).Add(lf.Offset.Y)
+			lf.absolute = true
 		}
 	}
 	for _, c := range f.Children {

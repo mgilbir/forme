@@ -594,3 +594,12 @@ var defaultTransparentRanges = [...]struct{ lo, hi rune }{
 	{0xE0020, 0xE007F},
 	{0xE0100, 0xE01EF},
 }
+
+// alaphGroup and dalathRishGroup are the characters of the ALAPH and DALATH
+// RISH joining groups, in Unicode 17.0.0.
+//
+// The Syriac Alaph takes its final form by what precedes it — one after a
+// Dalath or a Rish, another after any other letter that does not join forward
+// — and these are the letters that decide it. See joiningColumnOf.
+var alaphGroup = [...]rune{0x0710}
+var dalathRishGroup = [...]rune{0x0715, 0x0716, 0x072A, 0x072F}

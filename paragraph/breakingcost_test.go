@@ -296,7 +296,18 @@ func TestBalancingProbesDoNotWalkTheRestOfTheParagraph(t *testing.T) {
 // TestTopAlignedBoxesAreFoundByTheirSubtree is audit C51: a line holding many
 // "vertical-align: top" boxes, each its own aligned subtree. Each was looked
 // for among all the subtrees gathered so far, while the line was stacked and
-// again when each box was placed. Planted (the scan): a factor of 14.4.
+// again when each box was placed. Planted (the scan): a factor of 14.5.
+//
+// Five hundred boxes and two thousand, where it was a thousand and four
+// thousand, which the race job on a GitHub runner read as 8.5. What is left
+// of the work is a map from subtree to group, made afresh for every line, and
+// it is nearly all of the time. At four thousand boxes it is 860 kilobytes,
+// past a processor's level-two cache, and at a thousand it is inside it, so
+// each box cost more at the larger size; at two thousand it is 430 kilobytes,
+// inside a level-two cache of half a megabyte. The
+// input cannot be smaller: the planted scan costs a box what the map does at a
+// few hundred boxes, and at two hundred and fifty and a thousand the plant read
+// as only 12.5.
 func TestTopAlignedBoxesAreFoundByTheirSubtree(t *testing.T) {
 	line := cached(func(n int) []Item {
 		runs := make([]Item, n)
@@ -306,7 +317,7 @@ func TestTopAlignedBoxesAreFoundByTheirSubtree(t *testing.T) {
 		}
 		return runs
 	})
-	checkLinear(t, "stacking a line of top-aligned boxes", 1000, func(n int) {
+	checkLinear(t, "stacking a line of top-aligned boxes", 500, func(n int) {
 		runs := line(n)
 		ls := StackLine(runs, Strut{Height: u(12), Baseline: u(10)})
 		for _, r := range runs {

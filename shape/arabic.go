@@ -1,6 +1,7 @@
 package shape
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/mgilbir/forme/internal/charprop"
@@ -27,28 +28,20 @@ import (
 // indic.go's, and the two are alternatives rather than stages: no script both
 // joins cursively and reorders.
 //
-// Three more things every other shaper does are absent, and they were absent
-// without being written down here, which is worse than being absent:
+// Three things every other shaper does were absent here, and absent without
+// being written down, which is worse than being absent. All three are done
+// now:
 //
 //   - Syriac's Alaph. The letter U+0710 takes a final form chosen by what
 //     precedes it rather than by what it joins to, which is a rule of its own
-//     over and above the four shapes — HarfBuzz spells it as a fifth state with
-//     its own feature tags ('fin2', 'fin3', 'med2'). Without it a Syriac Alaph
-//     is set in the ordinary final form, which is the wrong glyph wherever the
-//     letter before it does not join forward.
-//   - 'stch', the stretching feature Syriac uses to fill a line by lengthening
-//     a letter rather than by spacing its words. A font that declares it is set
-//     without it, which is a line short of the width it was justified to.
-//   - Fallback shaping. A font that declares none of 'init', 'medi', 'fina' or
-//     'isol' is set here in the letters as written, one isolated form after
-//     another. Unicode's Arabic Presentation Forms block holds those four
-//     shapes as characters, and a shaper with nothing else to go on maps to
-//     them — which is what a reader of a font with no layout tables at all
-//     gets from every other engine and does not get from this one.
-//
-// Each of the three is a font this engine sets less well than another would
-// rather than a font it refuses, so none of them is reported: nothing here can
-// tell "this font has no joining forms" from "this run needs none".
+//     over and above the four shapes — HarfBuzz spells it as states of its
+//     joining scan with feature tags of their own ('fin2', 'fin3', 'med2').
+//     joinForms is that scan.
+//   - 'stch', the stretching feature Syriac writes its abbreviation mark with:
+//     a bar over the word, stretched to its width. See stch.go.
+//   - The fallback for an Arabic font that declares none of 'init', 'medi',
+//     'fina' or 'isol': the forms are drawn out of the Arabic Presentation
+//     Forms the face maps, as HarfBuzz draws them. See arabicfallback.go.
 
 // joiningType is what a character can join to.
 type joiningType uint8
@@ -86,105 +79,148 @@ func joiningTypeOf(r rune) joiningType {
 	return joinU
 }
 
-// The features that name each form. A font declares a lookup under each,
-// mapping the isolated letter to the shape for that position.
+// The form a joining scan chooses for a character, in the order of the
+// features that draw them: HarfBuzz's arabic_action_t. formNone is a character
+// that takes no form of its own — one that cannot join, or a transparent one.
 const (
-	featIsolated = "isol"
-	featInitial  = "init"
-	featMedial   = "medi"
-	featFinal    = "fina"
+	formIsol uint8 = iota
+	formFina
+	formFin2
+	formFin3
+	formMedi
+	formMed2
+	formInit
+	formNone
 )
 
-// joinForms decides, for each character of a run, which form feature applies.
-//
-// The rule is symmetric and worth stating in one place. A character joins to
-// what precedes it when that neighbour can join *forwards* — it is dual-joining
-// or left-joining or join-causing — and joins to what follows when that
-// neighbour can join *backwards*. Transparent characters are skipped in both
-// directions, which is the whole reason they have a type of their own.
-//
-// What a character does with those two facts depends on what it can do at all:
-// a dual-joining letter takes any of the four forms, a right-joining one only
-// isolated or final, a left-joining one only isolated or initial.
-//
-// A join-causing character takes forms too, and takes them the same way a
-// dual-joining letter does. U+0640 TATWEEL is the one anybody writes: it is the
-// stroke that stretches a word, it connects on both sides, and a font draws it
-// differently at the start of a join than in the middle — Noto Sans Arabic
-// carries uni0640.init and uni0640.medi for exactly that. Treating it as
-// formless leaves it drawn as the isolated stroke, floating clear of the letters
-// it is supposed to be joining.
-func joinForms(runes, before, after []rune) []string {
-	if len(before) == 0 && len(after) == 0 {
-		return joinFormsIn(runes, 0, len(runes))
-	}
-	// The run with its neighbours either side, so the scans below can walk off
-	// the end of it and find what is really there. Only the middle is returned.
-	all := make([]rune, 0, len(before)+len(runes)+len(after))
-	all = append(all, before...)
-	all = append(all, runes...)
-	all = append(all, after...)
-	return joinFormsIn(all, len(before), len(before)+len(runes))
+// formMasks is the mask of the feature that draws each form.
+var formMasks = [...]glyphMask{
+	formIsol: maskIsol, formFina: maskFina, formFin2: maskFin2, formFin3: maskFin3,
+	formMedi: maskMedi, formMed2: maskMed2, formInit: maskInit,
 }
 
-// joinFormsIn is joinForms over all[lo:hi], deciding each form from the whole of
-// all — which is the run and whatever context it was given.
-func joinFormsIn(all []rune, lo, hi int) []string {
-	runes := all
-	types := make([]joiningType, len(runes))
-	for i, r := range runes {
-		types[i] = joiningTypeOf(r)
+// The columns of the joining state table: the four joining types a letter can
+// have, with join-causing read as dual-joining, and the two joining groups the
+// Syriac Alaph's forms turn on. A transparent character has no column; it is
+// stepped over.
+const (
+	colU = iota
+	colL
+	colR
+	colD
+	colAlaph
+	colDalathRish
+	colTransparent = -1
+)
+
+// joiningColumnOf is a character's column in the joining state table.
+func joiningColumnOf(r rune) int {
+	switch t := joiningTypeOf(r); t {
+	case joinT:
+		return colTransparent
+	case joinL:
+		return colL
+	case joinD, joinC:
+		return colD
+	case joinR:
+		if slices.Contains(alaphGroup[:], r) {
+			return colAlaph
+		}
+		if slices.Contains(dalathRishGroup[:], r) {
+			return colDalathRish
+		}
+		return colR
 	}
-	forms := make([]string, hi-lo)
-	for i := lo; i < hi; i++ {
-		if types[i] == joinT {
-			continue // a transparent character takes no form of its own
-		}
-		joinsPrev := false
-		for j := i - 1; j >= 0; j-- {
-			if types[j] == joinT {
-				continue
-			}
-			joinsPrev = types[j] == joinD || types[j] == joinL || types[j] == joinC
+	return colU
+}
+
+// joiningStep is one entry of the table: the form the letter before now takes,
+// if it changes; the form this letter takes; and the state after it.
+type joiningStep struct{ prev, cur, next uint8 }
+
+// joiningStates is HarfBuzz's arabic_state_table, row by state and column by
+// joiningColumnOf. The states are what the letter before says about joining:
+//
+//	0  it does not join forward (or there is none)
+//	1  it is a right-joining letter, or an isolated Alaph
+//	2  it is a dual- or left-joining letter, isolated so far, and would join
+//	3  it is a dual-joining letter, final so far, and would join
+//	4  it is a final Alaph
+//	5  it is an Alaph in its second or third final form
+//	6  it is a Dalath or a Rish
+//
+// An Alaph is final (fin2) after a letter that does not join forward and fin3
+// after a Dalath or a Rish; an Alaph after one that does is final and makes the
+// letter before it medial (med2) where it would otherwise be initial.
+var joiningStates = [7][6]joiningStep{
+	//            U                          L                          R                          D                          Alaph                      Dalath-Rish
+	/* 0 */ {{formNone, formNone, 0}, {formNone, formIsol, 2}, {formNone, formIsol, 1}, {formNone, formIsol, 2}, {formNone, formIsol, 1}, {formNone, formIsol, 6}},
+	/* 1 */ {{formNone, formNone, 0}, {formNone, formIsol, 2}, {formNone, formIsol, 1}, {formNone, formIsol, 2}, {formNone, formFin2, 5}, {formNone, formIsol, 6}},
+	/* 2 */ {{formNone, formNone, 0}, {formNone, formIsol, 2}, {formInit, formFina, 1}, {formInit, formFina, 3}, {formInit, formFina, 4}, {formInit, formFina, 6}},
+	/* 3 */ {{formNone, formNone, 0}, {formNone, formIsol, 2}, {formMedi, formFina, 1}, {formMedi, formFina, 3}, {formMedi, formFina, 4}, {formMedi, formFina, 6}},
+	/* 4 */ {{formNone, formNone, 0}, {formNone, formIsol, 2}, {formMed2, formIsol, 1}, {formMed2, formIsol, 2}, {formMed2, formFin2, 5}, {formMed2, formIsol, 6}},
+	/* 5 */ {{formNone, formNone, 0}, {formNone, formIsol, 2}, {formIsol, formIsol, 1}, {formIsol, formIsol, 2}, {formIsol, formFin2, 5}, {formIsol, formIsol, 6}},
+	/* 6 */ {{formNone, formNone, 0}, {formNone, formIsol, 2}, {formNone, formIsol, 1}, {formNone, formIsol, 2}, {formNone, formFin3, 5}, {formNone, formIsol, 6}},
+}
+
+// joinForms decides, for each character of a run, which form it takes: the
+// joining scan of HarfBuzz's Arabic shaper (arabic_joining), which the
+// universal engine runs too for the cursive scripts it sets.
+//
+// It walks the run with a state that says what the letter before can do, and
+// each letter it meets settles its own form and, where it joins backwards, the
+// form of the letter before it. A transparent character — a vowel sign, a
+// join control's neighbour in the text — is stepped over in both directions,
+// which is the whole reason it has a type of its own. The text either side of
+// the run is read as HarfBuzz reads a buffer's context: the nearest letter
+// before sets the state the run starts in, and the nearest after may change the
+// form of the run's last letter.
+//
+// A join-causing character takes forms the way a dual-joining letter does.
+// U+0640 TATWEEL is the one anybody writes: it is the stroke that stretches a
+// word, it connects on both sides, and a font draws it differently at the start
+// of a join than in the middle — Noto Sans Arabic carries uni0640.init and
+// uni0640.medi for exactly that.
+//
+// It used to be a symmetric rule — join to the letter before if it joins
+// forward, to the one after if it joins backward — which is the same answer for
+// the four joining types and has no room for the Syriac Alaph, whose final form
+// depends on what came before it and not on whether that joins. Syriac text
+// was set with the ordinary final Alaph wherever its 'fin2', 'fin3' or 'med2'
+// was meant.
+func joinForms(runes, before, after []rune) []uint8 {
+	forms := make([]uint8, len(runes))
+	state := uint8(0)
+	for i := len(before) - 1; i >= 0; i-- {
+		if c := joiningColumnOf(before[i]); c != colTransparent {
+			state = joiningStates[state][c].next
 			break
 		}
-		joinsNext := false
-		for j := i + 1; j < len(runes); j++ {
-			if types[j] == joinT {
-				continue
-			}
-			joinsNext = types[j] == joinD || types[j] == joinR || types[j] == joinC
-			break
+	}
+	prev := -1
+	for i, r := range runes {
+		c := joiningColumnOf(r)
+		if c == colTransparent {
+			forms[i] = formNone
+			continue
 		}
-		switch types[i] {
-		case joinD, joinC:
-			switch {
-			case joinsPrev && joinsNext:
-				forms[i-lo] = featMedial
-			case joinsPrev:
-				forms[i-lo] = featFinal
-			case joinsNext:
-				forms[i-lo] = featInitial
-			default:
-				forms[i-lo] = featIsolated
-			}
-		case joinR:
-			if joinsPrev {
-				forms[i-lo] = featFinal
-			} else {
-				forms[i-lo] = featIsolated
-			}
-		case joinL:
-			if joinsNext {
-				forms[i-lo] = featInitial
-			} else {
-				forms[i-lo] = featIsolated
-			}
-		default:
-			// A character that cannot join has no positional form to select. A
-			// space, a digit, a full stop: each has one shape, and naming a form
-			// for it would say the font might have another.
+		step := joiningStates[state][c]
+		if step.prev != formNone && prev >= 0 {
+			forms[prev] = step.prev
 		}
+		forms[i] = step.cur
+		prev = i
+		state = step.next
+	}
+	for _, r := range after {
+		c := joiningColumnOf(r)
+		if c == colTransparent {
+			continue
+		}
+		if step := joiningStates[state][c]; step.prev != formNone && prev >= 0 {
+			forms[prev] = step.prev
+		}
+		break
 	}
 	return forms
 }
@@ -214,17 +250,9 @@ func markJoiningForms(buf []Glyph, runes, before, after []rune) {
 		// than assigning forms to the wrong glyphs.
 		return
 	}
-	forms := joinForms(runes, before, after)
-	for i := range buf {
-		switch forms[i] {
-		case featIsolated:
-			buf[i].mask |= maskIsol
-		case featFinal:
-			buf[i].mask |= maskFina
-		case featMedial:
-			buf[i].mask |= maskMedi
-		case featInitial:
-			buf[i].mask |= maskInit
+	for i, form := range joinForms(runes, before, after) {
+		if form != formNone {
+			buf[i].mask |= formMasks[form]
 		}
 	}
 }
@@ -232,6 +260,10 @@ func markJoiningForms(buf []Glyph, runes, before, after []rune) {
 // HasJoiningForms reports whether the font carries the positional forms a
 // cursive script needs. A caller can use it to tell a face that can set Arabic
 // from one that merely has the letters.
+//
+// The forms may be in its rules or in its character map: a face that maps the
+// Arabic presentation forms and declares no joining forms has them drawn out
+// of the map, as HarfBuzz draws them (see arabicfallback.go).
 func (f *Face) HasJoiningForms() bool {
 	l := f.layout
 	for _, form := range arabicForms {
@@ -239,7 +271,7 @@ func (f *Face) HasJoiningForms() bool {
 			return true
 		}
 	}
-	return false
+	return f.composite() && arabicFallbackPlan(l) != nil && f.hasFallbackForms()
 }
 
 // cursiveScripts is the set of scripts whose letters join, indexed by script.

@@ -47,17 +47,35 @@ type suiteFonts struct {
 // FaceFor implements FallbackFontSet: the first Noto face that can set the whole
 // of the text, or nothing.
 //
+// A face "can set" a character it has a glyph for, and not one it would only
+// draw with a stand-in — its space for an ideographic space, as HarfBuzz draws
+// one (see shape.Face.StandsIn). The library is broadest first, and Noto Sans
+// would otherwise be chosen for every space separator it lacks, ahead of the
+// CJK face that has the character: a browser choosing a fallback face chooses
+// by what the face has.
+//
 // Weight and style are ignored. Only the regular faces are fetched, and a
 // document whose Hebrew is meant to be bold is far better served by upright
 // Hebrew than by the space the standard faces would put there — the substitution
 // is reported either way, so nothing is being hidden.
 func (w suiteFonts) FaceFor(text string, bold, italic bool) (*shape.Face, bool) {
 	for _, f := range w.fallback {
-		if _, missing := f.ShapeGlyphs(text); missing == 0 {
+		if _, missing := f.ShapeGlyphs(text); missing == 0 && !standsInFor(f, text) {
 			return f, true
 		}
 	}
 	return nil, false
+}
+
+// standsInFor reports whether a face would draw any character of text only
+// with a stand-in.
+func standsInFor(f *shape.Face, text string) bool {
+	for _, r := range text {
+		if f.StandsIn(r) {
+			return true
+		}
+	}
+	return false
 }
 
 func (w suiteFonts) Face(family string, bold, italic bool) (*shape.Face, bool) {

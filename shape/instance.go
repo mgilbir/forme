@@ -54,7 +54,10 @@ import (
 //     applied, so those stay at the default instance's values. For the bundled
 //     face the whole of MVAR moves the ascent by at most a few units across the
 //     weight axis; it is a real gap and a small one, and it is stated here rather
-//     than guessed at in the code.
+//     than guessed at in the code. Nor do vmtx and VORG, which a glyph set
+//     upright is advanced and hung by (vertical.go): VVAR and the vertical
+//     phantom points gvar moves are not read, so an instance's upright glyphs
+//     advance as the default instance's do and hang from its side bearings.
 //   - Hinting is dropped: cvt, fpgm, prep and every glyph's instructions go,
 //     because 'cvar' — which varies the control values — is not read, and hinting
 //     a bold face by a thin one's control values is worse than not hinting it.

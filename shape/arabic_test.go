@@ -51,18 +51,18 @@ func TestJoinFormsFollowTheNeighbours(t *testing.T) {
 	cases := []struct {
 		name  string
 		runes []rune
-		want  []string
+		want  []uint8
 	}{
-		{"one letter alone", []rune{beh}, []string{featIsolated}},
+		{"one letter alone", []rune{beh}, []uint8{formIsol}},
 		{"three dual-joining", []rune{beh, beh, beh},
-			[]string{featInitial, featMedial, featFinal}},
+			[]uint8{formInit, formMedi, formFina}},
 		{"alef cannot join forwards", []rune{beh, alef, beh},
 			// The alef joins back to the beh before it and not on to the one
 			// after, so the third letter starts a new join rather than
 			// continuing one.
-			[]string{featInitial, featFinal, featIsolated}},
+			[]uint8{formInit, formFina, formIsol}},
 		{"a space breaks the word", []rune{beh, space, beh},
-			[]string{featIsolated, "", featIsolated}},
+			[]uint8{formIsol, formNone, formIsol}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,7 +72,7 @@ func TestJoinFormsFollowTheNeighbours(t *testing.T) {
 			}
 			for i := range got {
 				if got[i] != tc.want[i] {
-					t.Errorf("position %d: form %q, want %q (all: %v)", i, got[i], tc.want[i], got)
+					t.Errorf("position %d: form %d, want %d (all: %v)", i, got[i], tc.want[i], got)
 				}
 			}
 		})
@@ -85,14 +85,14 @@ func TestJoinFormsFollowTheNeighbours(t *testing.T) {
 // vocalised word into isolated letters.
 func TestTransparentMarksDoNotBreakAJoin(t *testing.T) {
 	forms := joinForms([]rune{beh, fatha, beh}, nil, nil)
-	if forms[0] != featInitial {
-		t.Errorf("the first letter is %q, want %q: the mark must not break the join", forms[0], featInitial)
+	if forms[0] != formInit {
+		t.Errorf("the first letter is form %d, want %d: the mark must not break the join", forms[0], formInit)
 	}
-	if forms[1] != "" {
-		t.Errorf("the mark took the form %q; it has none of its own", forms[1])
+	if forms[1] != formNone {
+		t.Errorf("the mark took the form %d; it has none of its own", forms[1])
 	}
-	if forms[2] != featFinal {
-		t.Errorf("the last letter is %q, want %q", forms[2], featFinal)
+	if forms[2] != formFina {
+		t.Errorf("the last letter is form %d, want %d", forms[2], formFina)
 	}
 }
 

@@ -66,7 +66,7 @@ func TestTheTransparentDefaultIsGenerated(t *testing.T) {
 		}
 	}
 	// Which is what keeps a join across a pepet.
-	if forms := joinForms([]rune{0x0628, 0x0897, 0x0628}, nil, nil); forms[0] != featInitial || forms[2] != featFinal {
-		t.Errorf("beh, pepet, beh took the forms %q; the pepet broke the join", forms)
+	if forms := joinForms([]rune{0x0628, 0x0897, 0x0628}, nil, nil); forms[0] != formInit || forms[2] != formFina {
+		t.Errorf("beh, pepet, beh took the forms %v; the pepet broke the join", forms)
 	}
 }

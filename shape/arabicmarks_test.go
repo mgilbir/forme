@@ -45,7 +45,7 @@ func marksOf(t *testing.T, s string, arabic bool) []rune {
 	for i := range offsets {
 		offsets[i] = i
 	}
-	out, _ := f.normalize(runes, offsets, false, false, arabic)
+	out, _ := f.normalize(runes, offsets, normalization{arabic: arabic})
 	return out
 }
 

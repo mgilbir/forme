@@ -251,6 +251,18 @@ const (
 	// the picture, and a page with a rectangle of nothing where a chart belongs
 	// is the silent failure §6 is named after.
 	RuleResourceBlocked Rule = "resource-blocked"
+	// RuleLinkRefused is an <a href> this engine did not make a link of: its
+	// href names a scheme a link is not made for, or a host with the scheme
+	// left out. See link.go for the policy and why it is a list of what is
+	// allowed rather than of what is not.
+	//
+	// It is not RuleResourceBlocked, although both are a reference refused,
+	// because nothing is missing from the page: the <a>'s content is laid out
+	// and drawn exactly as it would have been, and only the display list's
+	// Link is absent. That is also why it is not among the unsupported rules —
+	// a reftest whose document has a refused link draws what its reference
+	// draws, and has not passed by drawing less.
+	RuleLinkRefused Rule = "link-refused"
 	// RuleImageUndecodable is a resource that was loaded and did not become an
 	// image: a format this engine has no decoder for, bytes that do not parse,
 	// or a picture larger than it will decode.
@@ -373,6 +385,11 @@ var defaultSeverity = map[Rule]Severity{
 	// was used. Refusing to produce the document over it would be a default
 	// turned off wholesale by anyone whose fonts are woff2.
 	RuleFontUndecodable: Warn,
+	// A refused link changes nothing on the page, and a reader clicking where
+	// it was is taken nowhere rather than somewhere the document chose. A
+	// caller that would rather not publish a document with a dead link in it
+	// raises it to Error.
+	RuleLinkRefused: Warn,
 	// Nothing to set text in is not a degraded page, it is an empty one. A
 	// caller shown a blank sheet with no finding on it has no way to tell that
 	// from a document that said nothing.

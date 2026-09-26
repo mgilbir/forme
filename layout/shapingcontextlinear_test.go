@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -153,23 +154,42 @@ func TestAChainOfInvisibleItemsIsLinear(t *testing.T) {
 // stretch's text a leaf at a time with +=, which copies the whole of it for
 // every leaf.
 //
-// The pass is timed on its own, over a paragraph built beforehand, in a
+// The pass is measured on its own, over a paragraph built beforehand, in a
 // language with no phrase model: the stretch is still gathered — auto-phrase
 // asks for it — and nothing else the pass does is large enough to hide it.
+//
+// What is measured is the bytes the pass allocates, because the defect is a
+// copy: the += allocated the stretch again for every leaf, n²/2 bytes, where
+// the pass otherwise allocates a list of the leaves and the stretch's text once.
+// It was timed, over the same twenty thousand leaves and eighty thousand, and
+// read 4.4 on a workstation and 8.0 to 9.9 on every GitHub runner. The work
+// was linear; the tree of eighty thousand boxes is twenty-five megabytes, and
+// the runner's cache held the smaller tree and not the larger, so each leaf
+// cost twice as much at the larger size. The same timing reads 8.3 to 11.1 on
+// a workstation at five thousand leaves and twenty thousand, which is where
+// its cache sits. The bytes are the same number on every machine.
+//
+// The sizes are the large ones on purpose. A list grown by append allocates
+// about twice its length while it is small and about five times once the
+// runtime grows it by a quarter at a time, so below some tens of thousands of
+// leaves the bytes of linear work grow faster than the leaves: five thousand
+// against twenty thousand reads 6.5. Here it reads about four and a half, and
+// the += planted back reads sixteen.
 func TestTheSeparatorPassIsLinear(t *testing.T) {
-	built := map[int]*Box{}
-	requireLinear(t, "the phrase separator pass", 20000, func(n int) {
-		p, ok := built[n]
-		if !ok {
-			b := Build(Input{
-				HTML: `<p id="p" lang="en">` + strings.Repeat("<b>a</b>", n) + `</p>`,
-				CSS:  []Stylesheet{{Source: `p { word-space-transform: ideographic-space auto-phrase }`}},
-			})
-			p = findBox(t, b.Root, "p")
-			built[n] = p
-		}
-		(&boxBuilder{rec: NewRecorder(nil)}).phraseSeparatorsAtABoxEdge(p)
-	})
+	pass := func(n int) func() {
+		b := Build(Input{
+			HTML: `<p id="p" lang="en">` + strings.Repeat("<b>a</b>", n) + `</p>`,
+			CSS:  []Stylesheet{{Source: `p { word-space-transform: ideographic-space auto-phrase }`}},
+		})
+		p := findBox(t, b.Root, "p")
+		return func() { (&boxBuilder{rec: NewRecorder(nil)}).phraseSeparatorsAtABoxEdge(p) }
+	}
+	const n = 20000
+	if r := costtest.Allocated(t, "the phrase separator pass", pass(n), pass(4*n)); r > 8 {
+		t.Errorf("the phrase separator pass over %d leaves allocated %.1f times what it "+
+			"did over %d; linear is about four, and a copy of the stretch per leaf "+
+			"is sixteen", 4*n, r, n)
+	}
 }
 
 // TestTheCommonBoxOfNeighboursIsNear: two boxes side by side deep in a tree
@@ -212,24 +232,71 @@ func TestTheCommonBoxOfNeighboursIsNear(t *testing.T) {
 // asks whether a break opportunity lies between them, and it walked every item
 // between them to find out — for every run of a chain of invisible ones, each
 // of which has the same neighbour at the far end, where the break is.
+//
+// The defect is a question that cost the distance it asked across, so that is
+// what is measured: a fixed number of questions, each from a run at the start
+// of the chain to the run at its far end, across n items and across 16n. The
+// answer is a subtraction of two counts, which costs the same at either
+// distance; the walk costs sixteen times. Planted, the walk reads as 33.6, and
+// 114.7 with memory being streamed on the other cores: a walk across the larger
+// chain leaves the cache as well.
+//
+// It was the whole pass over the chain at n items and at 4n, which is linear
+// either way and so a ratio of four with nothing to spare: an item is half a
+// kilobyte, and with memory being streamed on the machine's other cores the
+// smaller chain stayed in the cache and the larger did not, and the linear pass
+// read as 7.5 to 12.3. The questions here read the two runs they are about and
+// two counts, which is the same few lines of memory at either size.
+//
+// The counts are built as mergeGroupTexts builds them, once for the paragraph
+// and before anything is timed; that the pass finds the break at all is
+// TestTheTableAgreesWithTheWalk's and the rest of this file's.
 func TestABreakAtTheFarEndOfAChainIsFoundOnce(t *testing.T) {
 	face := joiningFace(t)
-	made := map[int][]inlineItem{}
-	requireLinear(t, "a break at the end of a chain", 2000, func(n int) {
-		items, ok := made[n]
-		if !ok {
-			items = append(items, inlineItem{Text: "a", Face: face, Width: 100})
-			for k := 0; k < n; k++ {
-				items = append(items, inlineItem{Text: "⁠", Face: face})
+	const questions = 256
+	chain := func(n int, broken bool) ([]inlineItem, []int) {
+		var items []inlineItem
+		items = append(items, inlineItem{Text: "a", Face: face, Width: 100})
+		for k := 0; k < n; k++ {
+			items = append(items, inlineItem{Text: "⁠", Face: face})
+		}
+		items = append(items, inlineItem{Text: "b", Face: face, Width: 100, BreakBefore: broken})
+		breaks := make([]int, len(items)+1)
+		for k, it := range items {
+			breaks[k+1] = breaks[k]
+			if it.BreakBefore {
+				breaks[k+1]++
 			}
-			items = append(items, inlineItem{Text: "b", Face: face, Width: 100, BreakBefore: true})
-			made[n] = items
 		}
-		g := mergeGroupTexts(items, contextNeighbours(items), func() runText { return newRunText(items) })
-		if !g.empty() {
-			t.Fatal("runs with a break between them were grouped")
+		return items, breaks
+	}
+	ask := func(n int) func() {
+		items, breaks := chain(n, true)
+		last := len(items) - 1
+		// The question has to reach the break, or this times the checks in
+		// front of it: the same chain without the break shares.
+		plain, plainBreaks := chain(n, false)
+		if !sharesGlyphsWith(plain, 1, last, plainBreaks, translucency{}) {
+			t.Fatal("two runs of a chain with no break between them do not share; " +
+				"the question stops before the break is asked about")
 		}
-	})
+		if sharesGlyphsWith(items, 1, last, breaks, translucency{}) {
+			t.Fatal("runs with a break between them share a glyph")
+		}
+		return func() {
+			tr := translucency{}
+			for k := 1; k <= questions; k++ {
+				sharesGlyphsWith(items, k, last, breaks, tr)
+			}
+		}
+	}
+	const small, large = 2000, 16 * 2000
+	c := costtest.Time(t, "a fixed number of questions across n items and 16n",
+		ask(small), ask(large))
+	if c.Ratio > 8 {
+		t.Errorf("%d questions across %d items took %v; across %d the same answer "+
+			"is the same subtraction, and a walk is sixteen times", questions, large, c, small)
+	}
 }
 
 // neighbourByWalk is the neighbour walk as it was, one run at a time: the

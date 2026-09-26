@@ -346,6 +346,7 @@ func (n *pending) materialise() *Fragment {
 			continue
 		}
 		line.Rect.Y = line.Rect.Y.Sub(n.shift)
+		line.links = movedLinks(line.links, 0, -n.shift)
 		f.Lines = append(f.Lines, line)
 	}
 	kids := make([]cutKid, 0, n.kidsLeft+len(n.cut))
@@ -412,6 +413,7 @@ func (n *pending) split(y style.Unit) (top *Fragment, below, ok bool) {
 	for _, i := range took {
 		line := n.src.Lines[i]
 		line.Rect.Y = line.Rect.Y.Sub(n.shift)
+		line.links = movedLinks(line.links, 0, -n.shift)
 		above.Lines = append(above.Lines, line)
 	}
 
@@ -773,10 +775,17 @@ func fillColumnsWith(f *Fragment, c columns, height style.Unit, ends *columnEnds
 		dx := c.width.Add(c.gap).Mul(float64(i))
 		for _, line := range band.Lines {
 			line.Rect.X = line.Rect.X.Add(dx)
+			line.links = movedLinks(line.links, dx, 0)
 			f.Lines = append(f.Lines, line)
 		}
 		for _, child := range band.Children {
 			child.BorderRect.X = child.BorderRect.X.Add(dx)
+			// The column it is in, which the pour knows now and nothing can
+			// work out afterwards: a child's place across the page is not its
+			// column, since margins move it, and two in one column have
+			// nothing between them to say so. It rides on the fragment, so it
+			// goes wherever an outer pour copies it; see avoidZones.
+			child.column = i + 1
 			f.Children = append(f.Children, child)
 		}
 	}
@@ -1138,20 +1147,28 @@ func (l *layouter) pourIntoColumns(b *Box, frag *Fragment, cols columns,
 // next" was a range drawn from the foot of one column to the head of the
 // next — a zone that forbade the outer a place nobody had asked about.
 //
-// So the inner container's children are walked the way a float's are, as
-// flows of their own: nothing reaches in or out through its edges, and no zone
-// is drawn between two of them. What is inside each child still counts — a
-// child is in one inner column, so its own content is one sequence down it —
-// and so does every "break-inside": an outer column that ends through an inner
-// column breaks what is in it (CSS Fragmentation 3 §2.2: the content is
-// "affected by" the break of the context that split its fragmentainer), and a
-// box that asked not to be broken asked that of every kind of break. The inner
-// container's own values are the outer's, like any box's. What is given up is a
-// "break-before" or "break-after: avoid" between two of the inner container's
-// own children that the inner pour left in one column, which an outer cut
-// could honour; the inner pour itself honours it, and telling which of its
-// children share a column would take a record of the columns the pour does
-// not keep.
+// So nothing reaches in or out through the inner container's edges, and no zone
+// is drawn between two of its children that the inner pour put in different
+// columns. Between two it put in the same column the zones are drawn as they
+// are anywhere: the two are one sequence down that column, and an outer column
+// that ends between them separates them as surely as an inner one would. The
+// pour records which column each child went to (Fragment.column), and the
+// children of one column are consecutive in the container, so each run of them
+// is walked as a flow of its own, its first child's top and its last child's
+// bottom being the edges nothing crosses. A nested container that was not
+// poured — one column, or a pour that was refused and laid out again in one
+// — has every child in one run, which is what its content is. What is inside
+// each child counts as it does anywhere, and so does every "break-inside": an
+// outer column that ends through an inner column breaks what is in it (CSS
+// Fragmentation 3 §2.2: the content is "affected by" the break of the context
+// that split its fragmentainer), and a box that asked not to be broken asked
+// that of every kind of break. The inner container's own values are the
+// outer's, like any box's.
+//
+// They were walked the way a float's are, each child a flow of its own, and a
+// "break-before" or "break-after: avoid" between two children in one inner
+// column was honoured by the inner pour and not by an outer cut, because the
+// pour kept no record of which children shared a column.
 type avoidZones struct {
 	// context says whether a box is a fragmentation context of its own — a
 	// multicol container. See isMulticol.
@@ -1195,37 +1212,63 @@ func avoidZonesOf(f *Fragment, context func(*Box) bool) *avoidZones {
 // content after its last child begins — the reach a "break-before" on the
 // first child or a "break-after" on the last has, once propagated.
 //
-// A nested multicol container's children are each walked as a flow of its own,
-// as a float's content is: see avoidZones.
+// A nested multicol container's children are walked a column at a time, each
+// column a flow whose edges nothing crosses: see avoidZones.
 func (z *avoidZones) collect(f *Fragment, at, before, after style.Unit) {
 	nested := f != z.root && f.Box != nil && z.context != nil && z.context(f.Box)
+	if !nested {
+		z.flow(f.Children, at, before, after, true)
+		return
+	}
+	kids := f.Children
+	for len(kids) > 0 {
+		n := 1
+		for n < len(kids) && kids[n].column == kids[0].column {
+			n++
+		}
+		z.flow(kids[:n], at, 0, 0, false)
+		kids = kids[n:]
+	}
+}
+
+// flow walks one flow's boxes: kids, in the order they are in the flow. With
+// edges, a "break-before" on the first in-flow box reaches back to before and a
+// "break-after" on the last forward to after, as §3.1 propagates them; without,
+// the flow is an inner column, and neither reaches out of it.
+func (z *avoidZones) flow(kids []*Fragment, at, before, after style.Unit, edges bool) {
 	var flow []*Fragment
-	for _, c := range f.Children {
+	for _, c := range kids {
 		top, bottom := at.Add(c.BorderRect.Y), at.Add(c.BorderRect.Bottom())
 		if avoidsBreak(c.Box, "break-inside") && bottom.Sub(top) >= 2 {
 			z.zones = append(z.zones, avoidZone{top.Add(1), bottom.Sub(1)})
 		}
-		if !nested && (c.Box == nil || !c.Box.outOfFlow()) {
+		if c.Box == nil || !c.Box.outOfFlow() {
 			flow = append(flow, c)
 		} else {
-			// A float's own content, or a nested multicol container's child,
-			// still asks about breaks inside it.
+			// A float's own content still asks about breaks inside it.
 			z.collect(c, at.Add(c.ContentRect().Y), top, bottom)
 		}
 	}
 	for i, c := range flow {
 		top, bottom := at.Add(c.BorderRect.Y), at.Add(c.BorderRect.Bottom())
+		first, last := i == 0, i+1 == len(flow)
 		prev, next := before, after
-		if i > 0 {
+		switch {
+		case !first:
 			prev = at.Add(flow[i-1].BorderRect.Bottom())
+		case !edges:
+			prev = top
 		}
-		if i+1 < len(flow) {
+		switch {
+		case !last:
 			next = at.Add(flow[i+1].BorderRect.Y)
+		case !edges:
+			next = bottom
 		}
-		if avoidsBreak(c.Box, "break-before") {
+		if avoidsBreak(c.Box, "break-before") && (edges || !first) {
 			z.zones = append(z.zones, avoidZone{style.Min(prev, top), top})
 		}
-		if avoidsBreak(c.Box, "break-after") {
+		if avoidsBreak(c.Box, "break-after") && (edges || !last) {
 			z.zones = append(z.zones, avoidZone{bottom, style.Max(next, bottom)})
 		}
 		z.collect(c, at.Add(c.ContentRect().Y), prev, next)

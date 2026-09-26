@@ -652,12 +652,10 @@ var (
 // the four for a Brahmic script means. It is the same membership test HarfBuzz
 // uses to choose between the two, which is InCursiveScript.
 func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune, p *plan) []Glyph {
-	// Before anything is classified: an independent vowel followed by a sign
-	// that spells a different vowel is shown against a dotted circle, as it is
-	// by the Indic model — the list covers Sinhala, Brahmi, Khojki,
-	// Khudawadi, Tirhuta, Modi and Takri too, which this engine sets. HarfBuzz
-	// asks it in both. See markInvalidVowels.
-	buf, runes = sh.markInvalidVowels(buf, runes)
+	// An independent vowel followed by a sign that spells a different vowel
+	// has already been shown against a dotted circle, as it is by the Indic
+	// model — the list covers Sinhala, Brahmi, Khojki, Khudawadi, Tirhuta, Modi
+	// and Takri too, which this engine sets. See markInvalidVowels.
 	info := make([]useInfo, len(runes))
 	for i, r := range runes {
 		info[i].cat, info[i].pos = useCategoryOf(r)
@@ -828,30 +826,43 @@ func (sh shaper) shapeUseCluster(buf []Glyph, info *[]useInfo, p *plan,
 	apply(p.syllables, p.rphf)
 	clearSubstituted(buf)
 
-	// Then 'rphf' itself, read the way 'pref' is: off where it applied, and
-	// whatever it applied to is a repha from here on — which is what the
-	// reordering below looks for. Without that, the feature ran, the glyph
-	// changed, and the repha stayed where the characters put it: in front of the
-	// letter, on the wrong side of the whole syllable.
-	if at := apply(p.rphf, p.pref); at >= 0 && at < len(*info) {
-		(*info)[at].cat = useR
+	// Then 'rphf' itself, read the way 'pref' is: whatever it substituted is a
+	// repha from here on — which is what the reordering below looks for.
+	// Without that, the feature ran, the glyph changed, and the repha stayed
+	// where the characters put it: in front of the letter, on the wrong side of
+	// the whole syllable. It is the first substituted glyph of the head the
+	// feature was for, as record_rphf_use has it.
+	apply(p.rphf, p.pref)
+	for i := 0; i < len(buf) && i < len(*info) && buf[i].mask&maskRphf != 0; i++ {
+		if buf[i].substituted {
+			(*info)[i].cat = useR
+			break
+		}
 	}
 	clearSubstituted(buf)
 
 	// 'pref' is the font saying "this mark has a form that goes before the
 	// letter". Which mark it said it about is not something the categories
 	// know — it is the font's decision, made glyph by glyph — so the only way
-	// to find out is to look at where the feature applied. Whatever it applied
-	// to is treated from here on as a vowel written before the letter, because
-	// that is what it now is: the reordering below moves it to the front.
+	// to find out is to look at what the feature substituted. The first glyph
+	// it substituted is treated from here on as a vowel written before the
+	// letter, because that is what it now is: the reordering below moves it to
+	// the front. It is record_pref_use.
 	//
-	// Where it *applied*, not where it changed the glyph. Noto Sans Javanese
-	// states the rule as cakra → cakra, substituting a glyph for itself, and it
-	// means it: the substitution is how the font marks the mark, and a reader
-	// that looked for a changed glyph index would see nothing happen and leave
-	// every cakra on the wrong side of its letter.
-	if at := apply(p.pref, p.basic); at >= 0 && at < len(*info) {
-		(*info)[at].cat, (*info)[at].pos = useV, usePosPre
+	// What it *substituted*, and not whether the glyph changed. Noto Sans
+	// Javanese states the rule as cakra → cakra, substituting a glyph for
+	// itself, and it means it: the substitution is how the font marks the mark,
+	// and a reader that looked for a changed glyph index would see nothing
+	// happen and leave every cakra on the wrong side of its letter. Nor where a
+	// lookup matched: a contextual rule matches at the letter before the mark
+	// it substitutes, and Noto Sans Newa's does, so the letter was moved in
+	// front of itself and the pre-base form stayed where it was written.
+	apply(p.pref, p.basic)
+	for i := 0; i < len(buf) && i < len(*info); i++ {
+		if buf[i].substituted {
+			(*info)[i].cat, (*info)[i].pos = useV, usePosPre
+			break
+		}
 	}
 
 	apply(p.basic, p.reorder)
@@ -1076,11 +1087,14 @@ func rotateUse(buf []Glyph, info []useInfo, start, mid, end int) {
 
 // universalScripts are the OpenType script tags the engine is used for.
 //
-// They are named rather than derived, and the list is the engine's
-// specification's. Deriving it — "any script with characters of a complex
-// category" — would sweep in Latin, whose combining marks have categories for
-// Unicode's purposes and want none of this, and would make adding a script a
-// silent change in what a document looks like rather than a decision.
+// They are named rather than derived, and the list is HarfBuzz's: the scripts
+// hb_ot_shaper_categorize sends to the engine, at the release the oracle is
+// pinned to. Deriving it — "any script with characters of a complex category"
+// — would sweep in Latin, whose combining marks have categories for Unicode's
+// purposes and want none of this, and would make adding a script a silent
+// change in what a document looks like rather than a decision.
+// TestTheEngineSetsHarfBuzzsScripts holds it to HarfBuzz's own source,
+// recorded by testdata/harfbuzz/usescripts.py.
 //
 // A script with a shaper of its own is not here: Devanagari and its relatives,
 // Khmer and Myanmar are each modelled in their own file, because each has rules
@@ -1093,24 +1107,34 @@ func rotateUse(buf []Glyph, info []useInfo, start, mid, end int) {
 // table below already carried its rows: usetable.go gives U+0DCA the halant
 // class and U+0D9A onwards the base class, and nothing asked. HarfBuzz shapes
 // it here, which is where it belongs — its cluster model is the general one.
+//
+// New Tai Lue is the one that was here and is not. HarfBuzz sets it with the
+// default model: its tone marks follow the syllable they are written after
+// with no reordering to do, and the engine showed a tone mark written first
+// against a dotted circle that no browser draws. The eleven scripts of
+// Unicode 16 and 17 HarfBuzz sets with the engine were missing, and their text
+// came out in the order it was stored; they are here now. Three more of
+// Unicode 18 are in HarfBuzz's list and not in this one, because the scripts
+// table is Unicode 17's and no character is of them yet.
 var universalScripts = map[string]bool{
-	"adlm": true, "ahom": true, "bali": true, "batk": true, "bhks": true,
-	"brah": true, "bugi": true, "buhd": true, "cakm": true, "cham": true,
-	"chrs": true, "cpmn": true, "diak": true, "dogr": true, "dupl": true,
-	"egyp": true, "elym": true, "gong": true, "gonm": true, "gran": true,
-	"hano": true, "hmng": true, "hmnp": true, "java": true, "kali": true,
-	"kawi": true, "khar": true, "khoj": true, "kits": true, "kthi": true,
-	"lana": true, "lepc": true, "limb": true, "mahj": true, "maka": true,
-	"mand": true, "mani": true, "marc": true, "medf": true, "modi": true,
-	"mong": true, "mtei": true, "mult": true, "nagm": true, "nand": true,
-	"newa": true, "nko ": true, "ougr": true, "phag": true, "phlp": true,
+	"adlm": true, "ahom": true, "bali": true, "batk": true, "berf": true,
+	"bhks": true, "brah": true, "bugi": true, "buhd": true, "cakm": true,
+	"cham": true, "chrs": true, "cpmn": true, "diak": true, "dogr": true,
+	"dupl": true, "egyp": true, "elym": true, "gara": true, "gong": true,
+	"gonm": true, "gran": true, "gukh": true, "hano": true, "hmng": true,
+	"hmnp": true, "java": true, "kali": true, "kawi": true, "khar": true,
+	"khoj": true, "kits": true, "krai": true, "kthi": true, "lana": true,
+	"lepc": true, "limb": true, "mahj": true, "maka": true, "mand": true,
+	"mani": true, "marc": true, "medf": true, "modi": true, "mong": true,
+	"mtei": true, "mult": true, "nagm": true, "nand": true, "newa": true,
+	"nko ": true, "onao": true, "ougr": true, "phag": true, "phlp": true,
 	"plrd": true, "rjng": true, "rohg": true, "saur": true, "shrd": true,
-	"sidd": true, "sind": true, "sinh": true, "sogd": true, "sogo": true,
-	"soyo": true,
-	"sund": true, "sylo": true, "tagb": true, "takr": true, "tale": true,
-	"talu": true, "tavt": true, "tfng": true, "tglg": true, "tibt": true,
-	"tirh": true, "tnsa": true, "toto": true, "vith": true, "wcho": true,
-	"yezi": true, "zanb": true,
+	"sidd": true, "sidt": true, "sind": true, "sinh": true, "sogd": true,
+	"sogo": true, "soyo": true, "sund": true, "sunu": true, "sylo": true,
+	"tagb": true, "takr": true, "tale": true, "tavt": true, "tayo": true,
+	"tfng": true, "tglg": true, "tibt": true, "tirh": true, "tnsa": true,
+	"todr": true, "tols": true, "toto": true, "tutg": true, "vith": true,
+	"wcho": true, "yezi": true, "zanb": true,
 }
 
 // anyCursive reports whether a run holds a character of a script whose letters

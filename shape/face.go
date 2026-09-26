@@ -55,9 +55,10 @@
 // # Subsetting
 //
 // Both glyf and CFF outlines are subsetted, by the same rule: glyph indices are
-// retained and a dropped glyph becomes an empty one. A CID-keyed CFF is
-// subsetted the same way, and keeps its charset, so the CIDs Encode writes
-// still name the glyphs they did.
+// retained and a dropped glyph becomes an empty one. A CID-keyed CFF is the
+// exception. Its subset holds only the glyphs kept, renumbered in their order,
+// with a charset that gives each the CID it had — so the CIDs Encode writes
+// still name the glyphs they did, and the subset carries nothing else.
 package shape
 
 import (
@@ -101,8 +102,16 @@ type Face struct {
 	// because empty here has two meanings and one branch tells them apart.
 	registry, ordering string
 	supplement         int
-	data               []byte
-	prog               *font.Program
+	// data is the font program as Load read it — after a WOFF or WOFF 2 is
+	// unwrapped, and for LoadInstance the instance it cut — and is what
+	// Program hands out. Nothing here writes to it.
+	data []byte
+	prog *font.Program
+	// fsType is OS/2 fsType, the font's embedding permissions, and
+	// fsTypeStated whether the font has an OS/2 table long enough to state
+	// them. See EmbeddingPermissions.
+	fsType       FSType
+	fsTypeStated bool
 
 	name       string
 	unitsPerEm int
@@ -150,12 +159,17 @@ type Face struct {
 	// font that declares no scripts.
 	layout *layout
 	// hmtx is the horizontal metrics table and longMetrics how many of its
-	// records carry an advance, kept for the one reader that needs a glyph's
+	// records carry an advance, kept for the two readers that need a glyph's
 	// metrics in font units rather than scaled: placing the marks of a face
-	// with no positioning of its own, which is integer arithmetic on them. See
-	// fallback.go.
+	// with no positioning of its own (fallback.go), and hanging a glyph set
+	// upright from half its advance (vertical.go). Both are integer arithmetic
+	// on them.
 	hmtx        []byte
 	longMetrics int
+	// vert is what the vertical metrics of a glyph set upright are read from:
+	// vhea and vmtx, VORG, and for a TrueType face the glyph headers. See
+	// vertical.go.
+	vert verticalTables
 	// layoutTables are the GSUB, GPOS, GDEF and kern bytes, kept so that the
 	// layout can be read again for the script and language of a run;
 	// positionings and scriptLayouts cache those readings, by what each
@@ -330,6 +344,10 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	}
 	f.readOS2(tables["OS/2"])
 	f.readPost(tables["post"])
+	f.vert = readVerticalTables(tables, prog.NumGlyphs, budget)
+	if err := budget.Err(); err != nil {
+		return nil, err
+	}
 	f.axes = readAxes(tables["fvar"])
 	f.stemV = stemV(tables["OS/2"])
 	if f.capHeight == 0 {
@@ -408,6 +426,12 @@ func (f *Face) IsVariable() bool { return len(f.axes) > 0 }
 // arrived in version 2, and a version 0 table simply stops before it. Reading
 // it anyway would return whatever followed the table in the file.
 func (f *Face) readOS2(os2 []byte) {
+	// fsType is at offset 8 in every version, and read on its own before the
+	// length the rest needs: Apple's original version 0 table stops at 68
+	// bytes, and a font that states a restriction in one has stated it.
+	if len(os2) >= 10 {
+		f.fsType, f.fsTypeStated = FSType(font.Be16(os2, 8)), true
+	}
 	if len(os2) < 78 { // through usWinDescent, which every version has
 		return
 	}
@@ -582,7 +606,9 @@ func (f *Face) advanceGID(gid int) float64 {
 
 // Measure is the width of a string set at the given size, in user-space units.
 // Runes the font does not map contribute .notdef's advance, which is what a
-// renderer will draw.
+// renderer will draw — except the space separators and the non-breaking hyphen
+// a composite face draws with a stand-in, which contribute the stand-in's (see
+// spacefallback.go).
 func (f *Face) Measure(s string, size float64) float64 {
 	var total float64
 	for _, r := range s {
@@ -613,6 +639,11 @@ func (f *Face) Measure(s string, size float64) float64 {
 			// A face addressed by character code sets a character it has no
 			// code for as a space, so it is a space that must be measured.
 			_, w = f.missingByCode()
+		} else if gid, kind, ok := f.standIn(r); ok {
+			// A composite face draws a space separator it lacks as its own
+			// space, at the separator's width, and a non-breaking hyphen as a
+			// hyphen: see spacefallback.go.
+			w = f.standInAdvance(kind, f.advanceGID(gid))
 		}
 		total += w
 	}
@@ -692,9 +723,10 @@ func (f *Face) missingByCode() (code int, width float64) {
 // simple or standard face it is one byte of WinAnsiEncoding.
 //
 // On a composite face a rune the font does not map encodes as glyph 0, which
-// renders as .notdef — the visible "this font has no glyph for that" box; on a
-// simple or standard face it encodes as the space (see missingByCode). That is
-// deliberate: an error here would mean a caller could not lay out text
+// renders as .notdef — the visible "this font has no glyph for that" box —
+// unless the shaper draws it with a stand-in, whose glyph it is encoded as
+// (see spacefallback.go); on a simple or standard face it encodes as the space
+// (see missingByCode). That is deliberate: an error here would mean a caller could not lay out text
 // containing one stray character, and silently dropping it would lose content.
 // The second result reports how many runes were missing so a caller that cares
 // can react.
@@ -738,14 +770,19 @@ func (f *Face) Encode(s string) (codes []byte, missing int) {
 		}
 		var ok bool
 		if parts, ok = f.drawnAs(r, 0, parts[:0]); !ok {
-			missing++
-			parts = append(parts[:0], 0)
+			// The glyph the shaper draws in its place, where there is one —
+			// see spacefallback.go — and .notdef where there is not.
+			gid, _, stood := f.standIn(r)
+			if !stood {
+				missing++
+			}
+			f.used[gid] = true
+			code := f.codeForGID(gid)
+			codes = append(codes, byte(code>>8), byte(code))
+			continue
 		}
 		for _, p := range parts {
-			gid := 0
-			if p != 0 {
-				gid, _ = f.GlyphID(p)
-			}
+			gid, _ := f.GlyphID(p)
 			f.used[gid] = true
 			code := f.codeForGID(gid)
 			codes = append(codes, byte(code>>8), byte(code))

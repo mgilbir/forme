@@ -765,6 +765,10 @@ type State struct {
 	// for the reason the rest of this does: the two characters of that boundary
 	// are in different text nodes, and neither box can see both.
 	AfterLetterUnit bool
+	// AfterBase is the last base character emitted — the last character that
+	// is not a mark or an invisible — which the next box's scan needs where the
+	// last character emitted is a mark. See paragraph.Carried.PrevBase.
+	AfterBase rune
 	// AfterBox is the box the character before this point came from, held
 	// opaquely, and it is here for a rule about *which element* decides.
 	//

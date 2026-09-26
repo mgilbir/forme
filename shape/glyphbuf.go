@@ -41,7 +41,32 @@ type Glyph struct {
 
 	// XOffset and YOffset displace the glyph from the pen without moving the
 	// pen. This is how a mark is placed over its base.
+	//
+	// In a run set upright they displace it from where it is hung — see
+	// VOriginX — rather than from the pen itself.
 	XOffset, YOffset float64
+
+	// YAdvance is how far the pen moves after this glyph along the page's
+	// vertical axis, in the font's own orientation: up is positive, so a run
+	// set down the page advances by a negative number, as HarfBuzz and a PDF
+	// W2 array both state it. It is zero in a run set across the page, and
+	// in a run set upright (Features.Vertical) it is the pen's only advance —
+	// XAdvance is zero there. It starts as the glyph's vertical advance: vmtx's,
+	// or where the face has none the height of its line. See vertical.go.
+	YAdvance float64
+
+	// VOriginX and VOriginY are, in a run set upright, where the glyph is hung
+	// from: the point of the glyph, measured from its own horizontal origin,
+	// that is put at the pen. Half the glyph's horizontal advance across, and
+	// down from the top by what VORG or vmtx state, or the fallback HarfBuzz
+	// takes where they state nothing. Both are zero in a run set across the
+	// page.
+	//
+	// So an upright glyph's horizontal origin is drawn at the pen plus
+	// (XOffset-VOriginX, YOffset-VOriginY); a format that places a glyph by
+	// its vertical origin itself, as PDF's vertical writing does from W2, is
+	// given the origin and the offsets separately.
+	VOriginX, VOriginY float64
 
 	// lig records this glyph's part in a ligature, and is unexported because it
 	// is bookkeeping between the substitution pass and the positioning one
@@ -82,6 +107,17 @@ type Glyph struct {
 	// the one reader that asks the character rather than the font: placing
 	// the marks of a face that places none of its own. See fallback.go.
 	umark unicodeMark
+
+	// space says the glyph is the face's space standing in for a space
+	// separator it has no glyph for, and which one, so that it can be given
+	// that separator's width. See spacefallback.go.
+	space spaceKind
+
+	// stch says the glyph is a piece of a stretching mark, fixed or repeated,
+	// and word that the character it came from is one a stretch spans. See
+	// stch.go.
+	stch uint8
+	word bool
 }
 
 // ligatureRef says what a glyph has to do with a ligature.
@@ -302,6 +338,13 @@ func (f *Face) ShapeGlyphsWith(s string, features ...string) ([]Glyph, int) {
 }
 
 func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Glyph, int) {
+	if ctx.features.Vertical {
+		// An upright run is not cut by direction: CSS Writing Modes §5.1 has
+		// every character of it treated as strong left-to-right, and HarfBuzz
+		// sets a top-to-bottom run in the order it is written, mirroring
+		// nothing. See Features.Vertical.
+		return f.shapeDirection(s, scriptBehind(ctx.before), scriptAhead(ctx.after), false, extra, ctx)
+	}
 	runs := bidiVisualRuns(s)
 	if len(runs) <= 1 {
 		// One direction throughout, which is nearly all text: shaped as one run
@@ -384,7 +427,7 @@ func (f *Face) shapeDirection(s string, behind, ahead uint16, rtl bool, extra []
 	if !f.composite() {
 		// A face set by character code has no rules to read per script, and
 		// nothing to merge a neighbour's glyphs into.
-		return f.shapeByCode(s, rtl)
+		return f.shapeByCode(s, rtl, ctx.features.Vertical)
 	}
 	if ctx.mergeBefore != "" || ctx.mergeAfter != "" {
 		return f.shapeMerged(s, rtl, extra, ctx)
@@ -435,7 +478,7 @@ func (f *Face) shapeDirection(s string, behind, ahead uint16, rtl bool, extra []
 // the whole paragraph and cannot be read off one run of it.
 func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, ctx shapeContext) ([]Glyph, int) {
 	if !f.composite() {
-		return f.shapeByCode(s, rtl)
+		return f.shapeByCode(s, rtl, ctx.features.Vertical)
 	}
 	// Which model sets the run is decided by the script and by the tag the
 	// font's rules for it were read under — see categorize — and it decides
@@ -444,7 +487,8 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	lang := openTypeLanguage(ctx.features.Language)
 	l := f.layoutFor(script, lang)
 	chosen := f.chosenScriptTag(script, lang)
-	model := categorize(script, chosen)
+	vertical := ctx.features.Vertical
+	model := categorize(script, chosen, vertical)
 	// Rule L4: a bracket in a right-to-left run is drawn as the bracket that
 	// mirrors it, and the substitution is on the character, before the font is
 	// asked for a glyph at all. Where the font has no glyph for the mirror the
@@ -452,6 +496,12 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	runes, offsets := bidiRunCharacters(s, rtl)
 	if rtl {
 		f.keepUnmirrorable(s, runes, offsets)
+	}
+	// The same substitution for a run set upright, in a face with no 'vert'
+	// to give the vertical forms by glyph: the character's own vertical form,
+	// where the face has one. See rotateForVertical.
+	if vertical && !l.offersVert() {
+		f.rotateForVertical(runes)
 	}
 	// Thai and Lao's one rearrangement of the text, which every shaper makes
 	// whatever the font says, and for a Thai font with no Thai rules of its own
@@ -462,13 +512,34 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 			runes = f.thaiPUAShape(runes)
 		}
 	}
+	// Hangul's syllables into the spelling the face draws, and its tone marks
+	// in front of them. See hangul.go.
+	if model == modelHangul {
+		runes, offsets = f.hangulPreprocess(runes, offsets)
+	}
+	// A vowel followed by a sign that spells another, against a dotted circle.
+	// See markInvalidVowels.
+	if model == modelIndic || model == modelUniversal {
+		runes, offsets = markInvalidVowels(runes, offsets)
+	}
 	// Then normalisation, which is about the characters too and has to see the
 	// mirrored ones: it puts the run into the spelling this face draws best and
 	// each cluster's marks into canonical order. It runs before any glyph is
 	// chosen because it decides which characters the font is asked about at all.
 	// See normalize.go.
-	runes, offsets = f.normalize(runes, offsets, model.syllabic(), model == modelIndic,
-		scriptSelects(script, "arab"))
+	runes, offsets = f.normalize(runes, offsets, normalization{
+		syllabic: model.syllabic(), indic: model == modelIndic,
+		arabic: model == modelArabic,
+		hebrew: model == modelHebrew, hebrewForms: model == modelHebrew && !l.hasMarkFeature(),
+		none: model == modelHangul,
+	})
+	// Which jamo feature each character is for, read before the characters
+	// nothing is drawn for are taken out, since a joiner between two jamo
+	// keeps them apart. See hangulFeatures.
+	var jamo []uint8
+	if model == modelHangul {
+		jamo = hangulFeatures(runes)
+	}
 	// The characters nothing is drawn for, for every run but a syllabic one.
 	//
 	// Removing them here means no rule of the font is ever asked about a glyph
@@ -483,6 +554,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// — so a syllabic run keeps them, and the shaper that gets them drops them
 	// once they have said which cluster they broke. See ignorable.go.
 	if !model.syllabic() {
+		if jamo != nil {
+			jamo = keepShown(jamo, runes)
+		}
 		runes, offsets = dropHiddenCharacters(runes, offsets)
 	}
 	if len(runes) == 0 {
@@ -494,6 +568,12 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	)
 	for i, r := range runes {
 		gid, ok := f.GlyphID(r)
+		var space spaceKind
+		if !ok {
+			// A space separator or a non-breaking hyphen the face draws
+			// with a glyph it has; see spacefallback.go.
+			gid, space, ok = f.standIn(r)
+		}
 		if !ok {
 			// A character nothing draws is not one the face is missing.
 			//
@@ -515,7 +595,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 			// The Hangul fillers are not among these and still count: they are
 			// default-ignorable and they are *drawn*, which is what
 			// hiddenAfterShaping is the list of.
-			if !hiddenAfterShaping(r) {
+			//
+			// Nor is a dotted circle the shaper put into the text, where the
+			// face has none to draw it with: the text has no such character
+			// to be missing. See markInvalidVowels.
+			if !hiddenAfterShaping(r) && !isInsertedCircle(runes, offsets, i) {
 				missing++
 				if ctx.missed != nil {
 					*ctx.missed = append(*ctx.missed, ctx.at+offsets[i])
@@ -526,10 +610,14 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		buf = append(buf, Glyph{
 			GID: gid, Cluster: offsets[i], XAdvance: f.advanceGID(gid),
 			class: classOfRune(runes[i]), umark: unicodeMarkOf(runes[i]),
+			space: space, word: isStchWord(runes[i]),
 		})
 	}
 	if len(buf) == 0 {
 		return nil, missing
+	}
+	if model == modelIndic || model == modelUniversal {
+		markVowelCircles(buf, runes, offsets)
 	}
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.
@@ -567,9 +655,19 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		if model == modelArabic {
 			markJoiningForms(buf, runes, before, after)
 		}
+		if model == modelHangul {
+			markJamo(buf, runes, jamo)
+			markToneCircles(buf, runes, offsets)
+		}
 		buf = hideJoiners(buf, runes)
-		for _, stage := range p.stages {
+		for i, stage := range p.stages {
 			buf = sh.applyStage(buf, stage)
+			if p.stch && i == p.stchAfter {
+				recordStch(buf)
+			}
+			if p.arabicFallback != nil && i == p.arabicAfter {
+				buf = sh.applyArabicFallback(buf, p.arabicFallback)
+			}
 		}
 	}
 	if model == modelHebrew {
@@ -578,8 +676,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	sh.position(buf, p, model)
 	// The pair that spans the boundary to the next run, which the pass above
 	// cannot see because the glyph on the far side of it is not in this buffer.
-	// See boundarykern.go.
-	if len(sh.l.kern) > 0 && ctx.kerns && !ctx.features.NoKerning {
+	// See boundarykern.go. Not for a run set upright, which is not kerned:
+	// the pairs are the 'kern' feature's, and a vertical run applies none.
+	if len(sh.l.kern) > 0 && ctx.kerns && !ctx.features.NoKerning && !vertical {
 		kctx := ctx
 		if ctx.cutBefore {
 			kctx.before = ""
@@ -597,6 +696,14 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		// the order the text is written in; the pen will meet these glyphs in the
 		// other one.
 		reverseGlyphs(buf)
+	}
+	// A stretching mark is stretched over its word once the word has its
+	// widths, in the order it is drawn. See stch.go.
+	if p.stch {
+		buf = f.applyStch(buf, rtl)
+	}
+	if vertical {
+		unhangFromOrigin(buf)
 	}
 	for _, g := range buf {
 		f.used[g.GID] = true
@@ -695,8 +802,10 @@ const fractionSlash = 0x2044
 // character at the width the font publishes, and that is what this does.
 //
 // Callers get the same Glyph values either way, so Draw, Measure and the
-// fallback stack do not have to know which kind of face they were given.
-func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
+// fallback stack do not have to know which kind of face they were given — and
+// a run set upright gets its vertical metrics here too, by the same rules and
+// from the same tables where the face has them. See verticalRune.
+func (f *Face) shapeByCode(s string, rtl, vertical bool) ([]Glyph, int) {
 	runes, offsets := bidiRunCharacters(s, rtl)
 	// A simple face draws nothing for these either. It is more visible here, if
 	// anything: WinAnsi gives U+00AD a code of its own, so a soft hyphen without
@@ -735,7 +844,7 @@ func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
 			for _, p := range parts {
 				code, _ := f.GlyphID(p)
 				width, _ := f.Advance(p)
-				buf = append(buf, Glyph{GID: code, Cluster: offsets[i], XAdvance: width})
+				buf = append(buf, f.byCode(code, offsets[i], width, p, vertical))
 				drew(p, code)
 			}
 			continue
@@ -743,7 +852,7 @@ func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
 		// The same substitution Measure and Encode make: see missingByCode.
 		missing++
 		code, width := f.missingByCode()
-		buf = append(buf, Glyph{GID: code, Cluster: offsets[i], XAdvance: width})
+		buf = append(buf, f.byCode(code, offsets[i], width, ' ', vertical))
 		drew(' ', code)
 	}
 	if rtl {
@@ -754,6 +863,21 @@ func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
 		reverseGlyphs(buf)
 	}
 	return buf, missing
+}
+
+// byCode is one glyph of a face set by character code: the code, drawn for the
+// character r, at the width the face publishes for it — or, in a run set
+// upright, with the vertical metrics the face has for the character in its
+// place. The metrics are asked by character because the code names no glyph
+// the face's tables are indexed by. See verticalRune.
+func (f *Face) byCode(code, cluster int, width float64, r rune, vertical bool) Glyph {
+	g := Glyph{GID: code, Cluster: cluster, XAdvance: width}
+	if vertical {
+		advance, x, y := f.verticalRune(r)
+		g.XAdvance, g.YAdvance = 0, -f.scale(advance)
+		g.VOriginX, g.VOriginY = f.scale(x), f.scale(y)
+	}
+	return g
 }
 
 // MeasureGlyphs is the width a shaped run occupies at a given size, which is

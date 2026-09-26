@@ -138,14 +138,14 @@ func TestTheCIDsAreDistinct(t *testing.T) {
 // Subsetting a CID-keyed program touches three structures that name each other:
 // the charset, which maps glyph to CID; the FDSelect, which maps glyph to Font
 // DICT; and the FDArray, whose Font DICTs name their Private DICTs by absolute
-// offset — and those offsets move when anything before them changes size. What
-// makes it tractable is that the glyph numbering does not change: a dropped
-// glyph becomes a bare endchar, so charset and FDSelect are copied through and
-// only where things sit is rewritten.
+// offset — and those offsets move when anything before them changes size. The
+// subset is renumbered, so the charset and FDSelect are written again for the
+// kept glyphs, and the Private DICTs move as well as shrink.
 //
 // So the test is that nothing a caller can observe changed. The subset loads,
-// shapes the same text to the same glyphs, encodes them to the same CIDs, and
-// reports the same widths — and it is smaller, or the subsetting did nothing.
+// shapes the same text to the same glyphs — each at its place among the kept
+// ones, which is its number in the subset — encodes them to the same CIDs, and
+// reports the same widths; and it is smaller, or the subsetting did nothing.
 func TestACIDKeyedFaceSubsetsAndStillSaysTheSameThings(t *testing.T) {
 	data := cidKeyedFace(t)
 	f, err := Load(data)
@@ -156,7 +156,7 @@ func TestACIDKeyedFaceSubsetsAndStillSaysTheSameThings(t *testing.T) {
 	wantCodes, _ := f.Encode(text)
 	wantGlyphs, _ := f.ShapeGlyphs(text)
 
-	prog, _, err := f.SubsetGlyphs()
+	prog, kept, err := f.SubsetGlyphs()
 	if err != nil {
 		t.Fatalf("a CID-keyed face could not be subsetted: %v", err)
 	}
@@ -184,9 +184,9 @@ func TestACIDKeyedFaceSubsetsAndStillSaysTheSameThings(t *testing.T) {
 			len(gotGlyphs), len(wantGlyphs))
 	}
 	for i := range wantGlyphs {
-		if gotGlyphs[i].GID != wantGlyphs[i].GID {
-			t.Errorf("glyph %d is %d after subsetting and was %d — the numbering "+
-				"is meant to be retained", i, gotGlyphs[i].GID, wantGlyphs[i].GID)
+		if g := gotGlyphs[i].GID; g < 0 || g >= len(kept) || kept[g] != wantGlyphs[i].GID {
+			t.Errorf("glyph %d is %d after subsetting and was %d — glyph n of the "+
+				"subset is the face's kept[n]", i, g, wantGlyphs[i].GID)
 		}
 		if gotGlyphs[i].XAdvance != wantGlyphs[i].XAdvance {
 			t.Errorf("glyph %d advances %v after subsetting and did %v",
@@ -232,37 +232,61 @@ func TestSubsettingKeepsEachGlyphWithItsOwnFontDICT(t *testing.T) {
 		t.Fatal("a CFF came back without its Font DICT assignment")
 	}
 
-	// Every glyph, not only the kept ones. The numbering is retained, so the
-	// FDSelect still covers the whole font — and its last range is reached by no
-	// short string, which is exactly where a truncation would hide.
-	if len(after.GIDToFD) != len(before.GIDToFD) {
-		t.Fatalf("the subset assigns %d glyphs to Font DICTs and the face assigned %d",
-			len(after.GIDToFD), len(before.GIDToFD))
+	// Every glyph of the subset, which is the kept ones renumbered: glyph i is
+	// the face's kept[i], and has to be in the Font DICT that one was in. The
+	// last of them is the FDSelect's tail, which is where a truncation hides.
+	if len(after.GIDToFD) != len(kept) {
+		t.Fatalf("the subset assigns %d glyphs to Font DICTs and kept %d",
+			len(after.GIDToFD), len(kept))
 	}
-	differ := 0
-	for gid := range before.GIDToFD {
-		if before.GIDToFD[gid] != after.GIDToFD[gid] {
-			if differ < 3 {
-				t.Errorf("glyph %d is in Font DICT %d after subsetting and was in %d",
-					gid, after.GIDToFD[gid], before.GIDToFD[gid])
-			}
-			differ++
+	for i, gid := range kept {
+		if before.GIDToFD[gid] != after.GIDToFD[i] {
+			t.Errorf("glyph %d (the face's %d) is in Font DICT %d after subsetting "+
+				"and was in %d", i, gid, after.GIDToFD[i], before.GIDToFD[gid])
 		}
 	}
-	if differ > 0 {
-		t.Errorf("%d glyphs of %d changed Font DICT", differ, len(before.GIDToFD))
-	}
 
-	// The FDSelect itself, byte for byte. Comparing the assignment it produces is
-	// not enough: parseCFFFDs slices from the FDSelect's offset to the end of the
-	// font, so a structure two bytes short reads its last range's bound out of
-	// whatever happens to follow — which in a rewritten font is the Private DICTs,
-	// and which for this face happens to give the right answer. A structure that
-	// is right by luck is a structure that will stop being right.
-	if a, b := fdSelectOf(t, data), fdSelectOf(t, prog); string(a) != string(b) {
-		t.Errorf("the FDSelect is %d bytes after subsetting and was %d; it is copied "+
-			"through unchanged, because the glyph numbering it names did not change",
-			len(b), len(a))
+	// The FDSelect itself, read here by the specification's arithmetic rather
+	// than through parseCFFFDs. Comparing the assignment parseCFFFDs produces is
+	// not enough: it slices from the FDSelect's offset to the end of the font, so
+	// a structure two bytes short reads its last range's bound out of whatever
+	// happens to follow — which in a rewritten font is the Private DICTs, and
+	// which can happen to give the right answer. A structure that is right by
+	// luck is a structure that will stop being right.
+	fds := fdSelectOf(t, prog)
+	switch fds[0] {
+	case 0:
+		if len(fds) != 1+len(kept) {
+			t.Errorf("a format 0 FDSelect of %d bytes for %d glyphs", len(fds), len(kept))
+		}
+		for i, gid := range kept {
+			if int(fds[1+i]) != before.GIDToFD[gid] {
+				t.Errorf("the FDSelect puts glyph %d in Font DICT %d; it was in %d", i, fds[1+i], before.GIDToFD[gid])
+			}
+		}
+	case 3:
+		ranges := int(fds[1])<<8 | int(fds[2])
+		if len(fds) != 3+3*ranges+2 {
+			t.Fatalf("a format 3 FDSelect of %d bytes for %d ranges", len(fds), ranges)
+		}
+		if sentinel := int(fds[len(fds)-2])<<8 | int(fds[len(fds)-1]); sentinel != len(kept) {
+			t.Errorf("the FDSelect's sentinel is %d, and the subset holds %d glyphs", sentinel, len(kept))
+		}
+		for r := 0; r < ranges; r++ {
+			first := int(fds[3+3*r])<<8 | int(fds[4+3*r])
+			next := int(fds[6+3*r])<<8 | int(fds[7+3*r])
+			if r == 0 && first != 0 {
+				t.Errorf("the FDSelect's first range starts at glyph %d", first)
+			}
+			for i := first; i < next && i < len(kept); i++ {
+				if int(fds[5+3*r]) != before.GIDToFD[kept[i]] {
+					t.Errorf("the FDSelect puts glyph %d in Font DICT %d; it was in %d",
+						i, fds[5+3*r], before.GIDToFD[kept[i]])
+				}
+			}
+		}
+	default:
+		t.Fatalf("the subset's FDSelect is format %d", fds[0])
 	}
 
 	// And the Font DICTs themselves still say what they said, which is what the
@@ -277,14 +301,14 @@ func TestSubsettingKeepsEachGlyphWithItsOwnFontDICT(t *testing.T) {
 		t.Fatalf("the kept glyphs come from %d Font DICT(s); this test needs more "+
 			"than one or it cannot tell them apart", len(usedFDs))
 	}
-	for _, gid := range kept {
-		if gid >= len(after.WidthByGID) || gid >= len(before.WidthByGID) {
+	for i, gid := range kept {
+		if i >= len(after.WidthByGID) || gid >= len(before.WidthByGID) {
 			t.Fatalf("kept glyph %d is outside the font", gid)
 		}
-		if before.WidthByGID[gid] != after.WidthByGID[gid] {
+		if before.WidthByGID[gid] != after.WidthByGID[i] {
 			t.Errorf("kept glyph %d takes width %v after subsetting and took %v — its "+
 				"Font DICT's Private DICT is not where the Font DICT now says",
-				gid, after.WidthByGID[gid], before.WidthByGID[gid])
+				gid, after.WidthByGID[i], before.WidthByGID[gid])
 		}
 	}
 }

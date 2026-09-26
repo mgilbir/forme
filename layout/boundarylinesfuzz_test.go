@@ -287,3 +287,117 @@ func linesOfSpanned(t testing.TB, set FontSet, markup, sheet string, px float64)
 	}
 	return out, true
 }
+
+// TestASoftHyphenBreaksTheSameAcrossASpanEdge is the fifth thing
+// FuzzBoundaryLines found, in the weekly run: "a&shy;aa" under small-caps in
+// sixteen pixels of Courier broke at the soft hyphen, and cut into
+// "<span>a&shy;a</span><span>a</span>" did not break at all.
+//
+// It is not about small capitals. The line reaches the soft hyphen with no room
+// for the hyphen, and nothing earlier to end at; written as one text the word
+// after it arrives as one item, overflows, and the line ends at the hyphen
+// anyway. Cut at a box edge, the first piece of that word fits where the hyphen
+// does not — a small capital is narrower than the full-size hyphen, and so is an
+// "i" beside an "m"'s hyphen — and it is the second piece that overflows, when
+// the fill had not kept the opportunity whose hyphen did not fit as one it could
+// go back to. So the same shape is here in plain Helvetica and Noto Sans, and
+// under all-small-caps, which synthesises the capitals too.
+func TestASoftHyphenBreaksTheSameAcrossASpanEdge(t *testing.T) {
+	face, err := notosans.Face()
+	if err != nil {
+		t.Fatalf("loading the embedded Noto Sans: %v", err)
+	}
+	set := namedFaceSet{family: "T", face: face, standard: StandardFonts()}
+	for _, tc := range []struct {
+		family, decl, text string
+		cut                []int
+		px                 float64
+	}{
+		{"Courier", "font-variant-caps: small-caps", "a­aa", []int{4}, 16},
+		{"Courier", "font-variant-caps: all-small-caps", "a­aa", []int{4}, 16},
+		{"Courier", "font-variant-caps: all-small-caps", "A­AA", []int{4}, 16},
+		{"Helvetica", "", "m­ii", []int{4}, 18},
+		{"T", "", "m­ii", []int{4}, 20},
+	} {
+		sheet := `#d { font-family: ` + tc.family + `; font-size: 16px; ` + tc.decl + ` }`
+		whole, _ := linesOfSpanned(t, set, tc.text, sheet, tc.px)
+		cut, _ := linesOfSpanned(t, set, spanned(tc.text, tc.cut), sheet, tc.px)
+		if len(whole) != 2 {
+			t.Fatalf("%s %q under %q at %gpx set %v; the fixture is meant to break at "+
+				"the soft hyphen", tc.family, tc.text, tc.decl, tc.px, whole)
+		}
+		if !sameBoundaryLines(whole, cut) {
+			t.Errorf("%s %q under %q at %gpx set %v, and cut into %s it set %v",
+				tc.family, tc.text, tc.decl, tc.px, whole, spanned(tc.text, tc.cut), cut)
+		}
+	}
+}
+
+// TestAWordIsNotCutInFrontOfItsBidiControls is the sixth: under
+// "overflow-wrap: anywhere", "&#x212D;&#x202D;" in less room than the letter
+// was cut after the letter, and the next line held the override and nothing
+// else — an empty line — where "<span>&#x212D;</span><span>&#x202D;</span>"
+// set one line. The control is an item of its own there, and the fill does not
+// count one as content. A cut that leaves only bidi controls after it leaves
+// nothing to begin a line with, so it is not made.
+func TestAWordIsNotCutInFrontOfItsBidiControls(t *testing.T) {
+	face, err := notosans.Face()
+	if err != nil {
+		t.Fatalf("loading the embedded Noto Sans: %v", err)
+	}
+	set := namedFaceSet{family: "T", face: face, standard: StandardFonts()}
+	for _, text := range []string{"ℭ‭", "ℭ‭⁦", "ab‬"} {
+		sheet := `#d { font-family: T; font-size: 16px; overflow-wrap: anywhere }`
+		cut := spanned(text, []int{len(text) - len(strings.TrimLeftFunc(text, func(r rune) bool { return !isBidiControl(r) }))})
+		for _, px := range []float64{4, 10} {
+			whole, _ := linesOfSpanned(t, set, text, sheet, px)
+			got, _ := linesOfSpanned(t, set, cut, sheet, px)
+			if !sameBoundaryLines(whole, got) {
+				t.Errorf("%q at %gpx set %v, and as %s it set %v", text, px, whole, cut, got)
+			}
+			for _, l := range whole {
+				if l.Text == "" {
+					t.Errorf("%q at %gpx set %v: a line holding only bidi controls", text, px, whole)
+				}
+			}
+		}
+	}
+}
+
+// TestAMarkAtABoxEdgeKeepsItsBasesOpportunity is the seventh: under
+// "word-break: keep-all", "ไࠩ踢" broke in front of the ideograph and
+// "<span>ไࠩ</span><span>踢</span>" did not. keep-all demotes the opportunity
+// between a letter and an ideograph rather than removing it, and the scan finds
+// the letter by stepping over the marks after it — which it could not do from
+// the far side of a box boundary, where the character it was handed was the
+// mark. It is the base that travels now, through a box of marks alone as well.
+func TestAMarkAtABoxEdgeKeepsItsBasesOpportunity(t *testing.T) {
+	face, err := notosans.Face()
+	if err != nil {
+		t.Fatalf("loading the embedded Noto Sans: %v", err)
+	}
+	set := namedFaceSet{family: "T", face: face, standard: StandardFonts()}
+	for _, decl := range []string{"", "word-break: keep-all"} {
+		sheet := `#d { font-family: T; font-size: 16px; ` + decl + ` }`
+		for _, tc := range []struct {
+			text string
+			cut  []int
+		}{
+			{"ไࠩ踢", []int{6}},
+			{"aࠩ踢", []int{4}},
+			{"aࠩ踢", []int{1, 4}},
+			{"ไ้踢", []int{6}},
+		} {
+			whole, _ := linesOfSpanned(t, set, tc.text, sheet, 10)
+			cut, _ := linesOfSpanned(t, set, spanned(tc.text, tc.cut), sheet, 10)
+			if len(whole) != 2 {
+				t.Fatalf("%q under %q set %v; the fixture is meant to break in front of "+
+					"the ideograph", tc.text, decl, whole)
+			}
+			if !sameBoundaryLines(whole, cut) {
+				t.Errorf("%q under %q set %v, and as %s it set %v",
+					tc.text, decl, whole, spanned(tc.text, tc.cut), cut)
+			}
+		}
+	}
+}

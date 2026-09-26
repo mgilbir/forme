@@ -196,6 +196,103 @@ func (f *Face) GlyphCode(gid int) int { return f.codeForGID(gid) }
 // how a format has to carry the program and what it may say about it.
 func (f *Face) IsCFF() bool { return f.cff }
 
+// IsCIDKeyed reports whether the outlines are a CID-keyed CFF: whether the
+// codes Encode writes, and GlyphCode returns, are CIDs rather than glyph
+// indices.
+//
+// It answers the one question CharacterCollection's ok deliberately does not.
+// ok is false for a face with no CFF, for a CFF that is not CID-keyed, and for
+// a CID-keyed CFF whose ROS is unusable, and a caller that only has to write a
+// /CIDSystemInfo needs no more than that. A caller deciding how to embed the
+// face does: a face that is not CID-keyed is embedded addressed by its glyph
+// indices, while a CID-keyed one whose collection cannot be stated has to be
+// refused, because its codes are CIDs in a numbering nothing can name. So:
+//
+//   - IsCIDKeyed false: the codes are glyph indices, and CharacterCollection's
+//     ok is false because there is no collection at all.
+//   - IsCIDKeyed true and ok true: the codes are CIDs in the collection it
+//     names.
+//   - IsCIDKeyed true and ok false: the codes are CIDs and the font has not
+//     said which collection they are numbered in.
+//
+// It reads the same field codeForGID and CharacterCollection do, from the
+// parse Load already did, so it cannot disagree with the codes Encode writes:
+// true here is exactly the case in which those codes are CIDs. Re-reading the
+// program to find out would be a second parse that could reach a second
+// answer. A face from LoadSimple or Standard is never CID-keyed.
+func (f *Face) IsCIDKeyed() bool { return f.gidToCID != nil }
+
+// FSType is a font's OS/2 fsType: what its licence says a document may do with
+// it when embedding it. It is the font's own sixteen bits, as the font wrote
+// them, reserved bits and all.
+//
+// The OpenType OS/2 table defines it. Bits 0 to 3 are the usage permission,
+// and a value with none of them set is Installable embedding, which permits
+// everything. From OS/2 version 3 a font may set at most one of them; versions
+// 0 to 2 allowed several, and the specification says to honour the least
+// restrictive of those present — Editable over Preview & Print over
+// Restricted. Bits 8 and 9 are independent of the usage and restrict how the
+// font is embedded rather than whether.
+type FSType uint16
+
+const (
+	// FSTypeRestricted is Restricted License embedding: the font must not be
+	// embedded unless a less restrictive usage bit is also set (see FSType).
+	FSTypeRestricted FSType = 0x0002
+	// FSTypePreviewPrint is Preview & Print embedding: the font may be
+	// embedded, and the document opened read-only.
+	FSTypePreviewPrint FSType = 0x0004
+	// FSTypeEditable is Editable embedding: the font may be embedded, and the
+	// document edited.
+	FSTypeEditable FSType = 0x0008
+	// FSTypeNoSubsetting says the font must not be subsetted before it is
+	// embedded: a document may carry it whole or not at all. Program is the
+	// whole of it.
+	FSTypeNoSubsetting FSType = 0x0100
+	// FSTypeBitmapOnly says only bitmaps the font contains may be embedded,
+	// and no outlines. A font carrying no bitmaps may therefore not be
+	// embedded at all.
+	FSTypeBitmapOnly FSType = 0x0200
+)
+
+// EmbeddingPermissions is the face's OS/2 fsType, and whether the font states
+// one.
+//
+// It is read at load, from the program the face was loaded from, so a caller
+// embedding a face need not read the OS/2 table again — and a caller handed a
+// face rather than bytes has the answer too. fsType is at the same place in
+// every version of the table, so a version 0 table states it as a version 5
+// one does; the value comes back as the font wrote it, and what the usage bits
+// mean together is described at FSType.
+//
+// stated is false for a face whose program has no OS/2 table, or one too short
+// to reach the field, and for a standard face, which has no program. OS/2 is
+// required of an OpenType font but optional in a TrueType one, and a font that
+// states nothing has placed no restriction; stated is here so that a caller
+// that wants to treat the two differently can. The subset carries the OS/2
+// table through unchanged, so it states the same permissions.
+func (f *Face) EmbeddingPermissions() (fsType FSType, stated bool) {
+	return f.fsType, f.fsTypeStated
+}
+
+// Program is the whole font program the face was loaded from: what a document
+// embeds when it may not subset the face (FSTypeNoSubsetting), or chooses not
+// to.
+//
+// It is an sfnt, TrueType or OpenType, and it is the program the face reads
+// its own tables from. A face loaded from a WOFF or WOFF 2 returns the sfnt
+// the container held, since that is the program and a document format carries
+// the program; a face from LoadInstance returns the instance it cut, which is
+// what it draws. A standard face has no program and returns nil. A clone
+// returns its face's.
+//
+// It is not a copy, because a CJK program is megabytes and a document may ask
+// for it once per face it embeds. For a face from Load it is the very slice
+// Load was given, which Load keeps rather than copies. So it must not be
+// modified: the face goes on reading it, and a change shows up as a font that
+// says something else.
+func (f *Face) Program() []byte { return f.data }
+
 // CharacterCollection is the collection this face's CIDs are numbered in — the
 // CFF's ROS — and whether it has one to state.
 //
@@ -219,7 +316,10 @@ func (f *Face) IsCFF() bool { return f.cff }
 // ok is false for all three. A caller that has to write a /CIDSystemInfo and
 // gets false should refuse to embed the face rather than reach for a default:
 // Adobe-Identity-0 is not a safe fallback, it is a specific claim, and it is
-// wrong for exactly the fonts this distinguishes.
+// wrong for exactly the fonts this distinguishes. A caller that has to tell the
+// second case from the third — to embed a face that is not CID-keyed by its
+// glyph indices, and refuse one that is and cannot name its collection — asks
+// IsCIDKeyed, which reads the same field.
 //
 // The values come from the parse Load already did, so this costs nothing and
 // cannot disagree with the CIDs Encode writes. It describes the program the
@@ -243,6 +343,13 @@ func (f *Face) CharacterCollection() (registry, ordering string, supplement int,
 // a reader can check the program against what the file claims. Both have to be
 // computed from what the subsetter actually kept rather than from what was
 // asked for, since keeping one glyph can require keeping another.
+//
+// kept is the face's own glyph indices, ascending — the numbers GlyphCode,
+// GlyphAdvance and Used take — whatever the program numbers them. For every
+// face but a CID-keyed CFF the subset keeps those numbers. A CID-keyed CFF's
+// subset is renumbered: kept[i] is glyph i of the program. Nothing a document
+// writes changes with it, because such a face is addressed by CID (GlyphCode)
+// and the subset's charset gives each glyph the CID it had.
 func (f *Face) SubsetGlyphs() (program []byte, kept []int, err error) {
 	return f.subset()
 }

@@ -105,12 +105,26 @@ func TestShapingClustersAreFinerThanGraphemeClusters(t *testing.T) {
 		clusters: []int{0, 1}, graphemes: []int{0},
 		rule: "GB9, × Extend",
 	}, {
-		// Hangul written as conjoining jamo rather than as a precomposed
-		// syllable: lead, vowel and trail are one grapheme cluster and three
-		// characters, and the shaper gives each its own offset.
-		name: "conjoining Hangul jamo", text: "각",
-		clusters: []int{0, 3, 6}, graphemes: []int{0},
-		rule: "GB6 and GB7, L × V and V × T",
+		// Hangul written as conjoining jamo, with a leading consonant written
+		// twice before its vowel. The three are one grapheme cluster, and the
+		// shaper makes two: the first leading jamo has no vowel after it and is
+		// a syllable of nothing, and the second begins the syllable its vowel
+		// completes. HarfBuzz 14.5.0 gives the same two.
+		//
+		// This case was once lead, vowel and trail, each given its own offset.
+		// The Hangul model now does what HarfBuzz's does and makes a syllable
+		// one cluster, composed or drawn as jamo, and that string has one
+		// cluster and one grapheme cluster — it no longer shows the finding, so
+		// it was replaced rather than its expectation edited. Re-derived: the
+		// finding stands, because Hangul still shows it; and the change is not
+		// a hazard, because a Hangul syllable's cluster never takes in more than
+		// the grapheme cluster it is part of (merge_out_grapheme_clusters, by
+		// name), so it hides no position UAX #29 or UAX #14 offers. See
+		// hangulclusters_test.go, which holds that and the break and the
+		// spacing between two syllables.
+		name: "a leading jamo written twice", text: "ᄀ가",
+		clusters: []int{0, 3}, graphemes: []int{0},
+		rule: "GB6, L × L and L × V",
 	}, {
 		// A flag: two regional indicator symbols, one grapheme cluster. Nothing
 		// in shaping pairs them, so a break between them turns a flag into two

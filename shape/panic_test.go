@@ -427,6 +427,9 @@ func useFace(face *Face) {
 	_ = face.HasLigatures()
 	_ = face.HasJoiningForms()
 	_, _, _, _ = face.CharacterCollection()
+	_ = face.IsCIDKeyed()
+	_, _ = face.EmbeddingPermissions()
+	_ = face.Program()
 	_ = face.GlyphAdvances()
 
 	// Per glyph, past the end of the table as well: a count a font states and a
@@ -436,10 +439,11 @@ func useFace(face *Face) {
 		_ = face.GlyphCode(gid)
 		_, _, _ = face.HalfWidthTrim(gid)
 	}
-	for _, r := range []rune{'a', 0x0628, 0x0915, 0x1B13, 0x10FFFF} {
+	for _, r := range []rune{'a', 0x0628, 0x0915, 0x1B13, 0x2011, 0x3000, 0x10FFFF} {
 		_, _ = face.GlyphID(r)
 		_, _ = face.Advance(r)
 		_, _ = face.GlyphIDForTest(r)
+		_ = face.StandsIn(r)
 	}
 
 	clone := face.Clone()

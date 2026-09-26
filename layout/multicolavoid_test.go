@@ -240,37 +240,118 @@ func TestTheEndOfTheContentIsAlwaysABreak(t *testing.T) {
 	}
 }
 
-// TestAvoidZonesAreLinearInTheContent is the cost of the three questions the
-// pour asks: the zones collected from the laid-out content, the breakpoints
-// they leave, and where a column may end, asked once per column. Every box may
-// ask to be kept whole, so none of it may be the breakpoints times the boxes.
-// Measured on the machinery alone, over content laid out once, because at these
-// sizes the layout around it would hide a quadratic term; the boxes are held
-// apart by a margin so that their zones stay separate rather than merging into
-// one.
+// TestAvoidZonesAreLinearInTheContent is the cost of the questions the pour
+// asks of the zones. Every box may ask to be kept whole, so none of it may be
+// the breakpoints times the boxes.
+//
+// Two shapes, because the questions are of two kinds.
+//
+// Where a column may end — forbids and lastAllowed — is asked once per column,
+// and each answer is a search. The defect those guard is a *question* that
+// costs the content: a zone looked for by walking the zones. So what is
+// measured is a fixed number of questions, spread evenly down the content,
+// against a sixteenth of the boxes and against all of them. A search is a
+// comparison more for every doubling, so the questions cost a little more at
+// the larger size and nothing like sixteen times; a walk costs sixteen times.
+// Eight is a factor of two from each.
+//
+// It was the whole pour's questions at n boxes against 4n, which put the
+// searches' cost in with the number of them, and that is a ratio of four with
+// nothing to spare on either side: a search over a thousand zones took twice
+// what one over two hundred and fifty did here although it made two more
+// comparisons, because a processor learns the branches of the smaller search,
+// and the same linear work read 9.8 and 10.2 on GitHub runners. A fixed number
+// of questions leaves the searches' own growth as the whole of the fixed
+// code's ratio, which is a factor of two or three, however the machine takes
+// it.
+//
+// The breakpoints the zones leave — allowed — is one walk of the breakpoints
+// beside the zones, and there is no question in it to hold fixed: every
+// breakpoint is asked about, and the answer to each carries the place in the
+// zones to the next. That is measured as the curve it is, four times the boxes
+// against once, and it is a walk down two sorted lists, which reads the same on
+// every cache.
+//
+// The breakpoints and the zones are collected from content laid out once,
+// before anything is timed. The collection is one walk of the content, and a
+// fixture of sibling boxes one level deep could not show it walking anything
+// twice. The boxes are held apart by a margin so that their zones stay
+// separate rather than merging into one.
 func TestAvoidZonesAreLinearInTheContent(t *testing.T) {
-	content := func(n int) *Fragment {
-		doc := `<div id="d">` + strings.Repeat(`<div class="k">a<br>b<br>c</div>`, n) + `</div>`
-		return find(t, layoutOf(t, 400, doc, colCSS+`.k { break-inside: avoid; margin-bottom: 10px }`), "d")
+	type pour struct {
+		breaks []style.Unit
+		z      *avoidZones
 	}
-	ask := func(f *Fragment) func() {
+	made := map[int]pour{}
+	content := func(n int) pour {
+		if p, ok := made[n]; ok {
+			return p
+		}
+		doc := `<div id="d">` + strings.Repeat(`<div class="k">a<br>b<br>c</div>`, n) + `</div>`
+		f := find(t, layoutOf(t, 400, doc, colCSS+`.k { break-inside: avoid; margin-bottom: 10px }`), "d")
+		breaks := sortedBreaks(columnBreaks(f, 0, nil))
+		z := avoidZonesOf(f, func(b *Box) bool { _, ok := columnCount(b); return ok })
+		if z == nil || len(z.zones) != n {
+			t.Fatalf("%d boxes asking not to be broken made zones %v; want %d", n, z, n)
+		}
+		z.allowed(breaks, nil)
+		made[n] = pour{breaks, z}
+		return made[n]
+	}
+
+	// The questions: the same number of them at either size, each where a
+	// column of the content's height divided that many ways would end.
+	const questions = 512
+	ask := func(n int) func() {
+		p := content(n)
+		end := p.breaks[len(p.breaks)-1]
+		step := end.Div(questions)
+		ys := make([]style.Unit, questions)
+		forbidden := 0
+		for i := range ys {
+			ys[i] = step.Mul(float64(i + 1))
+			if p.z.forbids(ys[i]) {
+				forbidden++
+			}
+		}
+		// Most of them fall inside a box, which is what makes lastAllowed
+		// search rather than stop: a fixture whose questions all fell between
+		// boxes would be timing nothing.
+		if forbidden < questions/2 {
+			t.Fatalf("%d of %d questions fell inside a zone; the fixture is meant "+
+				"to put most of them there", forbidden, questions)
+		}
 		return func() {
-			breaks := sortedBreaks(columnBreaks(f, 0, nil))
-			z := avoidZonesOf(f, func(b *Box) bool { _, ok := columnCount(b); return ok })
-			allowed := z.allowed(breaks, nil)
-			step := upx(t, 50)
-			for start := style.Unit(0); start < allowed[len(allowed)-1]; start = start.Add(step) {
-				if z.forbids(start.Add(step)) {
-					z.lastAllowed(start, start.Add(step))
+			for _, y := range ys {
+				if p.z.forbids(y) {
+					p.z.lastAllowed(y.Sub(step), y)
 				}
 			}
 		}
 	}
-	small, large := content(500), content(2000)
-	c := costtest.Time(t, "the avoid zones of n boxes", ask(small), ask(large))
+	const small, large = 1000, 16 * 1000
+	c := costtest.Time(t, "a fixed number of questions of n zones and 16n",
+		ask(small), ask(large))
 	if c.Ratio > 8 {
-		t.Errorf("four times the boxes took %.1f times as long (%v against %v); "+
-			"linear is about four", c.Ratio, c.Large, c.Small)
+		t.Errorf("%d questions of %d zones took %.1f times as long as of %d (%v "+
+			"against %v); a search is a comparison more for every doubling, and "+
+			"a walk of the zones is sixteen", questions, large, c.Ratio, small,
+			c.Large, c.Small)
+	}
+
+	// The breakpoints the zones leave, as the curve it is.
+	leave := func(n int) func() {
+		p := content(n)
+		// A zones value of its own, because allowed keeps what it found and
+		// the questions above read that.
+		z := *p.z
+		return func() { z.allowed(p.breaks, nil) }
+	}
+	c = costtest.Time(t, "the breakpoints n zones leave", leave(small), leave(4*small))
+	if c.Ratio > 8 {
+		t.Errorf("four times the boxes took %.1f times as long to find the "+
+			"breakpoints they leave (%v against %v); linear is about four",
+			c.Ratio, c.Large, c.Small)
 	}
 }
 
@@ -336,4 +417,99 @@ func TestABreakInsideAvoidInsideANestedMulticolIsHonoured(t *testing.T) {
 			"fixture needs the outer column to end through it", len(got), got)
 	}
 	wantPlaced(t, "with it", doc, css+`#k { break-inside: avoid }`, "in", [2]float64{100, 0})
+}
+
+// TestAnAvoidBetweenTwoBoxesInOneInnerColumnIsHonouredOutside. Two children
+// of a nested multicol container that its pour left in one column are one
+// sequence down that column, and an outer column ending between them separates
+// them as surely as an inner one would. "break-before: avoid" on the second
+// was honoured by the inner pour and not by the outer, which could not tell
+// which children shared a column.
+//
+// Four two-line children balance into two inner columns of two, #x over #y in
+// the first. The outer 40px column ends between them; with the declaration it
+// ends a line earlier, through #x, and #y begins the outer second column a
+// line down — and, that column ending at 60, is cut there in turn, its second
+// line in the overflow column after it. (The break between the two children of
+// the other inner column is at the same height, 40, and an avoid there would
+// move the cut too: the outer cut goes through both inner columns at once.)
+func TestAnAvoidBetweenTwoBoxesInOneInnerColumnIsHonouredOutside(t *testing.T) {
+	const doc = `<div id="d"><div id="in"><div id="x">a<br>b</div><div id="y">c<br>d</div>` +
+		`<div>e<br>f</div><div>g<br>h</div></div></div>`
+	css := colCSS + `#d { column-count: 2; column-fill: auto; height: 40px }
+		#in { column-count: 2 }`
+	wantPlaced(t, "without the declaration", doc, css, "y", [2]float64{100, 0})
+	wantPlaced(t, "break-before: avoid", doc, css+`#y { break-before: avoid }`,
+		"y", [2]float64{100, 20}, [2]float64{200, 0})
+	wantPlaced(t, "break-after: avoid", doc, css+`#x { break-after: avoid }`,
+		"y", [2]float64{100, 20}, [2]float64{200, 0})
+}
+
+// TestAnAvoidInsideAnUnpouredNestedMulticolIsHonouredOutside. A nested
+// container in one column is not poured, and its children are one flow: the
+// avoid between #x and #y holds against the outer cut the same way.
+func TestAnAvoidInsideAnUnpouredNestedMulticolIsHonouredOutside(t *testing.T) {
+	const doc = `<div id="d"><div id="in"><div id="x">a<br>b</div><div id="y">c<br>d</div>` +
+		`<div>e<br>f</div></div></div>`
+	css := colCSS + `#d { column-count: 2; column-fill: auto; height: 40px }
+		#in { column-count: 1 }`
+	wantPlaced(t, "without the declaration", doc, css, "y", [2]float64{100, 0})
+	wantPlaced(t, "with it", doc, css+`#y { break-before: avoid }`, "y",
+		[2]float64{100, 20}, [2]float64{200, 0})
+}
+
+// TestAnAvoidInsideARefusedNestedMulticolIsHonouredOutside. A nested container
+// whose pour is refused is laid out again in one column, and its children are
+// one flow like any block's. The inner forced breaks ask for three columns of
+// two, and with no overflow columns allowed the inner pour is refused; the
+// outer one, which needs none, is not. The outer 60px column ends between #y
+// and #z; "break-after: avoid" on #y moves it a line up, between #x and #y.
+func TestAnAvoidInsideARefusedNestedMulticolIsHonouredOutside(t *testing.T) {
+	defer func(n int) { maxOverflowColumns = n }(maxOverflowColumns)
+	maxOverflowColumns = 0
+	const doc = `<div id="d"><div>p</div><div id="in"><div id="x">a</div>` +
+		`<div id="y">b</div><div id="z">c</div></div></div>`
+	css := colCSS + `#d { column-count: 2; column-fill: auto; height: 60px }
+		#in { column-count: 2 } #y, #z { break-before: column }`
+	got := Compose(Input{HTML: doc, CSS: []Stylesheet{{Source: css}}}, Options{})
+	refused := false
+	for _, f := range got.Findings {
+		if strings.Contains(f.Message, "asked for 2 columns and was laid out in one") &&
+			strings.Contains(f.Path, "in") {
+			refused = true
+		}
+	}
+	if !refused {
+		t.Fatalf("the fixture needs the inner pour refused: %v", got.Findings)
+	}
+	wantPlaced(t, "without the declaration", doc, css, "z", [2]float64{100, 0})
+	wantPlaced(t, "with it", doc, css+`#y { break-after: avoid }`, "z", [2]float64{100, 20})
+	wantPlaced(t, "with it, the box it holds back", doc, css+`#y { break-after: avoid }`,
+		"y", [2]float64{100, 0})
+}
+
+// TestNestedAvoidZonesAreLinearInTheContent is the cost of reading the inner
+// columns: one pass over a nested container's children, grouping each run of
+// one column, whatever their number.
+func TestNestedAvoidZonesAreLinearInTheContent(t *testing.T) {
+	content := func(n int) *Fragment {
+		doc := `<div id="d"><div id="in">` + strings.Repeat(`<div class="k">a</div>`, n) +
+			`</div></div>`
+		return find(t, layoutOf(t, 400, doc, colCSS+
+			`#in { column-count: 4 } .k { break-before: avoid; margin-bottom: 10px }`), "d")
+	}
+	ask := func(f *Fragment) func() {
+		return func() {
+			avoidZonesOf(f, func(b *Box) bool { _, ok := columnCount(b); return ok })
+		}
+	}
+	small, large := content(500), content(2000)
+	if z := avoidZonesOf(small, func(b *Box) bool { _, ok := columnCount(b); return ok }); z == nil {
+		t.Fatal("the fixture drew no zones, so this measures nothing")
+	}
+	c := costtest.Time(t, "the avoid zones of a nested container of n boxes", ask(small), ask(large))
+	if c.Ratio > 8 {
+		t.Errorf("four times the boxes took %.1f times as long (%v against %v); "+
+			"linear is about four", c.Ratio, c.Large, c.Small)
+	}
 }

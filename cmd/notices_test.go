@@ -154,7 +154,9 @@ func trackedFiles(t *testing.T) []string {
 }
 
 // keptThirdParty reports whether a kept file is one somebody else made: a font
-// or a binary blob, which this repository does not write. The data files other
+// or a binary blob, which this repository does not write — but for the three
+// faces testdata/harfbuzz/vertical_fixture.py builds, which are listed all the
+// same, as their own entry says. The data files other
 // people publish are fetched at a pin rather than kept — testdata/ms-use's
 // three were the last, and are fetched from HarfBuzz now — so a table made
 // from one is covered by the table's entry.
@@ -203,8 +205,9 @@ func TestEveryThirdPartyFileHasANotice(t *testing.T) {
 				"names it", f, noticesFile)
 		}
 	}
-	// Nine: seven fonts, a second build of one of them, and Brotli's dictionary.
-	if kept < 9 {
+	// Twelve: seven fonts, a second build of one of them, the three the
+	// vertical oracle builds, and Brotli's dictionary.
+	if kept < 12 {
 		t.Fatalf("only %d kept third-party files were found; this has stopped looking", kept)
 	}
 }

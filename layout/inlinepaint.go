@@ -74,7 +74,11 @@ import (
 //
 // Only a box with something to draw is counted, which is what keeps an ordinary
 // document at zero — see paintedInlines. The cap is what holds the document that
-// draws on every one of them.
+// draws on every one of them. A link counts as something to draw, because its
+// fragments are made by the same slicing and a document of <a> nested in <a> —
+// which XHTML's parser, unlike HTML's, does not undo — is the same product.
+// An ordinary document's links are one fragment per line each, a few thousand
+// on a page at the very most.
 //
 // 65536 is far past any real document. This engine lays out one page, so a
 // fragment per line of it with a hundred nested backgrounds is still an order of
@@ -281,8 +285,9 @@ func (d *inlineDecor) room(b *Box) bool {
 	if !d.l.inlineDecorCapped {
 		d.l.inlineDecorCapped = true
 		d.l.rec.Report(RuleLimit, AtHTML(offsetOf(b)),
-			"more inline boxes have a background or a border to paint, over more "+
-				"lines, than this engine will draw; the rest were left undrawn and "+
+			"more inline boxes have a background, a border or a link to paint, over "+
+				"more lines, than this engine will draw; the rest were left undrawn, "+
+				"a link among them is not in the display list there, and "+
 				"their text is unaffected")
 	}
 	return false
@@ -374,6 +379,19 @@ func (d *inlineDecor) finish(parent *Fragment) {
 			// at and this is the only rectangle it has.
 			Offset: d.l.inlineOffsets[b],
 		}
+		if b.link != nil {
+			// The link's area on this line, which is this fragment's border
+			// box. A copy, so that an <a> with a background as well, whose
+			// fragment is also a Boxes entry, is not moved twice by
+			// absolutise. See LineFragment.links.
+			lf := *frag
+			parent.Lines[p.line].links = append(parent.Lines[p.line].links, &lf)
+			if !d.l.inlinePaints(b) && !b.Position.positioned() {
+				// In the chain for its link and for nothing else: it has no
+				// ink, and a Boxes entry is ink to everything that reads one.
+				continue
+			}
+		}
 		parent.Lines[p.line].Boxes = append(parent.Lines[p.line].Boxes, frag)
 		if b.Position.positioned() {
 			// Recorded for §10.1: an absolutely positioned descendant of this
@@ -452,8 +470,8 @@ func further(a, b inlinePiece, right bool) bool {
 	return a.left < b.left
 }
 
-// inlineChain is the inline boxes an item sits inside that have something to
-// paint, outermost first.
+// inlineChain is the inline boxes an item sits inside that need a fragment on
+// its line — see paintedInlines — outermost first.
 func (l *layouter) inlineChain(item inlineItem) []*Box {
 	start := heldBox(item.Box)
 	if start == nil {
@@ -469,7 +487,8 @@ func (l *layouter) inlineChain(item inlineItem) []*Box {
 }
 
 // paintedInlines walks up from a box to the inline boxes around it, keeping the
-// ones with a background or a border.
+// ones with a background, a border or an outline, the positioned ones and the
+// links.
 //
 // The walk stops at the first ancestor that is not an inline box, which is the
 // block container whose lines these are — and at an atomic inline, which is a
@@ -521,13 +540,17 @@ func (l *layouter) paintedInlines(b *Box) []*Box {
 		case cur.Outer != OuterInline || cur.Replaced != nil || isAtomicInline(cur):
 			out = nil
 		case cur.IsText():
-		case l.inlinePaints(cur) || cur.Position.positioned():
+		case l.inlinePaints(cur) || cur.Position.positioned() || cur.link != nil:
 			// A *positioned* inline box is kept whether or not it draws
 			// anything, because §10.1 forms the containing block of an
 			// absolutely positioned descendant from the padding boxes of this
 			// box's own fragments — so the fragments have to exist. It paints
 			// nothing extra: a fragment with no background and no border draws
 			// nothing, exactly as it did when there was no fragment at all.
+			//
+			// A link is kept for the same reason: its fragments are the area
+			// the display list's Link covers. They go on the line's links and
+			// not on its Boxes unless the box has ink as well — see finish.
 			//
 			// A copy rather than an append in place, which would write into
 			// the spare room of the chain above, and so into a sibling's.

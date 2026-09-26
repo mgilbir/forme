@@ -173,16 +173,20 @@ func TestAnInputTypeIsAKeywordAsWritten(t *testing.T) {
 }
 
 // TestAGridAreaNameHoldsWhatIsNotCSSWhiteSpace. CSS Grid §7.3 tokenizes a
-// grid-template-areas string into names made of ident code points, separated
-// by white space, and a no-break space or an em space is an ident code point:
-// "a\u2003b c" is two cells, one named "a\u2003b", and not three. Split by
-// Unicode's white space the row had a third column, and the item named c was
-// placed in it with nothing said.
+// grid-template-areas string into names made of ident code points, null cells
+// and trash, and white space separates them only where it is CSS's. Split by
+// Unicode's white space, "a\u2003b c" had a third column, and the item named c
+// was placed in it with nothing said.
 //
-// What the engine does with the two cells is not this test's question. It
-// reads area names in ASCII only (isAreaName), so it refuses the template and
-// reports it, which is a gap of its own; the assertion is only that c is not
-// in the third column a split would have made.
+// What the other characters make is not this test's question, and they do not
+// all make the same thing: a byte order mark is an ident code point, so
+// "a\ufeffb c" is two cells and c is in the second column, while a no-break
+// space, an em space and an ideographic space are not ident code points
+// either, so each is a trash token, the template is invalid, and the grid is
+// refused and reported (see TestAGridAreaIsNamedByIdentCodePoints). This test
+// said all four were ident code points, which CSS Syntax's list no longer
+// makes true. The assertion is only that c is not in the third column a split
+// would have made.
 func TestAGridAreaNameHoldsWhatIsNotCSSWhiteSpace(t *testing.T) {
 	xOfC := func(row string) style.Unit {
 		root := layoutOf(t, 600, `<div style="display: grid; grid-template-columns: 50px 50px; grid-template-areas: '`+row+`'">`+

@@ -36,7 +36,7 @@ func Example() {
 	_ = origin
 	_ = out.Scale
 
-	var texts, fills, images, tiles int
+	var texts, fills, images, tiles, links int
 	for _, op := range out.Ops {
 		switch op.(type) {
 		case layout.DrawText: // op.Text, op.Face, op.Size, op.At, op.RTL …
@@ -47,8 +47,10 @@ func Example() {
 			images++
 		case layout.TileImage: // op.Image, op.Clip, op.Tile — a repeated background
 			tiles++
+		case layout.Link: // op.Rects, op.Href — a hyperlink's areas; draws nothing
+			links++
 		}
 	}
-	fmt.Println(texts > 0, fills, images, tiles)
-	// Output: true 0 0 0
+	fmt.Println(texts > 0, fills, images, tiles, links)
+	// Output: true 0 0 0 0
 }

@@ -39,6 +39,7 @@ for _, op := range out.Ops {
     case layout.FillRect:  // op.Rect, op.Color
     case layout.DrawImage: // op.Image, op.Rect
     case layout.TileImage: // op.Image, op.Clip, op.Tile — a repeated background
+    case layout.Link:      // op.Rects, op.Href — a hyperlink's areas; draws nothing
     }
 }
 ```

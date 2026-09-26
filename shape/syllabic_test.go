@@ -65,15 +65,15 @@ func TestKhmerAndMyanmarAreFullyDecomposedLikeIndic(t *testing.T) {
 	// the font's coverage and the face has this one whole; decomposed out on
 	// the syllabic path, which takes everything apart and composes again only
 	// where the text wrote a mark.
-	if out, _ := f.normalize([]rune{composed}, []int{0}, false, false, false); len(out) != 1 || out[0] != composed {
+	if out, _ := f.normalize([]rune{composed}, []int{0}, normalization{}); len(out) != 1 || out[0] != composed {
 		t.Errorf("general path: composed input gave %U, want it left composed", out)
 	}
-	if out, _ := f.normalize([]rune{composed}, []int{0}, true, false, false); len(out) != 2 || out[0] != 'e' || out[1] != 0x0301 {
+	if out, _ := f.normalize([]rune{composed}, []int{0}, normalization{syllabic: true}); len(out) != 2 || out[0] != 'e' || out[1] != 0x0301 {
 		t.Errorf("syllabic path: composed input gave %U, want it taken apart and left so", out)
 	}
 	// Decomposed in, composed out — on both paths, since the face can draw it.
 	for _, syllabic := range []bool{false, true} {
-		out, _ := f.normalize([]rune{'e', 0x0301}, []int{0, 1}, syllabic, false, false)
+		out, _ := f.normalize([]rune{'e', 0x0301}, []int{0, 1}, normalization{syllabic: syllabic})
 		if len(out) != 1 || out[0] != composed {
 			t.Errorf("syllabic=%v: decomposed input gave %U, want it recomposed", syllabic, out)
 		}

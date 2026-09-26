@@ -483,8 +483,8 @@ func (l *layouter) refusesToFlex(b *Box) string {
 // asked to be, or the empty string if it can.
 //
 // Two of §6.2's keywords are missing here and one of them only sometimes. "last
-// baseline" aligns the *bottom* line of an item's text, which is a second
-// baseline this engine does not find; the overflow keywords "safe" and "unsafe"
+// baseline" aligns the *bottom* line of an item's text, which a grid aligns by
+// (see layout/grid.go) and a flex line does not yet; the overflow keywords "safe" and "unsafe"
 // are a second answer to what happens when an item does not fit, and this file
 // has one already.
 //
@@ -1229,6 +1229,9 @@ const (
 	crossEnd
 	crossCenter
 	crossBaseline
+	// crossLastBaseline is "last baseline", which a grid aligns its items by
+	// and a flex container refuses; see refusesAlignment.
+	crossLastBaseline
 )
 
 // justifyOf reads justify-content, whose initial value "normal" behaves as

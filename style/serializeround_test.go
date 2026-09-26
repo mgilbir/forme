@@ -186,3 +186,32 @@ func sketch(vals []css.ComponentValue) string {
 	b.WriteByte(']')
 	return b.String()
 }
+
+// TestANameKeepsWhatItsEscapesMade. CSS Syntax takes a listed set of code
+// points above U+007F into a name, and not every one: a no-break space, an em
+// space and an ideographic space are not in it, so each ends a name unless it
+// is escaped. serialize wrote every code point above U+007F bare, which is
+// CSSOM's older rule, and "x\a0y" — one identifier — came back as "x", a
+// delimiter and "y". An identifier, a hash, a function name and a unit are the
+// four places a name is written back. U+FEFF and U+00E9 are in the set, and
+// are written bare and come back the same.
+func TestANameKeepsWhatItsEscapesMade(t *testing.T) {
+	for _, input := range []string{
+		`x\a0y`, `a\2003 b`, `\3000`, `#p\a0q`, `#\a0`, `f\a0g(1)`, `1x\a0y`,
+		`x\feff y`, `\e9t\e9`, `mid\b7 dot`,
+	} {
+		vals, _ := css.ParseComponentValues(input)
+		text := serialize(vals)
+		again, _ := css.ParseComponentValues(text)
+		if diff := valuesDiffer(trimEnds(vals), trimEnds(again)); diff != "" {
+			t.Errorf("input %q serialized %q: %s", input, text, diff)
+		}
+	}
+	// And the bare ones stay bare: an escape where none is needed is correct,
+	// but it is not what CSSOM writes, and it is what a reader of a computed
+	// value sees.
+	vals, _ := css.ParseComponentValues(`\e9t\e9`)
+	if got := serialize(vals); got != "été" {
+		t.Errorf(`\e9t\e9 serialized as %q, want "été"`, got)
+	}
+}

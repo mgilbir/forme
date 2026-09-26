@@ -80,6 +80,8 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `*.expected.txt` | glyph, advance and offset for each, in font units |
 | `*.dflt.expected.txt` | the same for the Javanese, Balinese and Tibetan corpora shaped in `und-x-hbscdflt` — see below |
 | `difffuzz.py` | generates text instead of listing it — see below |
+| `vertical.py`, `vertical.txt`, `vertical_features.txt`, `vertical.expected.txt` | text set upright, top to bottom — see below |
+| `vertical_fixture.py`, `fonts/Vertical*.ttf` | the three faces that oracle needs and no foundry made |
 
 Each corpus is weighted towards the places shaping decides something rather than
 towards realistic prose. Prose exercises one path many times; a grid exercises
@@ -127,6 +129,30 @@ tag as a fourth argument and records it, and
 Javanese, Balinese and Tibetan corpora, whose answers under it differ from the script models' in 630,
 404 and 1,324 strings. Khmer's font answers the same either way and is not
 repeated.
+
+## Upright text
+
+A run set upright down the page — `text-orientation: upright` — is shaped with
+`Features.Vertical`, which is HarfBuzz's top-to-bottom direction: 'vert' in
+place of the horizontal features, each glyph's vertical advance, and the point
+it is hung from. `vertical.py` shapes `vertical.txt` both ways and
+`vertical_features.txt` top to bottom with the feature each line asks for, over
+nine faces, and asks HarfBuzz directly for a sample of each face's vertical
+metrics; `shape/vertical_test.go` holds the package to all of it.
+
+Four of the faces are in the corpora (`make notocjk noto-fonts`). Three are
+built by `vertical_fixture.py`, because no real face at hand exercises the
+rules they do: a composite taking its origin from a component, the positioning
+that moves glyphs down the page, the marks and spaces of a face with no vertical
+metrics and no positioning. They are generated, carry no licence of their own,
+and rebuild to the same bytes.
+
+One exception is listed, in `inkUnread`: a CFF face with no VORG is hung by its
+ink in HarfBuzz, and this package does not read a CFF glyph's ink, so Unifont's
+origins are asserted to be its ascender instead. Everything else about its
+glyphs is compared. The exception fails if it stops being needed.
+
+`make hbvertical` regenerates it.
 
 ## Why two scripts for one engine
 

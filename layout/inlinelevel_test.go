@@ -450,12 +450,16 @@ func TestInlineLevelsCostTheMarks(t *testing.T) {
 			return `<p><span class="r">` + strings.Repeat(`<i>w `, n) + "</p>"
 		}, 50},
 	} {
-		at := func(n int) *Fragment {
-			return layoutOf(t, 400, c.doc(n), noDefaults+`.r { position: relative; z-index: 1 }`)
+		// Timed through costtest.TimeCopies, over four documents at the
+		// smaller size: painting reads the laid-out tree, and with memory
+		// being streamed on the machine's other cores a cache that held the
+		// smaller tree and not the larger read the linear paint as 8.0.
+		paint := func(n int) func() {
+			f := layoutOf(t, 400, c.doc(n), noDefaults+`.r { position: relative; z-index: 1 }`)
+			return func() { Paint(f) }
 		}
-		small, large := at(c.n), at(4*c.n)
-		r := costtest.Time(t, "painting spans "+c.what,
-			func() { Paint(small) }, func() { Paint(large) })
+		r := costtest.TimeCopies(t, "painting spans "+c.what,
+			func(int) func() { return paint(c.n) }, paint(4*c.n))
 		if r.Ratio > 8 {
 			t.Errorf("%s: four times the spans took %.1f times as long to paint; "+
 				"linear is about 4 and quadratic about 16", c.what, r.Ratio)

@@ -186,6 +186,19 @@ type Carried struct {
 	// for the rules that need to know there is any text in front of this at all.
 	// It is zero at the start of a paragraph and nowhere else.
 	Prev rune
+	// PrevBase is the last *base* character before the boundary: Prev with the
+	// marks and the invisibles stepped over, which is what the rules stated over
+	// typographic character units read — see prevBase in SplitAtBreaksAfter. It
+	// is zero at the start of a paragraph, and where nothing before the boundary
+	// has a base.
+	//
+	// Prev cannot stand in for it where Prev is a mark, and a box's text may end
+	// in one. "aࠩ踢" under keep-all has an opportunity in front of the
+	// ideograph that the value demotes rather than removes, because the letter
+	// unit in front of it is the "a" and not its mark; written
+	// "<span>aࠩ</span><span>踢</span>" the scan of the second box saw only the
+	// mark, found no letter unit, and the line could not break there at all.
+	PrevBase rune
 	// Before is the text in front of this one, for the scripts whose words are
 	// found with a dictionary rather than by a rule.
 	//
@@ -356,11 +369,13 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	// asked by §8.1 about a gap where this asks by §5.1 about a break. The two
 	// gave different answers to it, which is why it is one function.
 	//
-	// Zero where the carried character is itself a mark or an invisible: this
-	// scan cannot see past the boundary to find the base, and the box on the
-	// other side of it answers the same question for itself. See
-	// layout/flatten.go's endsLetterUnit.
+	// Where the carried character is itself a mark or an invisible this scan
+	// cannot see past the boundary to find the base, so the text before says
+	// what it was. See Carried.PrevBase.
 	prevBase := prev
+	if !AutospaceBase(prevBase) {
+		prevBase = at.PrevBase
+	}
 	if !AutospaceBase(prevBase) {
 		prevBase = 0
 	}
@@ -437,6 +452,15 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 		i += size
 
 		atBoundary := clusters.Boundary(r)
+		// The first character's cluster boundary is a question about the text
+		// in front of it, which is in another box: the scanner starts here and
+		// calls every first character a boundary (GB1). The pair rules answer it
+		// from Prev. Without them an opportunity carried over the boundary cut
+		// a syllable whose jamo were written in two boxes — and, as it always
+		// had, an ideograph from a combining mark in the next box.
+		if start == 0 && at.Prev != 0 {
+			atBoundary = !clusterContinues(at.Prev, r)
+		}
 
 		// The opportunity that may fall before this character: one deferred from
 		// the character before, or — under break-all, CSS Text §5.2 — one at
@@ -492,8 +516,8 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 		// of its prohibition, below: the value relaxes, so what it forbids has
 		// to be *demoted* rather than deleted, and an opportunity deleted at
 		// this line could not be.
-		beforeIdeograph := IsIdeographic(r) && prevBase != 0 &&
-			!IsIdeographic(prevBase) && isLetterUnit(prevBase)
+		beforeIdeograph := BreaksLikeAnIdeograph(r) && prevBase != 0 &&
+			!BreaksLikeAnIdeograph(prevBase) && isLetterUnit(prevBase)
 		// And the same shape for the Brahmic scripts, which write without
 		// spaces and whose only opportunity is the boundary between two aksara
 		// clusters. See isAksara: LB28a is a set of prohibitions inside a
@@ -839,14 +863,26 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 			emit(Piece{Text: text[start:i], ZeroWidth: true})
 			breakNext = true
 
-		case IsIdeographic(r):
+		case BreaksLikeAnIdeograph(r):
 			// CJK breaks between ideographs, which is why it needs no spaces.
 			//
 			// The opportunity after it is deferred rather than taken, because a
 			// Hangul syllable can be followed by a trailing jamo that belongs to
 			// it and by a combining mark that belongs to it, and neither is a
 			// place a line may end. The next character's boundary decides.
-			flush()
+			//
+			// That is also what makes a syllable spelt in jamo break as a
+			// precomposed one does: every jamo offers the opportunity, and the
+			// grapheme boundary takes it only where one syllable ends and the
+			// next begins. See BreaksLikeAnIdeograph.
+			//
+			// And the piece is cut where the cluster is, for the same reason: a
+			// piece is what a line is built of, and one that began inside a
+			// syllable would carry part of one typographic character unit — a
+			// run of its own, spaced by letter-spacing as a unit of its own.
+			if atBoundary {
+				flush()
+			}
 			cur.WriteRune(r)
 			deferBreak = true
 
@@ -1182,6 +1218,62 @@ func spaceFollows(r rune) bool {
 // was one unbreakable run and overflowed its box — which is what §5.1 forbids
 // outright.
 func IsIdeographic(r rune) bool { return inLineBreakRanges(r, ideographicRanges[:]) }
+
+// clusterContinues reports whether r continues the grapheme cluster prev is the
+// last character of, as far as the two characters alone decide it: UAX #29's
+// GB3 to GB9b, in their order. GB3, GB4 and GB5 put a boundary round a
+// control; GB6, GB7 and GB8 hold a Hangul syllable together; GB9, GB9a and
+// GB9b hold a mark, a joiner and a spacing mark to what precedes them and a
+// prepended character to what follows it.
+//
+// The rules after those — GB9c's conjuncts, GB11's emoji sequences and the
+// regional indicator pairs of GB12 and GB13 — are decided by more of the text
+// than one character, and are answered as a boundary here, which is what the
+// scan answered before it asked this at all.
+func clusterContinues(prev, r rune) bool {
+	p, c := segment.BreakOf(prev), segment.BreakOf(r)
+	switch {
+	case p == segment.CR && c == segment.LF:
+		return true
+	case p == segment.Control || p == segment.CR || p == segment.LF,
+		c == segment.Control || c == segment.CR || c == segment.LF:
+		return false
+	case p == segment.HangulL && (c == segment.HangulL || c == segment.HangulV ||
+		c == segment.HangulLV || c == segment.HangulLVT):
+		return true
+	case (p == segment.HangulLV || p == segment.HangulV) &&
+		(c == segment.HangulV || c == segment.HangulT):
+		return true
+	case (p == segment.HangulLVT || p == segment.HangulT) && c == segment.HangulT:
+		return true
+	case c == segment.Extend || c == segment.ZWJ || c == segment.SpacingMark:
+		return true
+	case p == segment.Prepend:
+		return true
+	}
+	return false
+}
+
+// BreaksLikeAnIdeograph reports whether a rune takes part in the ideograph's
+// line breaking: IsIdeographic, and the Hangul conjoining jamo.
+//
+// The jamo are UAX #14's JL, JV and JT, a syllable spelt in its letters. Between
+// syllables they break as the precomposed syllables H2 and H3 do — LB31 allows
+// it, and LB27 keeps them to a postfix and a prefix as LB23a keeps ID — and
+// inside one LB26 forbids it. LB26 is GB6, GB7 and GB8 class for class, so a
+// syllable is a grapheme cluster and the scan's cluster boundary is the
+// syllable boundary: an opportunity offered after every jamo is taken only
+// where a syllable ends. keep-all and normal treat them as they treat the
+// syllables, because the jamo are letters as the syllables are.
+//
+// Without them "각각" spelt in six jamo had no opportunity in it at all, where
+// the same two syllables precomposed had one. It is a separate predicate from
+// IsIdeographic because that one is asked other questions — whether a line is
+// justified between its characters — that are about characters and not about
+// where a syllable ends.
+func BreaksLikeAnIdeograph(r rune) bool {
+	return IsIdeographic(r) || inLineBreakRanges(r, jamoRanges[:])
+}
 
 // NeedsFollowingCharacter reports whether the scan's answer for a text ending in
 // r depends on the character after it.

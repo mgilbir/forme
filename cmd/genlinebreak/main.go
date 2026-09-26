@@ -223,10 +223,9 @@ var dictionaryClasses = map[string]bool{"SA": true}
 // syllables, which wrap the same way and which no reader of this table would
 // think to look for under "ideographic".
 //
-// The conjoining jamo are deliberately not here. LB26 forbids a break inside a
-// jamo sequence and nothing in this package would know to withdraw one, so a
-// syllable spelt in jamo keeps the single opportunity its first character
-// offers rather than gaining one between every piece of it.
+// The conjoining jamo are not here but in jamoClasses: they break like an
+// ideograph only between syllables, and a table that said they break like one
+// everywhere would be read by callers that do not ask where the syllable ends.
 //
 // It replaces six ranges typed out by hand — the two main CJK blocks, the
 // compatibility ideographs, kana, Hangul syllables, and everything from
@@ -235,6 +234,24 @@ var dictionaryClasses = map[string]bool{"SA": true}
 // numerals are all class ID and were in none of them, so none of them wrapped
 // at all.
 var ideographicClasses = map[string]bool{"ID": true, "CJ": true, "H2": true, "H3": true}
+
+// jamoClasses is the Hangul conjoining jamo, UAX #14's JL, JV and JT: a
+// syllable spelt in the letters it is made of rather than as one precomposed
+// character.
+//
+// Outside a syllable they break as the syllables H2 and H3 do. LB26 and LB27
+// are the only rules that name them, and LB27 gives them what LB23a gives ID;
+// between two syllables LB31 allows the break, as it does between two
+// precomposed ones. Inside a syllable LB26 forbids it: JL × (JL | JV | H2 | H3),
+// (JV | H2) × (JV | JT), (JT | H3) × JT. Those are UAX #29's GB6, GB7 and GB8
+// class for class, so the syllable is a grapheme cluster, and SplitAtBreaks
+// never cuts inside one — which is what lets these share the ideograph's
+// opportunity without offering one between the pieces of a syllable.
+//
+// They were once deliberately left out of ideographicClasses for want of that,
+// and a paragraph of syllables spelt in jamo then had no opportunity in it at
+// all.
+var jamoClasses = map[string]bool{"JL": true, "JV": true, "JT": true}
 
 // prefixClasses is the class a line may end after under "loose" and no other
 // value: a currency sign or a number sign that belongs to the figure following
@@ -282,7 +299,7 @@ func main() {
 	defer f.Close()
 
 	var spans, glue, strict, loose, prefix, postfix, inseparable, open, after, aksara, dict []span
-	var ideographic []span
+	var ideographic, jamo []span
 	seen := map[string]bool{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -338,6 +355,9 @@ func main() {
 		if ideographicClasses[class] {
 			ideographic = append(ideographic, span{lo, hi, class})
 		}
+		if jamoClasses[class] {
+			jamo = append(jamo, span{lo, hi, class})
+		}
 		if inseparableClasses[class] {
 			inseparable = append(inseparable, span{lo, hi, class})
 		}
@@ -373,7 +393,7 @@ func main() {
 	}
 	for _, set := range []map[string]bool{looseBreakClasses, prefixClasses, postfixClasses,
 		inseparableClasses, openClasses, breakAfterClasses, aksaraClasses,
-		dictionaryClasses, ideographicClasses} {
+		dictionaryClasses, ideographicClasses, jamoClasses} {
 		for class := range set {
 			if !seen[class] {
 				fmt.Fprintf(os.Stderr, "genlinebreak: no character has class %s; has it been renamed?\n", class)
@@ -455,6 +475,12 @@ package paragraph
 //
 // See ideographicClasses in cmd/genlinebreak for what is deliberately left
 // out, and for the six hand-typed ranges this replaces.`, *version)
+	emit(&w, "jamoRanges", jamo, `// The Hangul conjoining jamo, UAX #14's classes JL, JV and JT. Unicode %s.
+//
+// %d ranges, merged from %d the file states separately: %s.
+// They break as the Hangul syllables do, between one syllable and the next and
+// never inside one. See jamoClasses in cmd/genlinebreak for why the grapheme
+// cluster is what says where the syllable ends.`, *version)
 	emit(&w, "aksaraRanges", aksara, `// The characters an aksara cluster may begin with, UAX #14's classes AK and
 // AS. Unicode %s.
 //

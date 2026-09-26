@@ -240,11 +240,15 @@ func hasLegacyScrollBaseline(b *Box) bool {
 		overflowClipsContent(b.Style)
 }
 
-// containerFirstBaseline is the first baseline of a flex or grid container: the
-// baseline of the item its layout named, or firstBaseline's walk over the items
-// in the order they were placed — which for a flex container is its first
-// item on its first line.
+// containerFirstBaseline is the first baseline of a flex or grid container: a
+// grid's items' shared baseline where they have one (see gridSharedBaseline),
+// the baseline of the item its layout named, or firstBaseline's walk over the
+// items in the order they were placed — which for a flex container is its
+// first item on its first line.
 func containerFirstBaseline(f *Fragment) (style.Unit, bool) {
+	if f.hasGridBaseline {
+		return f.Border.Top.Add(f.Padding.Top).Add(f.gridBaseline), true
+	}
 	if i := f.baselineChild - 1; i >= 0 && i < len(f.Children) {
 		c := f.Children[i]
 		if v, ok := firstBaseline(c); ok {
@@ -870,6 +874,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	carried := paragraph.Carried{
 		Offered: in.BreakOpportunity, Deferred: in.AfterDeferred,
 		Held: in.AfterHeld, Taken: in.AfterTaken, Prev: in.AfterRune,
+		PrevBase:       in.AfterBase,
 		Before:         in.AfterText,
 		PhraseBefore:   in.AfterPhrase,
 		SpaceMayTakeIt: boundaryBreakSpaces,
@@ -1246,6 +1251,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// The state it had is handed in, because a piece of nothing but
 			// marks does not answer this and passes on what it was given.
 			AfterLetterUnit: endsLetterUnit(p.Text, state.AfterLetterUnit),
+			// And the base itself, for the scan of the next box, handed on the
+			// same way. See paragraph.Carried.PrevBase.
+			AfterBase: lastBaseOr(p.Text, state.AfterBase),
 		}
 	}
 	return out, inlineState{
@@ -1269,6 +1277,7 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		AfterText:       trailing.DictTail,
 		AfterPhrase:     trailing.PhraseTail,
 		AfterLetterUnit: state.AfterLetterUnit,
+		AfterBase:       state.AfterBase,
 		AfterBox:        b,
 	}
 }
@@ -1288,10 +1297,12 @@ func endsBinding(text string) bool {
 }
 
 // startsIdeographic reports whether a piece begins with an ideograph, which is a
-// character a line may begin with and may end in front of.
+// character a line may begin with and may end in front of — or with a Hangul
+// jamo, which breaks as one between syllables. See
+// paragraph.BreaksLikeAnIdeograph.
 func startsIdeographic(text string) bool {
 	r, _ := utf8.DecodeRuneInString(text)
-	return r != utf8.RuneError && paragraph.IsIdeographic(r)
+	return r != utf8.RuneError && paragraph.BreaksLikeAnIdeograph(r)
 }
 
 // endsLetterUnit reports whether the character before the next boundary is a
@@ -1322,7 +1333,17 @@ func endsLetterUnit(text string, was bool) bool {
 	if !ok {
 		return was
 	}
-	return paragraph.IsLetterUnit(r) && !paragraph.IsIdeographic(r)
+	return paragraph.IsLetterUnit(r) && !paragraph.BreaksLikeAnIdeograph(r)
+}
+
+// lastBaseOr is the last base character of text, or what it was given where the
+// text has none of its own — the same walk endsLetterUnit makes, answering with
+// the character rather than with a question about it.
+func lastBaseOr(text string, was rune) rune {
+	if r, ok := paragraph.LastAutospaceBase(text); ok {
+		return r
+	}
+	return was
 }
 
 // textItemArgs is what one text item is built from. It is a struct because the

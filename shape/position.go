@@ -1,6 +1,10 @@
 package shape
 
-import "github.com/mgilbir/forme/font"
+import (
+	"math/bits"
+
+	"github.com/mgilbir/forme/font"
+)
 
 // Positioning: kerning, single adjustments, joining glyphs to each other, and
 // attaching marks to what they belong to.
@@ -92,7 +96,8 @@ const (
 
 // cancelMarkWidths takes the advance off every mark, and with adjustOffsets
 // moves the offset with it, so that the mark is drawn where it would have been
-// and only the pen stops moving.
+// and only the pen stops moving. Both advances, as HarfBuzz cancels both: a
+// run set upright advances down the page.
 func (sh shaper) cancelMarkWidths(buf []Glyph, adjustOffsets bool) {
 	for i := range buf {
 		if !sh.l.isMark(buf[i]) {
@@ -100,8 +105,9 @@ func (sh shaper) cancelMarkWidths(buf []Glyph, adjustOffsets bool) {
 		}
 		if adjustOffsets {
 			buf[i].XOffset -= buf[i].XAdvance
+			buf[i].YOffset -= buf[i].YAdvance
 		}
-		buf[i].XAdvance = 0
+		buf[i].XAdvance, buf[i].YAdvance = 0, 0
 	}
 }
 
@@ -227,6 +233,16 @@ type gposPass struct {
 // attachment is resolved against where its target finally is.
 func (sh shaper) position(buf []Glyph, p *plan, model shaperModel) {
 	how := sh.positioningFor(p, model)
+	vertical := sh.features.Vertical
+	// A run set upright advances down the page and hangs each glyph from its
+	// vertical origin, before anything moves it. See vertical.go.
+	if vertical {
+		sh.f.setVertical(buf)
+	}
+	// The widths of the spaces the face's own space stands in for come first,
+	// as HarfBuzz sets them with the font's own advances: every rule below
+	// adjusts the width the separator has. See spacefallback.go.
+	sh.f.setStandInSpaces(buf, vertical)
 	pass := &gposPass{chain: make([]int, len(buf)), kind: make([]uint8, len(buf))}
 	sh.gp = pass
 	if how.zero && sh.zeroMarks == zeroMarksEarly {
@@ -237,7 +253,9 @@ func (sh shaper) position(buf []Glyph, p *plan, model shaperModel) {
 			sh.applyPositioningLookup(lk, buf)
 		}
 	}
-	if how.kern {
+	// The kern table's pairs are read from its horizontal subtables alone, and
+	// HarfBuzz applies none of those to a run set upright.
+	if how.kern && !vertical {
 		sh.applyLegacyKern(buf)
 	}
 	if how.zero && sh.zeroMarks == zeroMarksLate {
@@ -285,7 +303,9 @@ func (sh shaper) applyPositioningLookup(pl planLookup, buf []Glyph) {
 // two — which are final only now: a mark between a base and the mark stacked
 // on it may have had its advance cancelled since, and the stacked one is drawn
 // against a pen that did not move for it. A glyph cursively attached takes its
-// target's height, which is how a joined word climbs onto its strokes.
+// target's height, which is how a joined word climbs onto its strokes. In a
+// run set upright the line runs down the page, so "along" is the vertical
+// offset and "height" the horizontal one, as HarfBuzz swaps them.
 //
 // A target is resolved before anything that hangs from it, following the
 // chain as far as HarfBuzz follows it. The walk goes in the direction the run
@@ -307,8 +327,9 @@ func (sh shaper) propagate(buf []Glyph) {
 	// A letter carrying a long run of marks moves each of them back over the
 	// marks before it, and that stretch was read once per mark: "a" with
 	// sixteen thousand U+0301 after it climbed by 3.7 per doubling. A prefix
-	// sum answers each in constant time.
-	sums := advanceSums(buf)
+	// sum answers each in constant time. It sums the advances along the line,
+	// which for a run set upright are the vertical ones.
+	sums := advanceSums(buf, sh.features.Vertical)
 	if !sh.rtl {
 		for i := range buf {
 			if g.chain[i] != 0 {
@@ -340,45 +361,65 @@ func (sh shaper) propagateAt(buf []Glyph, sums []float64, i, nesting int) {
 	if g.chain[j] != 0 {
 		sh.propagateAt(buf, sums, j, nesting-1)
 	}
+	// Along the line and across it, which in a run set upright are the
+	// vertical axis and the horizontal one.
+	along, across := &buf[i].XOffset, &buf[i].YOffset
+	targetAlong, targetAcross := buf[j].XOffset, buf[j].YOffset
+	if sh.features.Vertical {
+		along, across = &buf[i].YOffset, &buf[i].XOffset
+		targetAlong, targetAcross = buf[j].YOffset, buf[j].XOffset
+	}
 	if kind == attachCursive {
-		buf[i].YOffset += buf[j].YOffset
+		*across += targetAcross
 		return
 	}
-	buf[i].XOffset += buf[j].XOffset
+	*along += targetAlong
 	switch {
 	case j < i && !sh.rtl:
-		buf[i].XOffset -= sums[i] - sums[j]
+		*along -= sums[i] - sums[j]
 	case j < i:
-		buf[i].XOffset += sums[i+1] - sums[j+1]
+		*along += sums[i+1] - sums[j+1]
 	case !sh.rtl:
-		buf[i].XOffset += sums[j] - sums[i]
+		*along += sums[j] - sums[i]
 	default:
-		buf[i].XOffset -= sums[j+1] - sums[i+1]
+		*along -= sums[j+1] - sums[i+1]
 	}
 }
 
-// advanceSums is the running total of the advances in buf, so that what stands
-// between any two glyphs is one subtraction.
-func advanceSums(buf []Glyph) []float64 {
+// advanceSums is the running total of the advances in buf along the line —
+// the vertical ones for a run set upright — so that what stands between any
+// two glyphs is one subtraction.
+func advanceSums(buf []Glyph, vertical bool) []float64 {
 	sums := make([]float64, len(buf)+1)
 	for k := range buf {
-		sums[k+1] = sums[k] + buf[k].XAdvance
+		advance := buf[k].XAdvance
+		if vertical {
+			advance = buf[k].YAdvance
+		}
+		sums[k+1] = sums[k] + advance
 	}
 	return sums
 }
 
-// crossOffset is the height a mark attached to the glyph at j takes from it:
+// crossOffset is the offset across the line a mark attached to the glyph at j
+// takes from it — the height, or for a run set upright the offset to the side:
 // its own offset, and that of every glyph it is cursively attached to, since
 // those are added to it only at the end. HarfBuzz's resolve_cross_offset.
 func (sh shaper) crossOffset(buf []Glyph, j int) float64 {
 	g := sh.gp
-	off := buf[j].YOffset
+	across := func(k int) float64 {
+		if sh.features.Vertical {
+			return buf[k].XOffset
+		}
+		return buf[k].YOffset
+	}
+	off := across(j)
 	for steps := 0; g.kind[j] == attachCursive && g.chain[j] != 0 && steps < len(buf); steps++ {
 		j += g.chain[j]
 		if j < 0 || j >= len(buf) {
 			break
 		}
-		off += buf[j].YOffset
+		off += across(j)
 	}
 	return off
 }
@@ -395,7 +436,12 @@ func (sh shaper) crossOffset(buf []Glyph, j int) float64 {
 // a later lookup's does in HarfBuzz.
 func (sh shaper) placeMark(buf []Glyph, i, j int, mark, base anchor) {
 	buf[i].XOffset = sh.f.scale(base.x - mark.x)
-	buf[i].YOffset = sh.f.scale(base.y-mark.y) + sh.crossOffset(buf, j)
+	buf[i].YOffset = sh.f.scale(base.y - mark.y)
+	if sh.features.Vertical {
+		buf[i].XOffset += sh.crossOffset(buf, j)
+	} else {
+		buf[i].YOffset += sh.crossOffset(buf, j)
+	}
 	sh.gp.chain[i] = j - i
 	sh.gp.kind[i] = attachMark
 }
@@ -453,6 +499,20 @@ func readValueRecord(rec []byte, format int) singleAdjust {
 	out.yPlacement = take(0x0002)
 	out.xAdvance = take(0x0004)
 	return out
+}
+
+// valueYAdvance is a ValueRecord's YAdvance, the field readValueRecord does
+// not read: an advance down the page, which only a run set upright applies.
+// Zero where the format has none or the record is cut short.
+func valueYAdvance(rec []byte, format int) int {
+	if format&0x0008 == 0 {
+		return 0
+	}
+	off := 2 * bits.OnesCount(uint(format&0x0007))
+	if off+2 > len(rec) {
+		return 0
+	}
+	return signed16(font.Be16(rec, off))
 }
 
 // readAnchor reads an anchor table. All three formats begin with the same two

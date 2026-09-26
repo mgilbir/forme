@@ -70,8 +70,8 @@ import (
 // shapes five strings whose UAX #29 segmentation is not in doubt and finds
 // forme's clusters finer than the grapheme clusters in every one: a base with
 // two combining marks breaks between the marks, a keycap breaks off its digit,
-// conjoining Hangul breaks into three, a flag breaks into two letters, and a
-// Thai spacing mark leaves its consonant. In a right-to-left run the clusters
+// a leading Hangul jamo written twice breaks off its syllable, a flag breaks
+// into two letters, and a Thai spacing mark leaves its consonant. In a right-to-left run the clusters
 // are not even ordered — the glyphs come back as they are drawn — so "the
 // cluster changed" does not name a position in the text.
 //

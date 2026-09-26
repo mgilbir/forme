@@ -103,7 +103,7 @@ func (f *Face) FormsFollowNeighbours(s string, off Features) bool {
 // rules does not give them to a run of another.
 func (f *Face) formsFollowIn(piece string, script uint16, lang otLanguage, off Features) bool {
 	l := f.layoutFor(script, lang)
-	model := categorize(script, f.chosenScriptTag(script, lang))
+	model := categorize(script, f.chosenScriptTag(script, lang), off.Vertical)
 	var mask glyphMask
 	switch model {
 	case modelArabic:
@@ -121,7 +121,11 @@ func (f *Face) formsFollowIn(piece string, script uint16, lang otLanguage, off F
 		return false
 	}
 	sh := shaper{f: f, l: l, features: off, lang: lang}
-	return sh.planFor(model, scriptSelects(script, "arab"), nil).hasMask(mask)
+	p := sh.planFor(model, scriptSelects(script, "arab"), nil)
+	// A face with no joining forms of its own may have them drawn out of its
+	// character map, which the plan names and the face's lookups do not
+	// carry. See arabicfallback.go.
+	return p.hasMask(mask) || p.arabicFallback != nil && f.hasFallbackForms()
 }
 
 // joiningMasks is every form a joining scan can choose. See markJoiningForms.

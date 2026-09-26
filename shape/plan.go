@@ -71,17 +71,24 @@ import (
 // automatic fractions around U+2044 and the right-to-left mirrored forms are
 // masked the way HarfBuzz masks them.
 //
-// Not mirrored, besides the parts of two models named at modelHebrew: 'rand',
+// Not mirrored: 'rand',
 // which HarfBuzz applies with a pseudo-random choice of alternate and this
 // package applies as the first alternate like any other alternate
-// substitution; 'stch', whose substitution means nothing without the
-// stretching HarfBuzz does after it (see arabic.go); the fallback shaping
-// HarfBuzz does for an Arabic font with no GSUB; and 'vert', since nothing here
-// sets text vertically.
+// substitution; and HarfBuzz's second Arabic fallback, for a face encoded as
+// Windows-1256 (see arabicfallback.go).
+//
+// # A run set upright
+//
+// A run shaped with Features.Vertical gets HarfBuzz's top-to-bottom plan: no
+// direction's forms, the common features, and in place of the horizontal ones
+// 'vert' alone — searched for in the whole of the font where the run's own
+// script and language do not list it, since a CJK face commonly lists it under
+// one script and is set vertically in another. See flagGlobalSearch.
 //
 // Where HarfBuzz changed between versions, what is mirrored is what the
-// version the oracle runs does: HarfBuzz 8 turned 'calt' off for Hangul, and the
-// HarfBuzz the corpus and the sweep are compared against does not.
+// version the oracle runs does: HarfBuzz 8 turned 'calt' off for Hangul, and
+// the HarfBuzz the corpus and the sweep are compared against keeps it on for
+// everything but the jamo (see hangul.go).
 
 // shaperModel is which model sets a run: how its characters are cut, reordered
 // and put through the font's features.
@@ -101,12 +108,10 @@ const (
 	// modelThai is the default model with Thai and Lao's one rearrangement of
 	// the text first. See thai.go.
 	modelThai
-	// modelHebrew and modelHangul are the default model's features, named
-	// apart because HarfBuzz sets them apart: Hangul cancels no mark's advance.
-	// What else HarfBuzz's two models do is not done here — Hebrew's
-	// presentation forms for a font without mark positioning and Hangul's
-	// composition of old jamo sequences — and each is named in the plan's
-	// header.
+	// modelHebrew and modelHangul are the default model's features with what
+	// HarfBuzz's two models add: Hebrew's presentation forms and point order
+	// (hebrew.go), and Hangul's syllables, jamo features and tone marks
+	// (hangul.go). Hangul cancels no mark's advance.
 	modelHebrew
 	modelHangul
 )
@@ -132,9 +137,15 @@ func (m shaperModel) syllabic() bool {
 // thing that can put a vowel sign before its consonant. A font that states its
 // rules under 'DFLT' or 'latn' does have an opinion — it states them over the
 // text in stored order — and the model would undo it.
-func categorize(script uint16, chosen string) shaperModel {
+//
+// vertical says the run is set upright down the page (Features.Vertical),
+// where Arabic and Syriac are set by the default model: joining is a
+// horizontal line's, and HarfBuzz applies it to no other.
+func categorize(script uint16, chosen string, vertical bool) shaperModel {
 	fallback := chosen == "DFLT" || chosen == "latn"
 	switch {
+	case vertical && (scriptSelects(script, "arab") || scriptSelects(script, "syrc")):
+		return modelDefault
 	case scriptSelects(script, "arab"):
 		// Arabic is set by its own model whatever the font declares: the forms
 		// are chosen from the characters, and a font with no 'arab' still has
@@ -232,6 +243,12 @@ const (
 	maskFrac
 	maskNumr
 	maskDnom
+	// The Hangul jamo features, and 'calt' as the Hangul model applies it: to
+	// everything but the jamo. See hangul.go.
+	maskLjmo
+	maskVjmo
+	maskTjmo
+	maskCaltNotJamo
 )
 
 // featureFlags is how a feature is applied, apart from which glyphs it is for.
@@ -246,6 +263,11 @@ const (
 	// flagPerSyllable holds the feature's lookups to one syllable: neither
 	// what they match nor the context they read may cross into the next.
 	flagPerSyllable
+	// flagGlobalSearch says a feature the run's script and language system do
+	// not list is looked for in the whole of the font's feature list, and the
+	// first feature of that tag there is applied: HarfBuzz's F_GLOBAL_SEARCH,
+	// which it gives 'vert' and nothing else. See firstFeature.
+	flagGlobalSearch
 
 	flagManualJoiners = flagManualZWJ | flagManualZWNJ
 )
@@ -309,6 +331,16 @@ type plan struct {
 	// plan has it on, which is what decides whether the legacy kern table is
 	// read instead. See legacykern.go.
 	gposKern bool
+	// arabicFallback is the lookups HarfBuzz builds for an Arabic font with no
+	// joining forms, where this plan wants them, and arabicAfter the stage they
+	// are applied after. See arabicfallback.go.
+	arabicFallback []planLookup
+	arabicAfter    int
+	// stch says the plan's rules declare 'stch', whose pieces are recorded
+	// after stage stchAfter and stretched once the run is positioned. See
+	// stch.go.
+	stch      bool
+	stchAfter int
 }
 
 // planBuilder collects features into stages, in the order a model asks for
@@ -458,11 +490,14 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 
 	// What the direction selects, and the forms HarfBuzz applies by default to
 	// particular characters: the fractions and, for a right-to-left run, the
-	// mirrored forms of the characters Unicode did not mirror itself.
-	if key.rtl {
+	// mirrored forms of the characters Unicode did not mirror itself. A run
+	// set upright has no horizontal direction to select forms for.
+	switch {
+	case key.features.Vertical:
+	case key.rtl:
 		b.enable("rtla", 0)
 		b.add("rtlm", maskRtlm, 0)
-	} else {
+	default:
 		b.enable("ltra", 0)
 		b.enable("ltrm", 0)
 	}
@@ -472,7 +507,7 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 
 	switch key.model {
 	case modelArabic:
-		collectArabic(b, l, key.arabicScript)
+		collectArabic(b, l, p, key.arabicScript)
 	case modelIndic:
 		collectIndic(b, p)
 	case modelKhmer:
@@ -481,6 +516,12 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 		collectMyanmar(b, p)
 	case modelUniversal:
 		collectUniversal(b, p)
+	case modelHangul:
+		// collect_features_hangul: the jamo features, for the jamo
+		// preprocessing marked. See hangul.go.
+		b.add("ljmo", maskLjmo, 0)
+		b.add("vjmo", maskVjmo, 0)
+		b.add("tjmo", maskTjmo, 0)
 	}
 
 	// The features every script gets, in the stage whatever the model left
@@ -495,8 +536,17 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 	for _, tag := range [...]string{"abvm", "blwm", "ccmp", "locl", "mark", "mkmk", "rlig"} {
 		b.enable(tag, 0)
 	}
-	for _, tag := range [...]string{"calt", "clig", "curs", "dist", "kern", "liga", "rclt"} {
-		b.enable(tag, 0)
+	if key.features.Vertical {
+		// A run set upright applies 'vert' and none of the horizontal
+		// features: kerning, cursive joining and the ligatures are a
+		// horizontal line's. HarfBuzz leaves out 'vrt2' too — it is the
+		// rotated forms a font gives an application that does not turn
+		// sideways text itself, and a run that is upright is not turned.
+		b.enable("vert", flagGlobalSearch)
+	} else {
+		for _, tag := range [...]string{"calt", "clig", "curs", "dist", "kern", "liga", "rclt"} {
+			b.enable(tag, 0)
+		}
 	}
 
 	for _, u := range key.features.requested(extra) {
@@ -523,6 +573,14 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 	case modelKhmer:
 		b.enable("clig", 0)
 		b.disable("liga")
+	case modelHangul:
+		// override_features_hangul: 'calt' stays on, for everything but the
+		// jamo, which some fonts assemble under it and should not. Where it
+		// has been turned off it stays off, as it does there — HarfBuzz's
+		// merge keeps the value the earlier request gave.
+		if !key.features.suppresses("calt") {
+			b.add("calt", maskCaltNotJamo, 0)
+		}
 	}
 
 	p.compile(l, b)
@@ -531,6 +589,9 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 	// fraction.
 	p.fractions = p.hasMask(maskFrac) || p.hasMask(maskNumr) && p.hasMask(maskDnom)
 	p.rtlm = p.hasMask(maskRtlm)
+	if key.model == modelArabic && key.arabicScript {
+		p.arabicFallback = arabicFallbackPlan(l)
+	}
 	return p
 }
 
@@ -549,12 +610,14 @@ func (p *plan) hasMask(m glyphMask) bool {
 // collectArabic is collect_features_arabic. The joining forms are a stage each,
 // in the specification's order, because a font may state one as a contextual
 // rule that reads what an earlier one made.
-func collectArabic(b *planBuilder, l *layout, arabicScript bool) {
-	// HarfBuzz enables 'stch' here and then stretches what it produced across
-	// the rest of the word. The stretching is not implemented (see arabic.go),
-	// and the substitution without it would draw a letter's pieces unstretched,
-	// so the feature is left out; the stage it would be in is kept, so that the
-	// stages after it are where HarfBuzz has them.
+func collectArabic(b *planBuilder, l *layout, p *plan, arabicScript bool) {
+	// 'stch' in the stage it shares with the direction's forms and the
+	// fractions, and what it multiplied recorded straight after it, where the
+	// font declares it at all: HarfBuzz's has_stch. See stch.go.
+	b.enable("stch", 0)
+	_, sub := l.featureLookups["stch"]
+	_, pos := l.gposFeatures["stch"]
+	p.stch, p.stchAfter = sub || pos, b.stage
 	b.pause()
 	b.enable("ccmp", flagManualZWJ)
 	b.enable("locl", flagManualZWJ)
@@ -566,6 +629,9 @@ func collectArabic(b *planBuilder, l *layout, arabicScript bool) {
 	b.pause()
 	b.enable("rlig", flagManualZWJ)
 	if arabicScript {
+		// The pause HarfBuzz applies its fallback lookups at, for a font
+		// with no joining forms of its own. See arabicfallback.go.
+		p.arabicAfter = b.stage
 		b.pause()
 	}
 	b.enable("calt", flagManualZWJ)
@@ -723,6 +789,9 @@ func (p *plan) compile(l *layout, b *planBuilder) {
 			continue
 		}
 		lookups := l.featureLookups[f.tag]
+		if l.searchesGlobally(f) {
+			lookups = l.vertGSUB.lookups
+		}
 		if len(lookups) == 0 {
 			continue
 		}
@@ -768,6 +837,9 @@ func (p *plan) compile(l *layout, b *planBuilder) {
 			continue
 		}
 		lookups, declared := l.gposFeatures[f.tag]
+		if l.searchesGlobally(f) {
+			lookups, declared = l.vertGPOS.lookups, l.vertGPOS.found
+		}
 		if !declared {
 			continue
 		}
@@ -784,6 +856,30 @@ func (p *plan) compile(l *layout, b *planBuilder) {
 	}
 	p.gpos = mergeLookups(gpos)
 	p.gposKern = gposEnabled["kern"]
+}
+
+// searchesGlobally reports whether a feature of the plan is taken from the
+// whole of the font rather than from the run's language system: it asks to be
+// (flagGlobalSearch), and the language system lists it in neither table, as
+// HarfBuzz's map builder decides it. Only 'vert' asks, and a layout keeps the
+// first 'vert' of each table for it.
+func (l *layout) searchesGlobally(f planFeature) bool {
+	if f.flags&flagGlobalSearch == 0 || f.tag != "vert" {
+		return false
+	}
+	_, sub := l.featureLookups[f.tag]
+	_, pos := l.gposFeatures[f.tag]
+	return !sub && !pos
+}
+
+// offersVert reports whether a run set upright finds a 'vert' in the font,
+// where its own language system lists one or anywhere in the font's feature
+// lists: HarfBuzz's has_vert. A font that offers none has its vertical forms
+// reached by character instead — see rotateForVertical.
+func (l *layout) offersVert() bool {
+	_, sub := l.featureLookups["vert"]
+	_, pos := l.gposFeatures["vert"]
+	return sub || pos || l.vertGSUB.found || l.vertGPOS.found
 }
 
 // mergeLookups puts a list of lookups into index order with each once.

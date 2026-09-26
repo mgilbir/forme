@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"os"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -15,13 +16,31 @@ func needMake(t *testing.T) {
 	}
 }
 
+// makeCommand runs make on the repository's Makefile in an environment of
+// PATH, HOME and nothing else.
+//
+// These tests ask what the Makefile says, and make does not keep that apart
+// from the caller's environment: -p prints every environment variable beside the
+// Makefile's own, and an environment variable is the value of any variable the
+// Makefile gives with ?=. So the answer depended on who asked. On a GitHub runner
+// GITHUB_REF is "refs/heads/main", which TestNoFetchNamesABranch read as a fetch
+// from a branch and failed every CI job on; locally, where nothing like it is
+// set, the same test passed. CI also sets the corpus paths, which are ?= here.
+// HOME stays because make and the shell it starts may look there; PATH so that
+// make can be found and its recipes' commands too.
+func makeCommand(args ...string) *exec.Cmd {
+	cmd := exec.Command("make", append([]string{"-C", "..", "--no-print-directory"}, args...)...)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
+	return cmd
+}
+
 // makeValue asks make what a variable expands to, with any variables given as
 // "NAME=value" overridden on its command line as a caller would override them.
 func makeValue(t *testing.T, v string, overrides ...string) string {
 	t.Helper()
-	args := append([]string{"-C", "..", "--no-print-directory", "-s",
-		"--eval", "print-var: ; @echo $(" + v + ")", "print-var"}, overrides...)
-	out, err := exec.Command("make", args...).Output()
+	args := append([]string{"-s", "--eval", "print-var: ; @echo $(" + v + ")", "print-var"},
+		overrides...)
+	out, err := makeCommand(args...).Output()
 	if err != nil {
 		t.Fatalf("make could not expand %s: %v", v, err)
 	}
@@ -52,8 +71,7 @@ func TestTheCorpusTargetsFetchEveryCorpus(t *testing.T) {
 	// -p prints make's database with every prerequisite expanded, and -q runs
 	// nothing: it answers whether the target is up to date, which it is not, so
 	// the exit status is ignored and only the database is read.
-	out, _ := exec.Command("make", "-C", "..", "--no-print-directory", "-p", "-q",
-		"test-corpora").Output()
+	out, _ := makeCommand("-p", "-q", "test-corpora").Output()
 	deps := map[string]map[string]bool{"test-corpora": {}, "race": {}}
 	for _, line := range strings.Split(string(out), "\n") {
 		name, rest, ok := strings.Cut(line, ":")
@@ -139,8 +157,7 @@ func TestEveryFetchStampMovesWithWhatItFetches(t *testing.T) {
 
 	// Every stamp is a rule, and every rule that makes a ".ok" file is a stamp
 	// the list above names.
-	out, _ := exec.Command("make", "-C", "..", "--no-print-directory", "-p", "-q",
-		"test-corpora").Output()
+	out, _ := makeCommand("-p", "-q", "test-corpora").Output()
 	var rules []string
 	for _, line := range strings.Split(string(out), "\n") {
 		name, rest, ok := strings.Cut(line, ":")
@@ -179,8 +196,11 @@ func TestEveryFetchStampMovesWithWhatItFetches(t *testing.T) {
 // or checkout of a branch. A pin is a commit, a release or a digest.
 func TestNoFetchNamesABranch(t *testing.T) {
 	needMake(t)
-	out, _ := exec.Command("make", "-C", "..", "--no-print-directory", "-p", "-q",
-		"test-corpora").Output()
+	// What a GitHub runner sets, which this test once read as the Makefile's own
+	// fetch from a branch. Set here so that no machine can pass it by not
+	// being a runner. See makeCommand.
+	t.Setenv("GITHUB_REF", "refs/heads/main")
+	out, _ := makeCommand("-p", "-q", "test-corpora").Output()
 	moving := regexp.MustCompile(`/(main|master|latest)(/|$|\s)|origin[ /](main|master)\b|-B (main|master)\b`)
 	lines := 0
 	for _, line := range strings.Split(string(out), "\n") {
@@ -197,5 +217,19 @@ func TestNoFetchNamesABranch(t *testing.T) {
 	}
 	if lines < 20 {
 		t.Fatalf("make's database has %d lines that fetch anything, so it was not read", lines)
+	}
+}
+
+// TestMakeIsAskedWithoutTheCallersEnvironment: an environment variable is the
+// value of a variable the Makefile gives with ?=, so a caller's UNICODE_VERSION
+// would otherwise be taken for the pin. The Makefile's answer is its own.
+func TestMakeIsAskedWithoutTheCallersEnvironment(t *testing.T) {
+	needMake(t)
+	own := makeValue(t, "UNICODE_VERSION")
+	t.Setenv("UNICODE_VERSION", "1.0.0")
+	if got := makeValue(t, "UNICODE_VERSION"); got != own {
+		t.Errorf("with UNICODE_VERSION=1.0.0 in the environment, make answered %q "+
+			"for the Makefile's pin %q: the test is reading the caller, not the Makefile",
+			got, own)
 	}
 }

@@ -336,6 +336,14 @@ func turnLine(l *LineFragment, mode writingMode, in Size) {
 		ib.Border = turnEdges(ib.Border, mode)
 		ib.Padding = turnEdges(ib.Padding, mode)
 	}
+	// A link's area is a rectangle in the same coordinates, and turns the same
+	// way. See LineFragment.links.
+	for _, lf := range l.links {
+		lf.BorderRect = turnRect(lf.BorderRect, mode, in)
+		lf.Margin = turnEdges(lf.Margin, mode)
+		lf.Border = turnEdges(lf.Border, mode)
+		lf.Padding = turnEdges(lf.Padding, mode)
+	}
 }
 
 // turns decides whether a box is laid out sideways, and says so about the ones

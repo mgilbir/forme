@@ -100,6 +100,9 @@ func fillColumnsByCopy(f *Fragment, c columns, height style.Unit) bool {
 		}
 		for _, child := range band.Children {
 			child.BorderRect.X = child.BorderRect.X.Add(dx)
+			// The column each child is in is part of what a pour makes: an
+			// outer pour reads it (see avoidZones).
+			child.column = i + 1
 			f.Children = append(f.Children, child)
 		}
 	}
@@ -170,6 +173,9 @@ func fillColumnsByCopyWith(f *Fragment, c columns, height style.Unit,
 		}
 		for _, child := range band.Children {
 			child.BorderRect.X = child.BorderRect.X.Add(dx)
+			// The column each child is in is part of what a pour makes: an
+			// outer pour reads it (see avoidZones).
+			child.column = i + 1
 			f.Children = append(f.Children, child)
 		}
 	}

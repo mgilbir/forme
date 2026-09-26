@@ -1,4 +1,4 @@
-.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -180,10 +180,12 @@ hbenv:
 		import oracle; oracle.harfbuzz(); oracle.fonttools()'
 
 # Every file the oracles write through uharfbuzz. hblanguages is below, where
-# the language-tag header it reads has been defined. The one oracle file this
-# leaves out, usecategories.expected.txt, is HarfBuzz's own generator run from a
-# source checkout of the same release; see usecategories.py.
-hboracles: hbshaping hblanguages varinstance
+# the language-tag header it reads has been defined. The oracle files this
+# leaves out — usecategories.expected.txt, usescripts.expected.txt and
+# indiccategories.expected.txt — are read from a source checkout of the same
+# release: HarfBuzz's own generators, and its own source; see
+# usecategories.py, usescripts.py and indiccategories.py.
+hboracles: hbshaping hbvertical hblanguages varinstance
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
@@ -213,8 +215,27 @@ hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/shape.py $(HARFBUZZ_DIR)/fonts/NotoSerifTibetan.ttf \
 		$(HARFBUZZ_DIR)/tibetan.txt $(HARFBUZZ_DIR)/tibetan.dflt.expected.txt und-x-hbscdflt
 
+# A run set upright, over nine faces that answer where a glyph is hung and
+# how far it moves the pen in different ways — see vertical.py for which is
+# which, and vertical_fixture.py for the three that are built here. Four of them are in the corpora, so this needs `make notocjk
+# noto-fonts` first; the expectations are checked in, and the Go test reads
+# the faces from the same place.
+hbvertical:
+	$(PYTHON) $(HARFBUZZ_DIR)/vertical_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/vertical.py $(HARFBUZZ_DIR)/vertical.txt $(HARFBUZZ_DIR)/vertical_features.txt \
+		$(HARFBUZZ_DIR)/vertical.expected.txt \
+		NotoSans-Variable.ttf=fonts/notosans/NotoSans-Variable.ttf \
+		NotoSansArabic.ttf=$(HARFBUZZ_DIR)/fonts/NotoSansArabic.ttf \
+		NotoSansJP-Regular.otf=$(CJK_DIR)/NotoSansJP-Regular.otf \
+		NotoSansJP-VF.ttf=$(NOTO_DIR)/NotoSansJP-VF.ttf \
+		ipag.ttf=$(NOTO_DIR)/ipag.ttf \
+		Unifont-Regular.otf=$(NOTO_DIR)/Unifont-Regular.otf \
+		VerticalComposites.ttf=$(HARFBUZZ_DIR)/fonts/VerticalComposites.ttf \
+		VerticalFallbacks.ttf=$(HARFBUZZ_DIR)/fonts/VerticalFallbacks.ttf \
+		VerticalHhea.ttf=$(HARFBUZZ_DIR)/fonts/VerticalHhea.ttf
+
 test-hbshaping:
-	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth|TestFeatureShapingAgreesWithHarfBuzz|TestTheFeatureOracleHasTeeth|TestTheDefaultModelAgreesWithHarfBuzz' -count=1 -timeout $(TEST_TIMEOUT) ./shape
+	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth|TestFeatureShapingAgreesWithHarfBuzz|TestTheFeatureOracleHasTeeth|TestTheDefaultModelAgreesWithHarfBuzz|TestUprightShapingAgreesWithHarfBuzz|TestSidewaysRunsAreShapedAsBefore|TestVerticalMetricsAgreeWithHarfBuzz|TestTheVerticalOracleHasTeeth' -count=1 -timeout $(TEST_TIMEOUT) ./shape
 
 # Instancing checked against fontTools and HarfBuzz, over four faces and eight
 # locations. Needs the same Python as hbshaping.

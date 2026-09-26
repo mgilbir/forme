@@ -27,7 +27,7 @@ func TestACFFTooLargeToSubsetIsRefused(t *testing.T) {
 
 	// The bytes are never read: the length is checked before anything else, and
 	// that is the point — a program this large is refused rather than parsed.
-	_, err := subsetCFF(make([]byte, past), nil, fullBudget())
+	_, _, err := subsetCFF(make([]byte, past), nil, fullBudget())
 	if err == nil {
 		t.Fatal("a CFF program past the bound was subsetted; the size is checked " +
 			"before the walk, so that the walk is never the thing that finds out")
@@ -39,7 +39,7 @@ func TestACFFTooLargeToSubsetIsRefused(t *testing.T) {
 
 	// And a short one is refused for its own reason, or the test above would
 	// pass on any input at all.
-	if _, err := subsetCFF([]byte{1, 2}, nil, fullBudget()); err == nil {
+	if _, _, err := subsetCFF([]byte{1, 2}, nil, fullBudget()); err == nil {
 		t.Error("a two-byte CFF was accepted")
 	} else if strings.Contains(err.Error(), "too large to subset") {
 		t.Errorf("a two-byte CFF was refused as too large: %v", err)

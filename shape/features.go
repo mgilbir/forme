@@ -133,6 +133,31 @@ type Features struct {
 	// language, and a language the font names no system for is set in its
 	// default one, which is what every run got before this was read.
 	Language string
+	// Vertical says the run is set upright down the page: each glyph standing
+	// as it does in the font, one below the other — the run a line of
+	// "writing-mode: vertical-rl" with "text-orientation: upright" draws, and
+	// HarfBuzz's top-to-bottom direction. A run set sideways is not one: it is
+	// a horizontal run turned, and is shaped as one.
+	//
+	// It changes the rules as well as the metrics, as HarfBuzz changes them.
+	// The font's 'vert' is applied — from wherever in the font it is listed,
+	// since a font commonly states it under one script and is set vertically
+	// in another — and the rules that only make sense along a horizontal line
+	// are not: 'kern', 'liga', 'clig', 'calt', 'rclt', 'curs' and 'dist', and
+	// the direction's own forms. A face with no 'vert' draws the vertical
+	// presentation forms of the punctuation it has glyphs for instead. The run
+	// is not cut by direction: every character of an upright run is set in the
+	// order it is written, as CSS Writing Modes §5.1 has them treated as
+	// strong left-to-right. The Arabic model does not apply; its joining is
+	// for a horizontal line.
+	//
+	// The glyphs come back with Glyph.YAdvance and Glyph.VOriginX and VOriginY
+	// set, and XAdvance zero. See vertical.go.
+	//
+	// It is here rather than beside the text for the reason Language is: it is
+	// a fact about the run its characters do not state, and it reaches the
+	// backend that draws the run — which shapes it again — on the same value.
+	Vertical bool
 }
 
 // Position is CSS Fonts 4 §6.5's font-variant-position, as the feature it asks
