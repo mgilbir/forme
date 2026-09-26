@@ -195,7 +195,8 @@ func (f *Face) HasKerning() bool { return len(f.layout.kern) > 0 }
 // what a run's neighbours can change: see ContextCanChange.
 func (f *Face) HasLigatures() bool { return len(f.layout.ligatures) > 0 }
 
-// Features lists the substitution features this face offers by name, sorted.
+// Features lists the features this face offers by name, sorted: the ones it
+// substitutes glyphs under and the ones it positions them under, each once.
 // A caller can present them, or check one before asking for it.
 //
 // It is the features ShapeGlyphsWith will act on, which is what "check one
@@ -205,9 +206,36 @@ func (f *Face) HasLigatures() bool { return len(f.layout.ligatures) > 0 }
 // a ligature or a contextual rule was not listed, so a caller checking first
 // was told the face has nothing and asked for nothing — and asking would have
 // worked. Noto Sans Devanagari offers twelve and reported one.
+//
+// It then listed the substitution features and no others, after a plan had
+// begun positioning with whatever features it is asked for (see plan.compile).
+// 'halt', 'palt', 'vhal' and 'vpal' — the trimmed and proportional widths a
+// CJK face states — are positioning features and nothing else, so a caller
+// that checked first was told a face with them had none of them, and a
+// document that asked for 'halt' was reported as asking for something the face
+// does not have while the face applied it.
+//
+// A tag the face declares with no lookups under it is not listed, in either
+// table: asking for it changes nothing, which is the one thing this list
+// promises about what it names. The layout keeps such a tag — whether a face
+// states a joining form at all decides the Arabic fallback — but that is a
+// question for the shaper, not for a caller deciding what to ask for.
 func (f *Face) Features() []string {
-	out := make([]string, 0, len(f.layout.featureLookups))
-	for tag := range f.layout.featureLookups {
+	l := f.layout
+	out := make([]string, 0, len(l.featureLookups)+len(l.gposFeatures))
+	for tag, lookups := range l.featureLookups {
+		if len(lookups) > 0 {
+			out = append(out, tag)
+		}
+	}
+	for tag, lookups := range l.gposFeatures {
+		if len(lookups) == 0 {
+			continue
+		}
+		// A tag both tables name is one feature, and listed once.
+		if len(l.featureLookups[tag]) > 0 {
+			continue
+		}
 		out = append(out, tag)
 	}
 	sortStrings(out)

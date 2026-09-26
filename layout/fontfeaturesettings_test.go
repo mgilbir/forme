@@ -3,6 +3,9 @@ package layout
 import (
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/fonttest"
+	"github.com/mgilbir/forme/shape"
 )
 
 // TestFontFeatureSettingsAsksTheFaceForTheTag is the property a real document
@@ -138,5 +141,97 @@ func TestFontFeatureSettingsSettlesTheOrderOfItsTags(t *testing.T) {
 	// And a tag named twice is one tag.
 	if once, _ := featureSettingsOf(`"onum", "onum"`); once != "onum" {
 		t.Errorf(`"onum" twice came out as %q, want "onum"`, once)
+	}
+}
+
+// TestAPositioningFeatureIsNotReportedAsMissing: a tag the face offers through
+// positioning alone is applied, and is not reported as one the face has not got.
+//
+// 'halt' is how the suite's text-spacing-trim references draw a trimmed
+// bracket, and every CJK face states it in GPOS and nowhere in GSUB. The
+// shaping plan applied it; the check beside it asked the face for its
+// substitution features only, so eleven references were each reported as
+// asking for something the face did not have, over a page drawn as asked.
+//
+// The fixture is a face whose 'halt' takes half the advance off 'a'. That the
+// width changes is what makes the silence a claim and not an omission: the
+// feature reached the glyphs.
+func TestAPositioningFeatureIsNotReportedAsMissing(t *testing.T) {
+	data := fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "Halt",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'a', Advance: 1000, HasShape: true},
+			{Rune: ' ', Advance: 250},
+			{Rune: '（', Advance: 1000, HasShape: true},
+		},
+		Extra: map[string][]byte{
+			"GPOS": fonttest.GPOSLookups([]fonttest.Lookup{
+				{Type: 1, Subtables: [][]byte{fonttest.SinglePosSubtable(1, -500, 0, -500)}},
+				{Type: 1, Subtables: [][]byte{fonttest.SinglePosSubtable(3, -500, 0, -500)}},
+			}, map[string][]int{"halt": {0, 1}}),
+		},
+	})
+	face, err := shape.Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := namedFaceSet{family: "Halt", face: face, standard: StandardFonts()}
+	runIn := func(set FontSet, family, text, decl string) (float64, []Finding) {
+		t.Helper()
+		frag, got := layoutWith(t, set, `<div id="d">`+text+`</div>`,
+			`body{margin:0} #d{font-family:`+family+`; font-size:20px; float:left; `+decl+`}`)
+		var out []Finding
+		for _, f := range got {
+			if f.Property == "font-feature-settings" {
+				out = append(out, f)
+			}
+		}
+		return find(t, frag, "d").BorderRect.W.Px(), out
+	}
+	run := func(decl string) (float64, []Finding) {
+		t.Helper()
+		return runIn(set, "Halt", "aa", decl)
+	}
+
+	plain, _ := run("")
+	halted, findings := run(`font-feature-settings: "halt" 1`)
+	if plain != 40 || halted != 20 {
+		t.Fatalf("the run is %gpx plain and %gpx with 'halt', want 40 and 20; the "+
+			"fixture is not reaching the face's positioning feature", plain, halted)
+	}
+	if len(findings) != 0 {
+		t.Errorf(`"halt" on a face that positions with it reported %q; it was applied`,
+			findings[0].Message)
+	}
+	// The same face asked for something it has not got still says so, which
+	// keeps the silence above from being a check that stopped looking.
+	// The message quotes the declaration first, so what it names as missing is
+	// what follows "asks for".
+	_, findings = run(`font-feature-settings: "halt" 1, "zzzz" 1`)
+	if len(findings) == 0 {
+		t.Fatal(`"halt" and "zzzz" together said nothing; the face has no "zzzz"`)
+	}
+	msg := findings[0].Message
+	named := msg[strings.Index(msg, "asks for")+1:]
+	if !strings.Contains(named, `"zzzz"`) || strings.Contains(named, `"halt"`) {
+		t.Errorf(`"halt" and "zzzz" together reported %q; want "zzzz" named as `+
+			`missing and "halt" not`, msg)
+	}
+
+	// And the face asked is the one that sets the text. Helvetica has no
+	// full-width bracket, so the brackets are set in the fallback face, which
+	// applies 'halt' to them. The question was asked of Helvetica, which set
+	// none of the text, and the feature that was carried out was reported as
+	// missing.
+	fallback := oneFaceSet{fallback: face, standard: StandardFonts()}
+	plain, _ = runIn(fallback, "Helvetica", "（（", "")
+	halted, findings = runIn(fallback, "Helvetica", "（（", `font-feature-settings: "halt" 1`)
+	if plain != 40 || halted != 20 {
+		t.Fatalf("the brackets are %gpx plain and %gpx with 'halt', want 40 and 20; "+
+			"the fixture is not setting them in the fallback face", plain, halted)
+	}
+	if len(findings) != 0 {
+		t.Errorf(`"halt" carried out by the family that set the text reported %q`,
+			findings[0].Message)
 	}
 }

@@ -406,10 +406,11 @@ func (l *layouter) reportHyphens(b *Box, value string) {
 // over text in the default serif face, and every one of them was held out of the
 // clean count by a finding about a page that is right.
 //
-// The property is judged only by the tags it names. "kern" is the one this can
-// answer, because a face's kerning is a thing the shaping layer knows about; any
-// other tag is a feature this engine neither applies nor can ask the face for,
-// so a value naming one is reported whatever the face has in it.
+// The property is judged only by the tags it names. A tag turned on is applied
+// and is reported only when the face offers nothing under it — substitution or
+// positioning, since the shaping plan applies either (see shape.Face.Features)
+// — and a tag turned off is reported unless it is "kern" on a face with no
+// kerning; see unappliedFontFeatures.
 func (l *layouter) reportKerning(b *Box, face *shape.Face) {
 	value := b.Style.Get("font-feature-settings")
 	why := unappliedFontFeatures(value, face)
@@ -980,12 +981,13 @@ func blank(text string) bool {
 	return true
 }
 
-// inertFontFeatures reports whether a font-feature-settings value asks for the
-// page that is already there.
+// unappliedFontFeatures says what part of a font-feature-settings value was not
+// carried out on this face, or "" when all of it was.
 //
 // "normal" asks for nothing by definition. Otherwise the value is a list of tags
-// with a setting each, and it is inert when every tag in it is one the face
-// cannot act on — which this can answer for "kern" and for nothing else.
+// with a setting each: a tag turned on is carried out, and changes nothing when
+// the face offers nothing under it; a tag turned off is not acted on by tag at
+// all, and is inert only where it is "kern" on a face with no kerning.
 func unappliedFontFeatures(value string, face *shape.Face) string {
 	on, off := featureSettingsOf(value)
 	kerns := face != nil && face.HasKerning()
