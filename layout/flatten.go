@@ -812,6 +812,14 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		// And whether the face draws the raised and lowered forms §6.5 asks
 		// for, which is the last of the same question. See reportPosition.
 		l.reportPosition(b, run.Face, run.Text)
+		// And the features font-feature-settings names by tag, asked of the
+		// face that sets the run for the same reason as the four above. It was
+		// asked of the family's first face, so a tag carried out by the
+		// fallback face that set the text was reported as missing from a face
+		// that set none of it: the suite's text-spacing-trim-fallback-002
+		// asks for 'halt' over "Arial, halt-font", and the bracket is drawn in
+		// halt-font. See reportKerning.
+		l.reportKerning(b, run.Face)
 	}
 	// And the glyphs, asked of the text that will be *drawn* — which for a run
 	// whose small capitals were synthesised is the uppercase of what the
@@ -864,7 +872,6 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	// autospace.go — so nothing here reads the value. What is read here is
 	// whether the document asked for a part of it this engine does not do, which
 	// is a question about the box and belongs where the other three are asked.
-	l.reportKerning(b, face)
 	autospace, unhandledAutospace := autospaceOf(b.Style.Get("text-autospace"))
 	if unhandledAutospace != "" {
 		l.reportAutospace(b, unhandledAutospace)
