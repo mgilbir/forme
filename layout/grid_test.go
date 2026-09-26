@@ -469,8 +469,10 @@ func TestAGridContainerThisEngineCannotArrangeSaysSo(t *testing.T) {
 			`#g { grid-template-columns: repeat(auto-fill, 50px) repeat(auto-fill, 50px) }`,
 			"does not size"},
 		{"a named row", `#g { grid-template-rows: [top] 20px }`, "does not size"},
-		{"a ragged template", `#g { grid-template-areas: "a b" "c" }`, "not all the same length"},
-		{"an area in two places", `#g { grid-template-areas: "a b" "b a" }`, "do not touch"},
+		// A ragged template and an area in two places were here. §7.3 makes
+		// each an invalid declaration, and the cascade now drops them with
+		// the rest of what is not CSS, so the gate never sees them from a
+		// stylesheet; see TestATemplateThatDoesNotDrawAGridIsRefused.
 		{"implicit tracks sized by a function this engine cannot read",
 			`#g { grid-auto-rows: fit-content(50px) }`, "implicit tracks"},
 		{"tracks on a baseline", `#g { align-content: baseline }`, "aligned by a rule"},
@@ -1166,10 +1168,22 @@ func TestGridAreaAlsoWritesFourLines(t *testing.T) {
 		"an item placed by four lines")
 }
 
-// TestATemplateThatDoesNotDrawAGridIsRefused. The two ways §7.3 says a template
-// is invalid are the two this refuses, and refusing is the whole of the answer:
-// a template that does not describe a grid describes nothing, and guessing at
-// what was meant would put boxes somewhere no stylesheet asked for.
+// TestATemplateThatDoesNotDrawAGridIsRefused. The ways §7.3 says a template
+// is invalid are refused, and refusing is the whole of the answer: a template
+// that does not describe a grid describes nothing, and guessing at what was
+// meant would put boxes somewhere no stylesheet asked for.
+//
+// §7.3 says "the declaration is invalid", so the refusal is the cascade's: the
+// declaration is dropped and reported, as every other value that is not CSS
+// is, and an earlier declaration that is a grid stands. It was the grid gate's,
+// which refused the container with a finding however valid the template
+// before it had been. layout's own reading still refuses such a template if
+// one arrives by a path the cascade does not judge; see areasOf.
+//
+// "1a b" was here as "a name that is not one". §7.3 says otherwise: a cell
+// name is any run of ident code points, digits first included, and its own
+// note gives "1st 2nd 3rd" as an example of names an item reaches by escaping
+// them. See TestAGridAreaIsNamedByIdentCodePoints.
 func TestATemplateThatDoesNotDrawAGridIsRefused(t *testing.T) {
 	for _, css := range []string{
 		// Rows of different lengths.
@@ -1178,24 +1192,36 @@ func TestATemplateThatDoesNotDrawAGridIsRefused(t *testing.T) {
 		`#g { grid-template-areas: "a b" "b a" }`,
 		// The same, in one row.
 		`#g { grid-template-areas: "a b a" }`,
-		// A name that is not one.
-		`#g { grid-template-areas: "1a b" }`,
-		// Something that is not a string at all is not CSS; see
+		// A trash token: "#" is neither an ident code point, a dot nor white
+		// space.
+		`#g { grid-template-areas: "a#b c" }`,
+		// A row that draws no cell.
+		`#g { grid-template-areas: "" }`,
+		// Something that is not a string at all; see
 		// TestAValueThatIsNotCSSIsDroppedByTheCascade.
 	} {
-		got := Compose(Input{HTML: threeAreas, CSS: []Stylesheet{{
-			Source: gridCSS + `#g { width: 300px }` + css}}}, Options{})
-		said := false
-		for _, f := range got.Findings {
-			if strings.Contains(f.Message, "grid container") {
-				said = true
-			}
-		}
-		if !said {
-			t.Errorf("nothing was reported about %q, so a template that draws no "+
-				"grid says nothing about it", css)
+		if !droppedAsInvalid(t, threeAreas, gridCSS+`#g { width: 300px }`+css,
+			"grid-template-areas") {
+			t.Errorf("%q was not dropped and reported as invalid CSS", css)
 		}
 	}
+	// Dropped, the declaration before it is the one that stands: the areas of
+	// the first template place the items, and nothing refuses the grid.
+	const named = `#h { grid-area: head } #n { grid-area: nav } #m { grid-area: main }`
+	got := Compose(Input{HTML: threeAreas, CSS: []Stylesheet{{Source: gridCSS +
+		`#g { width: 300px; grid-template-areas: "head head" "nav main" }` +
+		`#g { grid-template-areas: "a b" "b a" }` + named}}}, Options{})
+	for _, f := range got.Findings {
+		if strings.Contains(f.Message, "grid container") {
+			t.Errorf("a valid template followed by an invalid one refused the grid: %q",
+				f.Message)
+		}
+	}
+	wantCells(t, gridCells(t, threeAreas,
+		`#g { width: 300px; grid-template-areas: "head head" "nav main" }`+
+			`#g { grid-template-areas: "a b" "b a" }`+named),
+		[][4]float64{{0, 0, 300, 20}, {0, 20, 150, 20}, {150, 20, 150, 20}},
+		"the template before an invalid one")
 }
 
 // TestATemplateMakesEveryRowItDraws, including one no item landed in. §7.3's

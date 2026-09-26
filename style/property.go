@@ -1073,8 +1073,14 @@ func writeCSSName(b *strings.Builder, s string, ident bool) {
 			writeHexEscape(b, r)
 		case ident && i == 0 && r == '-' && len(s) == 1:
 			b.WriteString(`\-`)
-		case r >= 0x80 || r == '-' || r == '_' ||
-			(r >= '0' && r <= '9') || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z'):
+		case css.IsIdentCodePoint(r):
+			// CSSOM writes every code point above U+007F as itself, which was
+			// right while CSS Syntax took every one of them into a name. It
+			// takes a list now, and so does this engine's tokenizer: a no-break
+			// space or an em space is not in it, and "x\a0y" — one name —
+			// written back as itself came back as a name, a delimiter and a
+			// name. So a code point goes out bare exactly when the tokenizer
+			// will read it back into the name, and escaped otherwise.
 			b.WriteRune(r)
 		default:
 			b.WriteByte('\\')

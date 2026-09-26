@@ -171,7 +171,9 @@ func init() {
 	// css-grid-2.
 	g["grid-template-columns"] = gridTemplate
 	g["grid-template-rows"] = gridTemplate
-	g["grid-template-areas"] = oneOf(single(kw("none")), repeated(str, 1, 1<<30))
+	// §7.3: the strings are tokenized into cells, and a template that does
+	// not draw a grid of rectangles is not a value; see ReadGridTemplateAreas.
+	g["grid-template-areas"] = oneOf(single(kw("none")), gridTemplateAreas)
 	g["grid-auto-flow"] = anyOrder(kw("row", "column"), kw("dense"))
 	g["grid-auto-rows"] = repeated(trackSize, 1, 1<<30)
 	g["grid-auto-columns"] = g["grid-auto-rows"]

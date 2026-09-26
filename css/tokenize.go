@@ -819,3 +819,15 @@ func isNonASCIIIdent(r rune) bool {
 
 func isIdentStart(r rune) bool { return isLetter(r) || r == '_' || isNonASCIIIdent(r) }
 func isIdent(r rune) bool      { return isIdentStart(r) || isDigit(r) || r == '-' }
+
+// IsIdentCodePoint reports whether r is an ident code point (§4.2): a letter, a
+// digit, "-", "_", or one of the non-ASCII code points isNonASCIIIdent lists.
+//
+// It is exported for the readers that split text into names by the same rule
+// the tokenizer does, outside a token: grid-template-areas tokenizes each of
+// its strings into cell names made of these code points (CSS Grid 2 §7.3), and
+// a serialiser has to know which code points a name may hold unescaped. A
+// reader with a rule of its own — "ASCII only", or "anything above U+007F" —
+// disagrees with the tokenizer about the names an author writes elsewhere in
+// the same stylesheet.
+func IsIdentCodePoint(r rune) bool { return isIdent(r) }

@@ -501,127 +501,47 @@ type gridAreas struct {
 
 // areasOf reads the template, or says it is not one this engine can draw.
 //
-// The two ways a template is invalid are the two §7.3 names: a row with a
-// different number of cells from the others is not a rectangle, and a name that
-// appears in two places that do not touch is not an area. Both are refused
-// rather than repaired — a template that does not describe a grid describes
-// nothing, and guessing at what was meant would put boxes somewhere no
-// stylesheet asked for.
+// The reading is style.ReadGridTemplateAreas', which is also the property's
+// grammar: §7.3 tokenizes each string into named cells, null cells and trash,
+// and a template with trash in it, with rows of different lengths, or with a
+// name in two places that do not touch is not a value at all. The cascade
+// drops such a declaration, and a value that reaches here by another path —
+// a caller's style, the user agent's sheet — is refused rather than repaired:
+// a template that does not describe a grid describes nothing, and guessing at
+// what was meant would put boxes somewhere no stylesheet asked for.
+//
+// One reading and not two, because the names it finds are matched against the
+// <custom-ident> an item writes in grid-area, which the tokenizer read. This
+// read the cells with a rule of its own — ASCII letters, digits, "-" and "_"
+// — so an area named "é" or "区域", a name CSS allows as surely as "main", was
+// refused with a finding, and "a.b" was one refused word where §7.3 makes it
+// three cells.
 func (l *layouter) areasOf(b *Box) (gridAreas, bool) {
 	raw := ascii.TrimCSSSpace(b.Style.Get("grid-template-areas"))
 	if raw == "" || ascii.EqualFold(raw, "none") {
 		return gridAreas{}, true
 	}
 	vals, _ := css.ParseComponentValues(raw)
-	var rows [][]string
-	for _, v := range splitValuesOnWhitespace(vals) {
-		if len(v) != 1 || !v[0].IsToken() || v[0].Token.Kind != css.String {
-			return gridAreas{}, false
-		}
-		cells := ascii.CSSFields(v[0].Token.Value)
-		if len(cells) == 0 {
-			return gridAreas{}, false
-		}
-		if len(rows) > 0 && len(cells) != len(rows[0]) {
-			return gridAreas{}, false
-		}
-		// The picture draws the explicit grid, and the explicit grid is bounded
-		// by what a template may write whichever property writes it. The words
-		// were not: fifty thousand of them made fifty thousand columns, and the
-		// placement and sizing of every item was then paid for across all of
-		// them. A template past the bound is refused like any other the engine
-		// will not draw.
-		if len(cells) > maxRepeatedTracks || len(rows) >= maxRepeatedTracks {
-			return gridAreas{}, false
-		}
-		rows = append(rows, cells)
-	}
-	if len(rows) == 0 {
+	template, ok := style.ReadGridTemplateAreas(vals)
+	// The picture draws the explicit grid, and the explicit grid is bounded by
+	// what a template may write whichever property writes it. The words were
+	// not: fifty thousand of them made fifty thousand columns, and the
+	// placement and sizing of every item was then paid for across all of them.
+	// A template past the bound is refused like any other the engine will not
+	// draw. Reading it is one pass over its text, which the cascade has made
+	// already.
+	if !ok || template.Columns > maxRepeatedTracks || template.Rows > maxRepeatedTracks {
 		return gridAreas{}, false
 	}
-
-	out := gridAreas{at: map[string][2]gridPlacement{}, rows: len(rows), columns: len(rows[0])}
-	seen := map[string][4]int{}
-	for r, cells := range rows {
-		for c, name := range cells {
-			if isNullCell(name) {
-				continue
-			}
-			if !isAreaName(name) {
-				return gridAreas{}, false
-			}
-			box, ok := seen[name]
-			if !ok {
-				seen[name] = [4]int{r, c, r + 1, c + 1}
-				continue
-			}
-			// The name has been met before, so this cell has to extend the
-			// rectangle it is already part of rather than start a second one.
-			if r > box[2] || c > box[3] {
-				return gridAreas{}, false
-			}
-			if c < box[1] {
-				box[1] = c
-			}
-			if r+1 > box[2] {
-				box[2] = r + 1
-			}
-			if c+1 > box[3] {
-				box[3] = c + 1
-			}
-			seen[name] = box
-		}
-	}
-	for name, box := range seen {
-		// Every cell of the rectangle the name's corners describe has to carry
-		// that name, or the name is in two places with a hole between them.
-		for r := box[0]; r < box[2]; r++ {
-			for c := box[1]; c < box[3]; c++ {
-				if rows[r][c] != name {
-					return gridAreas{}, false
-				}
-			}
-		}
-		out.at[name] = [2]gridPlacement{
-			{start: box[0], definite: true, span: box[2] - box[0]},
-			{start: box[1], definite: true, span: box[3] - box[1]},
+	out := gridAreas{at: make(map[string][2]gridPlacement, len(template.Areas)),
+		rows: template.Rows, columns: template.Columns}
+	for _, a := range template.Areas {
+		out.at[a.Name] = [2]gridPlacement{
+			{start: a.Row, definite: true, span: a.Rows},
+			{start: a.Column, definite: true, span: a.Columns},
 		}
 	}
 	return out, true
-}
-
-// isNullCell reports whether a cell in the template is one nobody named: §7.3
-// spells it as a run of dots, so "." and "..." are the same empty cell.
-func isNullCell(name string) bool {
-	for i := 0; i < len(name); i++ {
-		if name[i] != '.' {
-			return false
-		}
-	}
-	return true
-}
-
-// isAreaName reports whether a word in the template is a name rather than
-// something this engine would have to make sense of.
-//
-// It is deliberately narrow — letters, digits, dashes and underscores, not
-// starting with a digit — because a name here is matched against an item's
-// grid lines by string equality, and a name that needed unescaping to compare would be
-// compared wrongly rather than refused.
-func isAreaName(name string) bool {
-	if name == "" || (name[0] >= '0' && name[0] <= '9') {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
-			c == '-', c == '_':
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // gridPlacement is what one item said about where it goes on one axis: §8.3's
@@ -773,52 +693,78 @@ func placementFrom(from, to gridLine) (gridPlacement, bool) {
 // finds for it; a name it does not find is refused. The keywords are matched
 // without regard to case and a name with it: a name is a <custom-ident>, and
 // the areas it is matched against were written with theirs.
+//
+// The value is read as tokens and not as text. The cascade keeps it as text,
+// and a name is written there with its escapes: "\31st", which is how an
+// item names the area a template calls "1st", is kept as "\31 st", and an area
+// named with a character that has to be escaped in an identifier is the same.
+// The text was compared with the area's name as it stood, so a name that
+// needed an escape was never found; and it was read with a rule of its own,
+// ASCII letters, digits, "-" and "_", so an item in "grid-area: é" was
+// refused with a finding. A name is whatever the tokenizer reads as an
+// identifier, which is the rule the template's cells are read by too.
+//
+// What is read is §8.3's grammar less its named lines: "auto", a positive
+// <integer>, "span" and a positive <integer> in either order ("span" alone is
+// "span 1"), and a <custom-ident> alone. An integer with a name, a span of a
+// name, and a negative integer — a line counted from the end — are refused;
+// see placementOf.
 func lineValue(raw string, resolve func(string) (int, bool)) (gridLine, bool) {
-	value := ascii.TrimCSSSpace(raw)
-	if value == "" || ascii.EqualFold(value, "auto") {
-		return gridLine{}, true
-	}
-	if len(value) >= 4 && ascii.EqualFold(value[:4], "span") &&
-		(len(value) == 4 || value[4] == ' ' || value[4] == '\t' || value[4] == '\n') {
-		rest := ascii.TrimCSSSpace(value[4:])
-		if rest == "" {
-			// "span" on its own is "span 1".
-			return gridLine{span: 1}, true
+	vals, _ := css.ParseComponentValues(raw)
+	parts := splitValuesOnWhitespace(vals)
+	span, count, name := false, 0, ""
+	for _, part := range parts {
+		if len(part) != 1 || !part[0].IsToken() {
+			return gridLine{}, false
 		}
-		n, ok := positiveNumber(rest)
-		return gridLine{span: n}, ok
+		switch t := part[0].Token; {
+		case t.Kind == css.Ident && ascii.EqualFold(t.Value, "span") && !span:
+			span = true
+		case t.Kind == css.Number && t.IsInteger && count == 0:
+			n, ok := positiveLine(t.Number)
+			if !ok {
+				return gridLine{}, false
+			}
+			count = n
+		case t.Kind == css.Ident && name == "":
+			name = t.Value
+		default:
+			return gridLine{}, false
+		}
 	}
-	if n, ok := positiveNumber(value); ok {
-		return gridLine{line: n}, true
+	switch {
+	case len(parts) == 0:
+		return gridLine{}, true
+	case len(parts) == 1 && name != "" && ascii.EqualFold(name, "auto"):
+		return gridLine{}, true
+	case span && name != "":
+		// "span main": the nth line named main past the other end, which is a
+		// named line and not read here.
+		return gridLine{}, false
+	case span:
+		return gridLine{span: max(count, 1)}, true
+	case name != "" && count != 0:
+		// "2 main": the second line named main, the same.
+		return gridLine{}, false
+	case count != 0:
+		return gridLine{line: count}, true
 	}
-	if isAreaName(value) {
-		n, ok := resolve(value)
-		return gridLine{line: n}, ok
-	}
-	return gridLine{}, false
+	n, ok := resolve(name)
+	return gridLine{line: n}, ok
 }
 
-// positiveNumber reads a whole number above nought, which is every line number
-// and every span this slice places.
+// positiveLine reads a line number or a span count, which is a whole number
+// above nought and within the bound on everything a stylesheet writes about
+// the explicit grid.
 //
 // A negative line counts from the end of the explicit grid, which is a real
 // value and not one this reads: it needs the far edge of a grid that is still
 // being worked out, and the gate refuses it rather than guessing.
-func positiveNumber(value string) (int, bool) {
-	if value == "" {
+func positiveLine(v float64) (int, bool) {
+	if !(v >= 1 && v <= maxRepeatedTracks) {
 		return 0, false
 	}
-	n := 0
-	for i := 0; i < len(value); i++ {
-		if value[i] < '0' || value[i] > '9' {
-			return 0, false
-		}
-		n = n*10 + int(value[i]-'0')
-		if n > maxRepeatedTracks {
-			return 0, false
-		}
-	}
-	return n, n > 0
+	return int(v), true
 }
 
 // placeItems is §8.5's automatic placement, step by step.
@@ -3125,8 +3071,9 @@ func (l *layouter) refusesToGrid(b *Box, width style.Unit) string {
 	areas, ok := l.areasOf(b)
 	if !ok {
 		return "its cells are named by a template that does not draw a grid: " +
-			"either its rows are not all the same length, a name is in two " +
-			"places that do not touch, or it draws more than " +
+			"a row holds something that is not a name, a dot or white space, " +
+			"its rows are not all the same length, a name is in two places " +
+			"that do not touch, or it draws more than " +
 			strconv.Itoa(maxRepeatedTracks) + " rows or columns"
 	}
 	switch trimmedLower(b.Style.Get("grid-auto-flow")) {
