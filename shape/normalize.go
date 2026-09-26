@@ -59,9 +59,8 @@ import "sort"
 //
 //   - HarfBuzz's fallbacks for a character the face cannot draw in any spelling:
 //     setting an exotic space as an ordinary one, and U+2011 as U+2010. Those are
-//     about drawing something rather than about equivalence, and this package
-//     already has one answer for a character it cannot draw — .notdef, counted as
-//     missing — which a caller can see and act on.
+//     about drawing something rather than about equivalence, so they are asked
+//     after all of this, when the glyphs are chosen; see spacefallback.go.
 //   - Variation selectors. A face that states a variant through cmap format 14
 //     is not asked, and the base is drawn in its default form. The selector is
 //     default-ignorable, so it is taken out before the buffer is built, as
@@ -545,8 +544,9 @@ func (n *normalizer) step(runes []rune, offsets []int, i int, shortest bool) int
 	}
 	// Nothing came apart, so the character is set as it was written — whether or
 	// not the face has it. What a face that has not is drawn as is decided
-	// elsewhere: shapeGlyphsIn substitutes .notdef and counts the character
-	// missing, which is an answer a caller can see.
+	// elsewhere: shapeGlyphsIn draws a stand-in where there is one (see
+	// spacefallback.go), and otherwise substitutes .notdef and counts the
+	// character missing, which is an answer a caller can see.
 	n.emit(u, cluster)
 	return i + 1
 }

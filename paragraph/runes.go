@@ -167,6 +167,12 @@ func MarksNoPaper(r rune) bool {
 // trailing-ideographic-space-001. The em space, the en space, the figure space
 // and the thin space are the same case. A face that *has* them is a face that
 // gets the width right, and it is worth going to find one.
+//
+// A face shaped as HarfBuzz shapes, and with a U+0020 of its own, does not
+// reach this for any of them but U+1680. It draws a separator it has no glyph
+// for as its own space, at the separator's width, and reports nothing missing
+// — which is what HarfBuzz does, and so what a browser does. See shape's
+// spacefallback.go.
 func SubstitutesExactly(r rune) bool {
 	return r == 0x00A0
 }

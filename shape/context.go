@@ -179,7 +179,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 						GID: gid, Cluster: buf[at].Cluster, XAdvance: sh.f.advanceGID(gid),
 						lig: lig, class: buf[at].class, mask: buf[at].mask,
 						substituted: true, multiplied: len(reps) > 1 || buf[at].multiplied,
-						umark: buf[at].umark,
+						umark: buf[at].umark, space: buf[at].space,
 					})
 				}
 				out := sh.replace(buf, at, 1, product)

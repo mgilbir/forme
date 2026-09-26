@@ -246,7 +246,10 @@ const anyFace = -1
 // glyph, and a unit of nothing else is anyFace, for ShapeRuns to set with its
 // neighbours. A character the face draws as its canonical decomposition is one
 // it has: é in a face with e and the combining acute and no é was passed over
-// for a later face, which the shaper would not have done.
+// for a later face, which the shaper would not have done. So is a character
+// the shaper draws with a stand-in: an ideographic space in a face with only
+// U+0020 is that face's space an em wide, not a reason to go to the next face
+// (see spacefallback.go).
 func (s *Stack) faceFor(unitText string, base rune) int {
 	drawn := false
 	for _, r := range unitText {
@@ -266,8 +269,10 @@ func (s *Stack) faceFor(unitText string, base rune) int {
 				continue
 			}
 			if _, ok := f.drawnAs(r, 0, parts[:0]); !ok {
-				complete = false
-				break
+				if _, _, stood := f.standIn(r); !stood {
+					complete = false
+					break
+				}
 			}
 		}
 		if complete {
@@ -276,6 +281,9 @@ func (s *Stack) faceFor(unitText string, base rune) int {
 	}
 	for i, f := range s.faces {
 		if _, ok := f.drawnAs(base, 0, parts[:0]); ok {
+			return i
+		}
+		if _, _, stood := f.standIn(base); stood {
 			return i
 		}
 	}

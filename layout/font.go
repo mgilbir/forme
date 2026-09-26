@@ -74,6 +74,11 @@ type FallbackFontSet interface {
 	// FaceFor returns a face that can set the whole of text, and whether one was
 	// found. The bold and italic flags are the ones the box asked for; a set is
 	// free to ignore them when the alternative is having no glyph at all.
+	//
+	// A face that would draw a character only with a stand-in — its space for
+	// an ideographic space — does not have it, and a set that chooses between
+	// its faces by shaping should ask shape.Face.StandsIn as well: a browser
+	// choosing a fallback face chooses by what the face has.
 	FaceFor(text string, bold, italic bool) (*shape.Face, bool)
 }
 

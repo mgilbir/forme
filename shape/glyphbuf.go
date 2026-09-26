@@ -82,6 +82,11 @@ type Glyph struct {
 	// the one reader that asks the character rather than the font: placing
 	// the marks of a face that places none of its own. See fallback.go.
 	umark unicodeMark
+
+	// space says the glyph is the face's space standing in for a space
+	// separator it has no glyph for, and which one, so that it can be given
+	// that separator's width. See spacefallback.go.
+	space spaceKind
 }
 
 // ligatureRef says what a glyph has to do with a ligature.
@@ -494,6 +499,12 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	)
 	for i, r := range runes {
 		gid, ok := f.GlyphID(r)
+		var space spaceKind
+		if !ok {
+			// A space separator or a non-breaking hyphen the face draws
+			// with a glyph it has; see spacefallback.go.
+			gid, space, ok = f.standIn(r)
+		}
 		if !ok {
 			// A character nothing draws is not one the face is missing.
 			//
@@ -526,6 +537,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		buf = append(buf, Glyph{
 			GID: gid, Cluster: offsets[i], XAdvance: f.advanceGID(gid),
 			class: classOfRune(runes[i]), umark: unicodeMarkOf(runes[i]),
+			space: space,
 		})
 	}
 	if len(buf) == 0 {

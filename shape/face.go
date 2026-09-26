@@ -582,7 +582,9 @@ func (f *Face) advanceGID(gid int) float64 {
 
 // Measure is the width of a string set at the given size, in user-space units.
 // Runes the font does not map contribute .notdef's advance, which is what a
-// renderer will draw.
+// renderer will draw — except the space separators and the non-breaking hyphen
+// a composite face draws with a stand-in, which contribute the stand-in's (see
+// spacefallback.go).
 func (f *Face) Measure(s string, size float64) float64 {
 	var total float64
 	for _, r := range s {
@@ -613,6 +615,11 @@ func (f *Face) Measure(s string, size float64) float64 {
 			// A face addressed by character code sets a character it has no
 			// code for as a space, so it is a space that must be measured.
 			_, w = f.missingByCode()
+		} else if gid, kind, ok := f.standIn(r); ok {
+			// A composite face draws a space separator it lacks as its own
+			// space, at the separator's width, and a non-breaking hyphen as a
+			// hyphen: see spacefallback.go.
+			w = f.standInAdvance(kind, f.advanceGID(gid))
 		}
 		total += w
 	}
@@ -692,9 +699,10 @@ func (f *Face) missingByCode() (code int, width float64) {
 // simple or standard face it is one byte of WinAnsiEncoding.
 //
 // On a composite face a rune the font does not map encodes as glyph 0, which
-// renders as .notdef — the visible "this font has no glyph for that" box; on a
-// simple or standard face it encodes as the space (see missingByCode). That is
-// deliberate: an error here would mean a caller could not lay out text
+// renders as .notdef — the visible "this font has no glyph for that" box —
+// unless the shaper draws it with a stand-in, whose glyph it is encoded as
+// (see spacefallback.go); on a simple or standard face it encodes as the space
+// (see missingByCode). That is deliberate: an error here would mean a caller could not lay out text
 // containing one stray character, and silently dropping it would lose content.
 // The second result reports how many runes were missing so a caller that cares
 // can react.
@@ -738,14 +746,19 @@ func (f *Face) Encode(s string) (codes []byte, missing int) {
 		}
 		var ok bool
 		if parts, ok = f.drawnAs(r, 0, parts[:0]); !ok {
-			missing++
-			parts = append(parts[:0], 0)
+			// The glyph the shaper draws in its place, where there is one —
+			// see spacefallback.go — and .notdef where there is not.
+			gid, _, stood := f.standIn(r)
+			if !stood {
+				missing++
+			}
+			f.used[gid] = true
+			code := f.codeForGID(gid)
+			codes = append(codes, byte(code>>8), byte(code))
+			continue
 		}
 		for _, p := range parts {
-			gid := 0
-			if p != 0 {
-				gid, _ = f.GlyphID(p)
-			}
+			gid, _ := f.GlyphID(p)
 			f.used[gid] = true
 			code := f.codeForGID(gid)
 			codes = append(codes, byte(code>>8), byte(code))

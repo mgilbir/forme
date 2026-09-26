@@ -227,6 +227,10 @@ type gposPass struct {
 // attachment is resolved against where its target finally is.
 func (sh shaper) position(buf []Glyph, p *plan, model shaperModel) {
 	how := sh.positioningFor(p, model)
+	// The widths of the spaces the face's own space stands in for come first,
+	// as HarfBuzz sets them with the font's own advances: every rule below
+	// adjusts the width the separator has. See spacefallback.go.
+	sh.f.setStandInSpaces(buf)
 	pass := &gposPass{chain: make([]int, len(buf)), kind: make([]uint8, len(buf))}
 	sh.gp = pass
 	if how.zero && sh.zeroMarks == zeroMarksEarly {
