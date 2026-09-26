@@ -2002,7 +2002,7 @@ func (p *painter) lines(f *Fragment) {
 		// order to be sorted into — what they need is the clip, and the
 		// block's content clip is the one every mark on its lines has.
 		for _, lf := range line.links {
-			p.linkArea(lf, f.clipContent, lf.Box.link)
+			p.linkArea(lf, f.clipContent, lf.Box.areaLink())
 		}
 		// §E.2's inline layer, in the order it gives: for each line box, the
 		// background and border of the inline boxes on it, then the text. They

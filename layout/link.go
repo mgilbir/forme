@@ -42,15 +42,21 @@ import (
 // every box inside a link around a whole table would be a rectangle per cell
 // for an area one rectangle already covers.
 //
+// A "display: contents" <a> generates no box of its own, and is a link all
+// the same: its children's boxes stand in its place, and a click on any of
+// them is a click on it. So its areas are theirs — see Box.contentsLink.
+//
 // # What its target is
 //
 // The href as the URL standard reads it — see referenceText — and otherwise
-// as written. A relative reference is relative to the document, which is what
-// every reference in the markup is (see ResourceResolver), and the document's
-// own URL is the caller's to know and not this engine's: it is handed over
-// unresolved, for the backend to resolve against whatever it knows the
-// document's address to be. A reference that is only a fragment, "#terms",
-// is a link into the document itself.
+// as written. A relative reference is relative to the document's base URL,
+// which is what every reference in the markup is relative to: a <base href>'s
+// where the document has one, resolved against it as base.go says, and the
+// document's own address otherwise. That address is the caller's to know and
+// not this engine's, so a reference relative to it is handed over unresolved,
+// for the backend to resolve against whatever it knows the document's address
+// to be. A reference that is only a fragment, "#terms", is then a link into
+// the document itself.
 //
 // # Which targets are refused
 //
@@ -103,7 +109,7 @@ func (b *boxBuilder) hyperlinkOf(n *html.Node) *hyperlink {
 	if !ok {
 		return nil
 	}
-	target, why := linkTarget(href)
+	target, why := b.base.link(href, b.rec)
 	if why != "" {
 		b.rec.ReportDetail(Finding{
 			Rule: RuleLinkRefused,
@@ -147,8 +153,8 @@ func (p *painter) linkOf(b *Box) *hyperlink {
 	if b == nil || b.IsText() {
 		return nil
 	}
-	if b.link != nil {
-		return b.link
+	if l := b.areaLink(); l != nil {
+		return l
 	}
 	if l := p.linkAbove(b.Parent); l != nil {
 		return l
@@ -189,8 +195,8 @@ func (p *painter) linkAbove(b *Box) *hyperlink {
 		p.inlineLinks = map[*Box]*hyperlink{}
 	}
 	for i := len(path) - 1; i >= 0; i-- {
-		if path[i].link != nil {
-			out = path[i].link
+		if l := path[i].areaLink(); l != nil {
+			out = l
 		}
 		p.inlineLinks[path[i]] = out
 	}

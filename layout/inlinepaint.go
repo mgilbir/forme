@@ -116,6 +116,9 @@ type inlinePiece struct {
 	// scale is text-fit's factor for the line this piece is on, which is what
 	// the box's own content area is measured at. One where nothing fits.
 	scale float64
+	// offset is §9.4.3's displacement of a text piece, which has no record of
+	// its own to read it from; zero for every other piece. See textLinkArea.
+	offset Point
 }
 
 // inlineDecor collects the pieces over one inline formatting context.
@@ -249,13 +252,23 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs, widths []style.
 				// area the fragment is drawn over, which is §10.6.1's and a
 				// different question.
 				base := baseline
-				if va, ok := d.l.inlineAligns[box]; ok {
+				var offset Point
+				if box.IsText() {
+					// Text a "display: contents" link stands for, which is on
+					// no record of the flattening's: those are the element
+					// boxes'. Its alignment and its displacement are its
+					// item's, as its runs' are. See textLinkArea.
+					if item.Valign.Aligned() {
+						base = base.Add(stack.Shift(item.Valign, item.Above, item.Below))
+					}
+					offset = item.Offset
+				} else if va, ok := d.l.inlineAligns[box]; ok {
 					above, below := d.l.leadingAt(box, box.FontSize.Mul(scale))
 					base = base.Add(stack.Shift(va, above, below))
 				}
 				d.pieces = append(d.pieces, inlinePiece{
 					box: box, line: index, left: left, right: right,
-					baseline: base, first: !seen, scale: scale,
+					baseline: base, first: !seen, scale: scale, offset: offset,
 				})
 				if d.last == nil {
 					d.last = make(map[*Box]int)
@@ -311,6 +324,17 @@ func (d *inlineDecor) finish(parent *Fragment) {
 			// the alternative to a skip is a panic on an untrusted document, and
 			// because the two are far enough apart in inlineContent for a later
 			// change to break the invariant quietly.
+			continue
+		}
+
+		if b.IsText() {
+			// Text standing directly in a "display: contents" link, which is
+			// on the line for its link's area and for nothing else: the
+			// element around it generated no box, so there is no margin,
+			// border, padding or outline of its own to read — the text box
+			// carries the element's style, and reading them there would give
+			// it those of the box that is not there. See Box.contentsLink.
+			d.textLinkArea(parent, p)
 			continue
 		}
 
@@ -379,7 +403,7 @@ func (d *inlineDecor) finish(parent *Fragment) {
 			// at and this is the only rectangle it has.
 			Offset: d.l.inlineOffsets[b],
 		}
-		if b.link != nil {
+		if b.areaLink() != nil {
 			// The link's area on this line, which is this fragment's border
 			// box. A copy, so that an <a> with a background as well, whose
 			// fragment is also a Boxes entry, is not moved twice by
@@ -408,6 +432,27 @@ func (d *inlineDecor) finish(parent *Fragment) {
 			d.l.addInlineFragment(b, frag)
 		}
 	}
+}
+
+// textLinkArea hangs the area of a piece of text a "display: contents" link
+// stands for on its line: §10.6.1's content area of the text, as an inline
+// box's is, with no inset of any kind. See Box.contentsLink.
+//
+// It is not charged to room here: addLine did, when it made the piece.
+func (d *inlineDecor) textLinkArea(parent *Fragment, p *inlinePiece) {
+	b := p.box
+	st := d.l.strutAt(b, b.FontSize.Mul(p.scale))
+	parent.Lines[p.line].links = append(parent.Lines[p.line].links, &Fragment{
+		Box: b,
+		BorderRect: Rect{
+			X: p.left, Y: p.baseline.Sub(st.Ascent),
+			W: p.right.Sub(p.left), H: st.Ascent.Add(st.Descent),
+		},
+		// §9.4.3's displacement of the boxes around the text, as its runs
+		// are drawn at; the baseline has §10.8.1's already. Both are its
+		// item's, from addLine.
+		Offset: p.offset,
+	})
 }
 
 // insetEnds is the two pieces of one box that carry its insets.
@@ -540,7 +585,13 @@ func (l *layouter) paintedInlines(b *Box) []*Box {
 		case cur.Outer != OuterInline || cur.Replaced != nil || isAtomicInline(cur):
 			out = nil
 		case cur.IsText():
-		case l.inlinePaints(cur) || cur.Position.positioned() || cur.link != nil:
+			// Walked through, unless it is text a "display: contents" link
+			// stands for, which has an area of its own to be given and
+			// nothing to paint. See Box.contentsLink and finish.
+			if cur.contentsLink != nil {
+				out = append(out[:len(out):len(out)], cur)
+			}
+		case l.inlinePaints(cur) || cur.Position.positioned() || cur.areaLink() != nil:
 			// A *positioned* inline box is kept whether or not it draws
 			// anything, because §10.1 forms the containing block of an
 			// absolutely positioned descendant from the padding boxes of this

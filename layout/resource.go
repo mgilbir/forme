@@ -67,11 +67,16 @@ import (
 // a failure of the render.
 //
 // Relative to the document, because that is the one base a resolver can know.
-// A reference written in the markup is handed over as written. One written in
-// a stylesheet is relative to that stylesheet (CSS Values 4 §4.5.1), and is
-// resolved against the sheet's name first — "url(f.ttf)" in "css/a.css" is
-// handed over as "css/f.ttf" — which is why Stylesheet.Name is a path. Either
-// way it is read the way the URL standard reads a reference first; see below.
+// A reference written in the markup is handed over as written, or joined onto
+// the document's <base href> first where it has one — <img src="a.png"> under
+// <base href="img/"> is handed over as "img/a.png"; see base.go, which is also
+// where a base that would take a reference outside this boundary is refused.
+// One written in a stylesheet is relative to that stylesheet (CSS Values 4
+// §4.5.1), and is resolved against the sheet's name first — "url(f.ttf)" in
+// "css/a.css" is handed over as "css/f.ttf" — which is why Stylesheet.Name is
+// a path; a <style> element's and a style attribute's are the document's, and
+// so relative to its <base>. Either way it is read the way the URL standard
+// reads a reference first; see below.
 //
 // # What the engine has already refused, and what it has not
 //
