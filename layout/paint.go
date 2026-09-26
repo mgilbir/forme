@@ -1097,12 +1097,64 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 			p.addLevel(lv, l)
 		}
 	}
+	// A table's own background and border come before its captions'. §E.2's
+	// step 4 is in tree order, and in the element tree the table is the
+	// captions' parent — a <caption> is a child of <table>, and an
+	// "html::before" made a caption is a child of <html>. The wrapper §17.4
+	// puts round them is anonymous and has them the other way up: a caption
+	// above the grid is its first child and the table its second, so the
+	// caption's background went down first and the table's border was drawn
+	// over it. root-box-002 overlaps the two with a negative margin on the
+	// caption, whose white is meant to hide the table's red top border; the
+	// red showed.
+	//
+	// Only the table's own background moves. What is inside it — rows, cells
+	// — stays where the wrapper has it, after a caption above and before one
+	// below, which is the order the table's parts are in on the page.
+	grid := tableOfWrapper(f)
+	if grid != nil {
+		lv.blocks = append(lv.blocks, grid)
+	}
 	for _, c := range f.Children {
 		if c.Box == nil {
 			continue
 		}
+		if c == grid {
+			p.gather(c, lv, true, collect)
+			continue
+		}
 		p.gatherChild(c, lv, collect)
 	}
+}
+
+// tableOfWrapper is the table box inside a §17.4 wrapper whose background
+// gather may take out of order, or nil.
+//
+// A table that is a stacking level — a translucent one, say — is not: it is
+// painted whole in its own layer, and taking its background into the block
+// layer with the captions would move it under blocks it belongs over. It
+// cannot float, be positioned or be an item, because §17.4 gives all of those
+// to the wrapper and makes the table inside it a plain block.
+//
+// A table written inside a positioned or translucent inline is painted by that
+// inline's level, which sorts the pieces it holds itself and does not come
+// through here: there a caption above the grid is still painted first. No
+// document in the suite overlaps the two inside such an inline, and it is left
+// rather than given a second copy of this rule.
+func tableOfWrapper(f *Fragment) *Fragment {
+	if f.Box == nil || !f.Box.TableWrapper {
+		return nil
+	}
+	for _, c := range f.Children {
+		if c.Box == nil || c.Box.Inner != InnerTable {
+			continue
+		}
+		if stacksAsLevel(c.Box) {
+			return nil
+		}
+		return c
+	}
+	return nil
 }
 
 // gatherChild sorts one child of a gathered fragment into the layers.
