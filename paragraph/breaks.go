@@ -187,6 +187,11 @@ type Carried struct {
 	// every rule that looks ahead reads as it reads the end of the text — or
 	// at an atomic inline, which is not text. See BreakContext.AfterObject.
 	Ahead string
+	// Clusters is the grapheme cluster scan as the text before this one left
+	// it: see Trailing.Clusters. Where it has read nothing and Prev is set, the
+	// boundary at this text's first character is answered from Prev alone,
+	// by the rules one character can answer.
+	Clusters segment.Scanner
 	// Orthography is the language's rules for a word hyphenated inside it,
 	// which decide what a line broken at a soft hyphen begins with. See the
 	// scan, and Orthography.HyphenateBetween.
@@ -367,7 +372,12 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 	// text that is *emitted*. Under segment's reading a combining mark after an
 	// invalid byte would begin a piece of its own, and a line would be allowed
 	// to start with it.
-	var clusters segment.Scanner
+	//
+	// It begins where the text before this one left it (Carried.Clusters), so
+	// a cluster written across a box boundary is one cluster by every rule of
+	// UAX #29 — a conjunct, an emoji sequence, a flag — and not only by the
+	// rules one character can answer.
+	clusters := at.Clusters
 
 	// UAX #14, with what CSS makes of it for this box's values. See uax14.go.
 	//
@@ -444,12 +454,14 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 
 		atBoundary := clusters.Boundary(r)
 		// The first character's cluster boundary is a question about the text
-		// in front of it, which is in another box: the scanner starts here and
-		// calls every first character a boundary (GB1). The pair rules answer it
-		// from Prev. Without them an opportunity carried over the boundary cut
-		// a syllable whose jamo were written in two boxes — and, as it always
-		// had, an ideograph from a combining mark in the next box.
-		if start == 0 && at.Prev != 0 {
+		// in front of it, which is in another box. A caller that hands on the
+		// Scanner has it answered by every rule; one that says only which
+		// character came before gets the rules that character can answer — see
+		// clusterContinues — and a scanner that starts here calls the first
+		// character a boundary (GB1) otherwise. Without either an opportunity
+		// carried over the boundary cut a syllable whose jamo were written in
+		// two boxes, and an ideograph from a combining mark in the next box.
+		if start == 0 && at.Prev != 0 && !at.Clusters.Started() {
 			atBoundary = !clusterContinues(at.Prev, r)
 		}
 		// After a space, a combining mark or a joiner begins a unit of its own
@@ -680,6 +692,7 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 			if r == '\r' && i < len(text) && text[i] == '\n' {
 				i++
 				ctx.advance(tl.char('\n'), hy)
+				clusters.Boundary('\n')
 			}
 			flush()
 			emit(Piece{Text: "\n", Space: true, Segment: true, EndsBidiParagraph: true})
@@ -756,6 +769,7 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 			if !ws.BreakSpaces && !lb.Anywhere {
 				for i < len(text) && text[i] == ' ' {
 					ctx.advance(c, hy)
+					clusters.Boundary(' ')
 					i++
 				}
 			}
@@ -842,6 +856,7 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 		DictTail:   dictionaryTail(dictSeg, dictBreaks),
 		PhraseTail: phraseTail,
 		Context:    ctx,
+		Clusters:   clusters,
 		Offered:    (breakNext && explicitNext) || deferred,
 		// Taken is an opportunity this text left that is not UAX #14's to
 		// decide — a preserved space's under break-spaces — and Deferred is one
@@ -867,6 +882,13 @@ type Trailing struct {
 	// field the next box's rules read; the rest are for callers that have to
 	// say something about the boundary before there is a next character.
 	Context BreakContext
+	// Clusters is the grapheme cluster scan at the end of this text, for the
+	// box that holds the next character. UAX #29's rules for a conjunct
+	// (GB9c), an emoji sequence (GB11) and a pair of regional indicators (GB12,
+	// GB13) look further back than one character, and a box boundary may fall
+	// anywhere inside what they look at: "<span>🇷🇺🇸</span><span>🇪</span>" is
+	// two flags, and the second box's first character ends the second.
+	Clusters segment.Scanner
 	// Offered says the text ended at an opportunity the next box may take:
 	// Taken, or Deferred.
 	Offered bool
@@ -1033,8 +1055,9 @@ func IsIdeographic(r rune) bool { return inLineBreakRanges(r, ideographicRanges[
 //
 // The rules after those — GB9c's conjuncts, GB11's emoji sequences and the
 // regional indicator pairs of GB12 and GB13 — are decided by more of the text
-// than one character, and are answered as a boundary here, which is what the
-// scan answered before it asked this at all.
+// than one character, and are answered as a boundary here. It is asked only
+// where a caller gives the character before the boundary and not the scan
+// (Carried.Clusters), which answers all of them.
 func clusterContinues(prev, r rune) bool {
 	p, c := segment.BreakOf(prev), segment.BreakOf(r)
 	switch {
