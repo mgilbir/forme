@@ -46,15 +46,6 @@ var verticalFaces = map[string]func(t *testing.T) []byte{
 	"Unifont-Regular.otf":    func(t *testing.T) []byte { return fonttest.NotoFile(t, "Unifont-Regular.otf") },
 }
 
-// inkUnread are the faces whose vertical origins are not held to HarfBuzz's,
-// and why: a CFF face with no VORG is hung by its ink, and this package does
-// not read a CFF glyph's ink (see vertical.go). Such a face is hung from its
-// ascender instead, which is asserted; everything else about its glyphs — which
-// they are, how far they advance, where they sit across the line — is held to
-// HarfBuzz as any other face's is. The test fails if the exception stops being
-// needed, since an exception that cannot go stale is a hole.
-var inkUnread = map[string]bool{"Unifont-Regular.otf": true}
-
 func harfbuzzFont(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(harfbuzzDir, "fonts", name))
@@ -194,9 +185,8 @@ func loadVerticalFace(t *testing.T, want *hbVertical) *Face {
 // sameUpright compares a run shaped upright with HarfBuzz's, glyph by glyph,
 // in font units. HarfBuzz measures an upright glyph's offsets from the pen,
 // with its vertical origin taken off them; Glyph states the origin apart, so
-// the comparison is of the offset less the origin. With inkUnread the height
-// is left out: see inkUnread.
-func sameUpright(f *Face, got []Glyph, want []hbPosition, inkUnread bool) (bool, string) {
+// the comparison is of the offset less the origin.
+func sameUpright(f *Face, got []Glyph, want []hbPosition) (bool, string) {
 	if len(got) != len(want) {
 		return false, fmt.Sprintf("%d glyphs, want %d", len(got), len(want))
 	}
@@ -209,7 +199,7 @@ func sameUpright(f *Face, got []Glyph, want []hbPosition, inkUnread bool) (bool,
 		case f.units(g.XAdvance) != w.xAdvance || f.units(g.YAdvance) != w.yAdvance:
 			return false, fmt.Sprintf("glyph %d advances (%d, %d), want (%d, %d)",
 				i, f.units(g.XAdvance), f.units(g.YAdvance), w.xAdvance, w.yAdvance)
-		case dx != w.dx || dy != w.dy && !inkUnread:
+		case dx != w.dx || dy != w.dy:
 			return false, fmt.Sprintf("glyph %d is placed at (%d, %d), want (%d, %d)", i, dx, dy, w.dx, w.dy)
 		}
 	}
@@ -223,11 +213,10 @@ func TestUprightShapingAgreesWithHarfBuzz(t *testing.T) {
 	for _, want := range faces {
 		t.Run(want.name, func(t *testing.T) {
 			f := loadVerticalFace(t, want)
-			unread := inkUnread[want.name]
 			check := func(what, s string, off Features, expected []hbPosition) {
 				off.Vertical = true
 				glyphs, _ := f.ShapeGlyphsInContext(s, "", "", off)
-				if same, why := sameUpright(f, glyphs, expected, unread); !same {
+				if same, why := sameUpright(f, glyphs, expected); !same {
 					t.Errorf("%s%s\n  %s", what, describeRunes(s), why)
 				}
 			}
@@ -297,29 +286,14 @@ func TestVerticalMetricsAgreeWithHarfBuzz(t *testing.T) {
 	for _, want := range faces {
 		t.Run(want.name, func(t *testing.T) {
 			f := loadVerticalFace(t, want)
-			ascender, _ := f.fontExtentsUnits()
-			differ := 0
 			for gid, m := range want.metrics {
 				advance, x, y := f.verticalUnits(gid)
 				if advance != m[0] || x != m[1] {
 					t.Errorf("glyph %d advances %d hung %d across, want %d and %d", gid, advance, x, m[0], m[1])
 				}
-				switch {
-				case inkUnread[want.name]:
-					if y != ascender {
-						t.Errorf("glyph %d of a CFF face with no VORG is hung %d down, want the ascender %d",
-							gid, y, ascender)
-					}
-					if y != m[2] {
-						differ++
-					}
-				case y != m[2]:
+				if y != m[2] {
 					t.Errorf("glyph %d is hung %d down, want %d", gid, y, m[2])
 				}
-			}
-			if inkUnread[want.name] && differ == 0 {
-				t.Errorf("every origin of %s agrees with HarfBuzz; it is listed in inkUnread, "+
-					"and should no longer be", want.name)
 			}
 			if len(want.metrics) == 0 {
 				t.Fatal("no glyph was compared")

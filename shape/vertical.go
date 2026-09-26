@@ -48,14 +48,15 @@ import "github.com/mgilbir/forme/font"
 //     line has to spare above the ink.
 //   - And where the ink cannot be had, the ascender.
 //
+// The ink is the glyph header's box for a TrueType glyph and the box its
+// charstring draws for a CFF one (cffink.go), so a CFF face with no VORG —
+// Unifont — has its ink centred as HarfBuzz centres it. A CFF face set in
+// vertical text states VORG almost without exception; the Noto CJK faces all
+// do.
+//
 // # What is not here
 //
-// The ink of a CFF glyph is in its charstrings, which this package does not
-// interpret for their bounds (see fallback.go, which has the same gap). So a
-// CFF face with no VORG takes the last of the four rather than the third, and
-// HarfBuzz — which does interpret them — centres the ink. A CFF face set in
-// vertical text states VORG almost without exception; the Noto CJK faces all
-// do. A face from LoadInstance keeps its default instance's vertical metrics:
+// A face from LoadInstance keeps its default instance's vertical metrics:
 // VVAR and the phantom points gvar moves are not read (see instance.go).
 
 // verticalTables is what a face keeps of the tables its vertical metrics are

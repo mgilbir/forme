@@ -1103,6 +1103,11 @@ func (c *layoutCache) layoutFor(gsubKey, gposKey string, build func() *layout) *
 // document sets in it, so a limit can appear after the face has been in use; a
 // caller wanting the whole story asks after shaping. An empty answer means
 // every table read so far was read whole.
+//
+// The ink of a CFF face's glyphs is measured as they are shaped too — to place
+// the marks of a face that positions none, and to hang a glyph set upright —
+// and the bounds that measuring runs into are reported here with the rest,
+// since a glyph left without its ink is placed otherwise than the font says.
 func (f *Face) LayoutLimits() []string {
 	var out []string
 	seen := map[string]bool{}
@@ -1118,6 +1123,9 @@ func (f *Face) LayoutLimits() []string {
 		}
 	}
 	add(f.layout)
+	if f.ink != nil {
+		out = append(out, f.ink.limits()...)
+	}
 	if f.cache != nil {
 		f.cache.mu.Lock()
 		defer f.cache.mu.Unlock()

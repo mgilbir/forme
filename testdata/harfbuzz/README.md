@@ -82,6 +82,8 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `difffuzz.py` | generates text instead of listing it — see below |
 | `vertical.py`, `vertical.txt`, `vertical_features.txt`, `vertical.expected.txt` | text set upright, top to bottom — see below |
 | `vertical_fixture.py`, `fonts/Vertical*.ttf` | the three faces that oracle needs and no foundry made |
+| `cffink.py`, `cffink.expected.txt` | the ink of CFF glyphs — see below |
+| `cffink_fixture.py`, `fonts/CFFInk.otf` | the face that oracle needs and no foundry made |
 
 Each corpus is weighted towards the places shaping decides something rather than
 towards realistic prose. Prose exercises one path many times; a grid exercises
@@ -147,12 +149,36 @@ that moves glyphs down the page, the marks and spaces of a face with no vertical
 metrics and no positioning. They are generated, carry no licence of their own,
 and rebuild to the same bytes.
 
-One exception is listed, in `inkUnread`: a CFF face with no VORG is hung by its
-ink in HarfBuzz, and this package does not read a CFF glyph's ink, so Unifont's
-origins are asserted to be its ascender instead. Everything else about its
-glyphs is compared. The exception fails if it stops being needed.
+There used to be one exception, Unifont: a CFF face with no VORG is hung by its
+ink, and this package did not read a CFF glyph's ink, so its origins were
+asserted to be its ascender instead. It reads it now (below), and Unifont's
+origins are held to HarfBuzz's like every other face's.
 
 `make hbvertical` regenerates it.
+
+## The ink of a CFF glyph
+
+A CFF glyph's box is not written down anywhere: the only way to know where it
+draws is to run its charstring, and `shape/cffink.go` runs it as HarfBuzz's
+extents do. `cffink.py` asks HarfBuzz for the extents of every glyph of
+`fonts/CFFInk.otf` and of a sample of every CFF face in the corpora — the six
+Noto CJK faces and the two Unifonts — and shapes a few strings in the fixture
+across the page and down it, where HarfBuzz places the marks and hangs the
+glyphs by their ink. `shape/cffink_test.go` holds the package to all of it.
+
+`CFFInk.otf` is built by `cffink_fixture.py`: a glyph for each thing a
+charstring can say that the real faces do not — every path operator at every
+argument count, the flex operators, widths, hint masks, numbers on a half and
+past 2^24, subroutines nested to the limit and past it, seac in each of its
+cases, the ways a charstring fails, and a glyph of 199,999 operators beside one
+of 200,000, HarfBuzz's cap. It is generated, carries no licence of its own, and
+rebuilds to the same bytes.
+
+The whole of every corpus face — 252,617 glyphs — was compared out of tree when
+the reader was written, and every one agrees; the file holds a sample so that
+it stays small.
+
+`make hbcffink` regenerates it.
 
 ## Why two scripts for one engine
 

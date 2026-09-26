@@ -1426,10 +1426,11 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 // below the line as it does, and a box ending under the baseline appears to cut
 // it.
 //
-// The face's numbers remain the fallback for a font that cannot say, which is a
-// CFF-flavoured one: its glyph extents are in the charstrings and reading them
-// means interpreting them. That fallback errs large, which for these questions
-// is the direction that calls two documents different rather than the same.
+// The face's numbers remain the fallback for a font that cannot say: one of
+// whose glyphs has no box to read — a CFF glyph whose charstring cannot be run,
+// or one past the work its face may spend measuring. That fallback errs large,
+// which for these questions is the direction that calls two documents
+// different rather than the same.
 //
 // It is deliberately not the rectangle for the question of whether to keep a run
 // at all; textInkReserved is, and says why.
