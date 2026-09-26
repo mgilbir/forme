@@ -231,37 +231,71 @@ func TestTheCommonBoxOfNeighboursIsNear(t *testing.T) {
 // TestABreakAtTheFarEndOfAChainIsFoundOnce: whether two runs may share a glyph
 // asks whether a break opportunity lies between them, and it walked every item
 // between them to find out — for every run of a chain of invisible ones, each
-// of which has the same neighbour at the far end, where the break is. Planted,
-// the walk reads as 14.4.
+// of which has the same neighbour at the far end, where the break is.
 //
-// Timed through costtest.TimeCopies. An item is half a kilobyte, so the chain
-// of eight thousand is four megabytes and the chain of two thousand one, and
-// with memory being streamed on the machine's other cores — which is what a
-// shared runner is — the smaller chain stayed in the cache and the larger did
-// not, and the linear walk read as 7.5 to 12.3 at this size and smaller ones
-// alike. Four chains of the smaller size are the larger's memory.
+// The defect is a question that cost the distance it asked across, so that is
+// what is measured: a fixed number of questions, each from a run at the start
+// of the chain to the run at its far end, across n items and across 16n. The
+// answer is a subtraction of two counts, which costs the same at either
+// distance; the walk costs sixteen times. Planted, the walk reads as 33.6, and
+// 114.7 with memory being streamed on the other cores: a walk across the larger
+// chain leaves the cache as well.
+//
+// It was the whole pass over the chain at n items and at 4n, which is linear
+// either way and so a ratio of four with nothing to spare: an item is half a
+// kilobyte, and with memory being streamed on the machine's other cores the
+// smaller chain stayed in the cache and the larger did not, and the linear pass
+// read as 7.5 to 12.3. The questions here read the two runs they are about and
+// two counts, which is the same few lines of memory at either size.
+//
+// The counts are built as mergeGroupTexts builds them, once for the paragraph
+// and before anything is timed; that the pass finds the break at all is
+// TestTheTableAgreesWithTheWalk's and the rest of this file's.
 func TestABreakAtTheFarEndOfAChainIsFoundOnce(t *testing.T) {
 	face := joiningFace(t)
-	chain := func(n int) func() {
+	const questions = 256
+	chain := func(n int, broken bool) ([]inlineItem, []int) {
 		var items []inlineItem
 		items = append(items, inlineItem{Text: "a", Face: face, Width: 100})
 		for k := 0; k < n; k++ {
 			items = append(items, inlineItem{Text: "⁠", Face: face})
 		}
-		items = append(items, inlineItem{Text: "b", Face: face, Width: 100, BreakBefore: true})
+		items = append(items, inlineItem{Text: "b", Face: face, Width: 100, BreakBefore: broken})
+		breaks := make([]int, len(items)+1)
+		for k, it := range items {
+			breaks[k+1] = breaks[k]
+			if it.BreakBefore {
+				breaks[k+1]++
+			}
+		}
+		return items, breaks
+	}
+	ask := func(n int) func() {
+		items, breaks := chain(n, true)
+		last := len(items) - 1
+		// The question has to reach the break, or this times the checks in
+		// front of it: the same chain without the break shares.
+		plain, plainBreaks := chain(n, false)
+		if !sharesGlyphsWith(plain, 1, last, plainBreaks, translucency{}) {
+			t.Fatal("two runs of a chain with no break between them do not share; " +
+				"the question stops before the break is asked about")
+		}
+		if sharesGlyphsWith(items, 1, last, breaks, translucency{}) {
+			t.Fatal("runs with a break between them share a glyph")
+		}
 		return func() {
-			g := mergeGroupTexts(items, contextNeighbours(items), func() runText { return newRunText(items) })
-			if !g.empty() {
-				t.Fatal("runs with a break between them were grouped")
+			tr := translucency{}
+			for k := 1; k <= questions; k++ {
+				sharesGlyphsWith(items, k, last, breaks, tr)
 			}
 		}
 	}
-	const n = 2000
-	c := costtest.TimeCopies(t, "a break at the end of a chain",
-		func(int) func() { return chain(n) }, chain(4*n))
+	const small, large = 2000, 16 * 2000
+	c := costtest.Time(t, "a fixed number of questions across n items and 16n",
+		ask(small), ask(large))
 	if c.Ratio > 8 {
-		t.Errorf("a break at the end of a chain: four times the input took %v; linear "+
-			"work is about four, and quadratic is about sixteen", c)
+		t.Errorf("%d questions across %d items took %v; across %d the same answer "+
+			"is the same subtraction, and a walk is sixteen times", questions, large, c, small)
 	}
 }
 
