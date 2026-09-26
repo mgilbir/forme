@@ -1,5 +1,5 @@
 // Package font reads font programs: the sfnt container (TrueType and OpenType),
-// the CFF outlines an OpenType font may carry, and the WOFF 1 and WOFF 2
+// the CFF outlines an OpenType font may carry, Type 1, and the WOFF 1 and WOFF 2
 // wrappers a web font arrives in.
 //
 // It is what shape stands on. shape.Load unwraps a WOFF with DecodeWOFF, finds
@@ -23,16 +23,16 @@
 // # What is here that the engine does not use
 //
 // The package came from a PDF/A validator, which asked questions of an embedded
-// font this engine does not: the width of a glyph by name or by CID, the
-// Macintosh and symbol cmaps, how many cmap subtables a symbolic font has.
-// Program still carries those answers and the sfnt and CFF readers still
-// compute them — see Program for which fields nothing outside this package
-// reads.
+// font this engine does not: the width of a glyph by name or by CID, which
+// glyphs a Type 1 program defines, the Macintosh and symbol cmaps, how many
+// cmap subtables a symbolic font has. Program still carries those answers, the
+// CFF and Type 1 readers still compute them, and they are tested and fuzzed like
+// the rest — so they are held to the same standard as what shape reads, for no
+// caller in this engine.
 //
-// The functions that existed only for that validator are gone: the Type 1
-// reader, the code-to-glyph rule of ISO 32000-1 9.6.6.4, and the two glyph-name
-// repertoires of ISO 19005-1 6.3.8. None was reachable from any package,
-// command or test helper outside this one, and a reader nobody calls is still
-// a reader somebody has to keep correct and fuzzed. shape reads sfnt and CFF;
-// a Type 1 font was never a face it could load.
+// ParseType1 is part of that: reading a font program is this package's scope
+// whichever program it is, and a PDF validator reads the Type 1 programs a PDF
+// embeds through it. What is PDF's rather than the font's — the code-to-glyph
+// rule of ISO 32000-1 9.6.6.4 and the glyph-name repertoires of ISO 19005-1
+// 6.3.8 — is not here; a validator owns it.
 package font
