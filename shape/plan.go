@@ -74,9 +74,16 @@ import (
 // Not mirrored: 'rand',
 // which HarfBuzz applies with a pseudo-random choice of alternate and this
 // package applies as the first alternate like any other alternate
-// substitution; HarfBuzz's second Arabic fallback, for a face encoded as
-// Windows-1256 (see arabicfallback.go); and 'vert', since nothing here sets
-// text vertically.
+// substitution; and HarfBuzz's second Arabic fallback, for a face encoded as
+// Windows-1256 (see arabicfallback.go).
+//
+// # A run set upright
+//
+// A run shaped with Features.Vertical gets HarfBuzz's top-to-bottom plan: no
+// direction's forms, the common features, and in place of the horizontal ones
+// 'vert' alone — searched for in the whole of the font where the run's own
+// script and language do not list it, since a CJK face commonly lists it under
+// one script and is set vertically in another. See flagGlobalSearch.
 //
 // Where HarfBuzz changed between versions, what is mirrored is what the
 // version the oracle runs does: HarfBuzz 8 turned 'calt' off for Hangul, and
@@ -130,9 +137,15 @@ func (m shaperModel) syllabic() bool {
 // thing that can put a vowel sign before its consonant. A font that states its
 // rules under 'DFLT' or 'latn' does have an opinion — it states them over the
 // text in stored order — and the model would undo it.
-func categorize(script uint16, chosen string) shaperModel {
+//
+// vertical says the run is set upright down the page (Features.Vertical),
+// where Arabic and Syriac are set by the default model: joining is a
+// horizontal line's, and HarfBuzz applies it to no other.
+func categorize(script uint16, chosen string, vertical bool) shaperModel {
 	fallback := chosen == "DFLT" || chosen == "latn"
 	switch {
+	case vertical && (scriptSelects(script, "arab") || scriptSelects(script, "syrc")):
+		return modelDefault
 	case scriptSelects(script, "arab"):
 		// Arabic is set by its own model whatever the font declares: the forms
 		// are chosen from the characters, and a font with no 'arab' still has
@@ -250,6 +263,11 @@ const (
 	// flagPerSyllable holds the feature's lookups to one syllable: neither
 	// what they match nor the context they read may cross into the next.
 	flagPerSyllable
+	// flagGlobalSearch says a feature the run's script and language system do
+	// not list is looked for in the whole of the font's feature list, and the
+	// first feature of that tag there is applied: HarfBuzz's F_GLOBAL_SEARCH,
+	// which it gives 'vert' and nothing else. See firstFeature.
+	flagGlobalSearch
 
 	flagManualJoiners = flagManualZWJ | flagManualZWNJ
 )
@@ -472,11 +490,14 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 
 	// What the direction selects, and the forms HarfBuzz applies by default to
 	// particular characters: the fractions and, for a right-to-left run, the
-	// mirrored forms of the characters Unicode did not mirror itself.
-	if key.rtl {
+	// mirrored forms of the characters Unicode did not mirror itself. A run
+	// set upright has no horizontal direction to select forms for.
+	switch {
+	case key.features.Vertical:
+	case key.rtl:
 		b.enable("rtla", 0)
 		b.add("rtlm", maskRtlm, 0)
-	} else {
+	default:
 		b.enable("ltra", 0)
 		b.enable("ltrm", 0)
 	}
@@ -515,8 +536,17 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 	for _, tag := range [...]string{"abvm", "blwm", "ccmp", "locl", "mark", "mkmk", "rlig"} {
 		b.enable(tag, 0)
 	}
-	for _, tag := range [...]string{"calt", "clig", "curs", "dist", "kern", "liga", "rclt"} {
-		b.enable(tag, 0)
+	if key.features.Vertical {
+		// A run set upright applies 'vert' and none of the horizontal
+		// features: kerning, cursive joining and the ligatures are a
+		// horizontal line's. HarfBuzz leaves out 'vrt2' too — it is the
+		// rotated forms a font gives an application that does not turn
+		// sideways text itself, and a run that is upright is not turned.
+		b.enable("vert", flagGlobalSearch)
+	} else {
+		for _, tag := range [...]string{"calt", "clig", "curs", "dist", "kern", "liga", "rclt"} {
+			b.enable(tag, 0)
+		}
 	}
 
 	for _, u := range key.features.requested(extra) {
@@ -759,6 +789,9 @@ func (p *plan) compile(l *layout, b *planBuilder) {
 			continue
 		}
 		lookups := l.featureLookups[f.tag]
+		if l.searchesGlobally(f) {
+			lookups = l.vertGSUB.lookups
+		}
 		if len(lookups) == 0 {
 			continue
 		}
@@ -804,6 +837,9 @@ func (p *plan) compile(l *layout, b *planBuilder) {
 			continue
 		}
 		lookups, declared := l.gposFeatures[f.tag]
+		if l.searchesGlobally(f) {
+			lookups, declared = l.vertGPOS.lookups, l.vertGPOS.found
+		}
 		if !declared {
 			continue
 		}
@@ -820,6 +856,30 @@ func (p *plan) compile(l *layout, b *planBuilder) {
 	}
 	p.gpos = mergeLookups(gpos)
 	p.gposKern = gposEnabled["kern"]
+}
+
+// searchesGlobally reports whether a feature of the plan is taken from the
+// whole of the font rather than from the run's language system: it asks to be
+// (flagGlobalSearch), and the language system lists it in neither table, as
+// HarfBuzz's map builder decides it. Only 'vert' asks, and a layout keeps the
+// first 'vert' of each table for it.
+func (l *layout) searchesGlobally(f planFeature) bool {
+	if f.flags&flagGlobalSearch == 0 || f.tag != "vert" {
+		return false
+	}
+	_, sub := l.featureLookups[f.tag]
+	_, pos := l.gposFeatures[f.tag]
+	return !sub && !pos
+}
+
+// offersVert reports whether a run set upright finds a 'vert' in the font,
+// where its own language system lists one or anywhere in the font's feature
+// lists: HarfBuzz's has_vert. A font that offers none has its vertical forms
+// reached by character instead — see rotateForVertical.
+func (l *layout) offersVert() bool {
+	_, sub := l.featureLookups["vert"]
+	_, pos := l.gposFeatures["vert"]
+	return sub || pos || l.vertGSUB.found || l.vertGPOS.found
 }
 
 // mergeLookups puts a list of lookups into index order with each once.

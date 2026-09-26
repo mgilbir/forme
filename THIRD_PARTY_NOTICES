@@ -1910,3 +1910,19 @@ The CFF standard strings and predefined charsets, and the standard Latin
 encodings, are tables of names and numbers every reader of the formats has
 to hold. They are listed here for where they came from; neither source
 states a licence for them, and none is claimed.
+
+============================================================================
+Fonts built for the vertical shaping oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/VerticalComposites.ttf
+         testdata/harfbuzz/fonts/VerticalFallbacks.ttf
+         testdata/harfbuzz/fonts/VerticalHhea.ttf
+Source:  testdata/harfbuzz/vertical_fixture.py, in this repository, which
+         builds them with fontTools
+Licence: the licence in LICENSE; they are not anyone else's work
+
+Three small faces made from nothing by the script named above, for rules no
+published face at hand exercises. They are listed here because every font the
+repository keeps is, and for where they came from; no third party's work is
+in them.

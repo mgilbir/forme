@@ -267,8 +267,9 @@ func (sh shaper) fallbackAroundBase(buf []Glyph, base, end int, adjust bool) {
 			if buf[i].umark.nonSpacing {
 				if adjust {
 					buf[i].XOffset -= buf[i].XAdvance
+					buf[i].YOffset -= buf[i].YAdvance
 				}
-				buf[i].XAdvance = 0
+				buf[i].XAdvance, buf[i].YAdvance = 0, 0
 			}
 		}
 		return
@@ -286,10 +287,11 @@ func (sh shaper) fallbackAroundBase(buf []Glyph, base, end int, adjust bool) {
 	ligID := buf[base].lig.id
 	// Where the pen is, relative to the base's origin, as each mark is
 	// reached: before the base's advance when the run is drawn forwards, and
-	// moving back by the advance of anything between.
-	var xOff float64
+	// moving back by the advance of anything between. Down the page too, for
+	// a run set upright, whose advances are vertical ones.
+	var xOff, yOff float64
 	if !sh.rtl {
-		xOff = -buf[base].XAdvance
+		xOff, yOff = -buf[base].XAdvance, -buf[base].YAdvance
 	}
 	component := baseExt
 	lastComp := -1
@@ -300,8 +302,10 @@ func (sh shaper) fallbackAroundBase(buf []Glyph, base, end int, adjust bool) {
 		if class == 0 {
 			if !sh.rtl {
 				xOff -= buf[i].XAdvance
+				yOff -= buf[i].YAdvance
 			} else {
 				xOff += buf[i].XAdvance
+				yOff += buf[i].YAdvance
 			}
 			continue
 		}
@@ -318,6 +322,11 @@ func (sh shaper) fallbackAroundBase(buf []Glyph, base, end int, adjust bool) {
 				lastComp = comp
 				lastClass = 255
 				component = baseExt
+				// The parts in the order the line is drawn. A run set upright
+				// has no horizontal direction of its own, and HarfBuzz takes
+				// its script's; this takes left to right, which differs only
+				// for a ligature of a right-to-left script, set upright, in a
+				// face that positions none of its marks.
 				if !sh.rtl {
 					component.xBearing += comp * component.width / comps
 				} else {
@@ -330,15 +339,16 @@ func (sh shaper) fallbackAroundBase(buf []Glyph, base, end int, adjust bool) {
 			lastClass = class
 			cluster = component
 		}
-		buf[i].XAdvance = 0
+		buf[i].XAdvance, buf[i].YAdvance = 0, 0
 		if x, y, ok := sh.fallbackPlace(buf[i].GID, &cluster, class); ok {
 			buf[i].XOffset = f.scale(x) + xOff
-			buf[i].YOffset = f.scale(y)
+			buf[i].YOffset = f.scale(y) + yOff
 			continue
 		}
 		// A mark whose own ink cannot be had keeps its offset, and only moves
 		// back with the pen.
 		buf[i].XOffset += xOff
+		buf[i].YOffset += yOff
 	}
 }
 
@@ -353,16 +363,19 @@ func (sh shaper) fallbackPlace(gid int, base *extents, class uint8) (x, y int, o
 	}
 	gap := f.unitsPerEm / 16
 
-	switch class {
-	case cccDoubleBelow, cccDoubleAbove:
+	switch {
+	case (class == cccDoubleBelow || class == cccDoubleAbove) && !sh.features.Vertical:
+		// Over the join to the next base, which is to one side of this one
+		// only on a horizontal line. HarfBuzz centres the mark in a run set
+		// upright, as below.
 		if !sh.rtl {
 			x = base.xBearing + base.width - mark.width/2 - mark.xBearing
 		} else {
 			x = base.xBearing - mark.width/2 - mark.xBearing
 		}
-	case cccAttachedBelowLeft, cccBelowLeft, cccAboveLeft:
+	case class == cccAttachedBelowLeft || class == cccBelowLeft || class == cccAboveLeft:
 		x = base.xBearing - mark.xBearing
-	case cccAttachedAboveRight, cccBelowRight, cccAboveRight:
+	case class == cccAttachedAboveRight || class == cccBelowRight || class == cccAboveRight:
 		x = base.xBearing + base.width - mark.width - mark.xBearing
 	default:
 		// Centred, which is also what every class this does not name gets.

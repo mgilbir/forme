@@ -190,10 +190,54 @@ func (f *Face) standInAdvance(kind spaceKind, advance float64) float64 {
 // A glyph a ligature made is left alone, as HarfBuzz leaves one. It stands for
 // more than the space, so the space's width is not its width; and a ligature
 // product never carries the kind, because it is made afresh.
-func (f *Face) setStandInSpaces(buf []Glyph) {
+//
+// In a run set upright the separator's length is down the page, and is set in
+// the vertical advance instead. See standInYAdvance.
+func (f *Face) setStandInSpaces(buf []Glyph, vertical bool) {
 	for i := range buf {
-		if k := buf[i].space; k != notSpace {
+		k := buf[i].space
+		switch {
+		case k == notSpace:
+		case vertical:
+			buf[i].YAdvance = f.standInYAdvance(k, buf[i].YAdvance)
+		default:
 			buf[i].XAdvance = f.standInAdvance(k, buf[i].XAdvance)
 		}
 	}
+}
+
+// standInYAdvance is standInAdvance for a run set upright: the same fractions
+// of an em and the same glyphs asked, as lengths down the page — negative, as
+// Glyph.YAdvance is — with a figure or punctuation space as long as the
+// glyph's vertical advance. The arithmetic is HarfBuzz's for a vertical
+// buffer, whose negative lengths truncate towards zero.
+func (f *Face) standInYAdvance(kind spaceKind, advance float64) float64 {
+	upem := f.unitsPerEm
+	vertical := func(gid int) float64 {
+		a, _, _ := f.verticalUnits(gid)
+		return -f.scale(a)
+	}
+	switch kind {
+	case spaceEm, spaceEm2, spaceEm3, spaceEm4, spaceEm5, spaceEm6, spaceEm16:
+		n := int(kind)
+		return f.scale(-((upem + n/2) / n))
+	case space4Em18:
+		return f.scale(-upem * 4 / 18)
+	case spaceFigure:
+		for d := '0'; d <= '9'; d++ {
+			if gid, ok := f.GlyphID(d); ok {
+				return vertical(gid)
+			}
+		}
+	case spacePunctuation:
+		if gid, ok := f.GlyphID('.'); ok {
+			return vertical(gid)
+		}
+		if gid, ok := f.GlyphID(','); ok {
+			return vertical(gid)
+		}
+	case spaceNarrow:
+		return f.scale(f.units(advance) / 2)
+	}
+	return advance
 }

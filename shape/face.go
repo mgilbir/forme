@@ -159,12 +159,17 @@ type Face struct {
 	// font that declares no scripts.
 	layout *layout
 	// hmtx is the horizontal metrics table and longMetrics how many of its
-	// records carry an advance, kept for the one reader that needs a glyph's
+	// records carry an advance, kept for the two readers that need a glyph's
 	// metrics in font units rather than scaled: placing the marks of a face
-	// with no positioning of its own, which is integer arithmetic on them. See
-	// fallback.go.
+	// with no positioning of its own (fallback.go), and hanging a glyph set
+	// upright from half its advance (vertical.go). Both are integer arithmetic
+	// on them.
 	hmtx        []byte
 	longMetrics int
+	// vert is what the vertical metrics of a glyph set upright are read from:
+	// vhea and vmtx, VORG, and for a TrueType face the glyph headers. See
+	// vertical.go.
+	vert verticalTables
 	// layoutTables are the GSUB, GPOS, GDEF and kern bytes, kept so that the
 	// layout can be read again for the script and language of a run;
 	// positionings and scriptLayouts cache those readings, by what each
@@ -339,6 +344,10 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	}
 	f.readOS2(tables["OS/2"])
 	f.readPost(tables["post"])
+	f.vert = readVerticalTables(tables, prog.NumGlyphs, budget)
+	if err := budget.Err(); err != nil {
+		return nil, err
+	}
 	f.axes = readAxes(tables["fvar"])
 	f.stemV = stemV(tables["OS/2"])
 	if f.capHeight == 0 {

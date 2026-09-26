@@ -334,7 +334,7 @@ func TestScriptsOneRunApartShapeAlike(t *testing.T) {
 			}
 			pairs++
 			for _, c := range chosen {
-				if ma, mb := categorize(uint16(a), c), categorize(uint16(b), c); ma != mb {
+				if ma, mb := categorize(uint16(a), c, false), categorize(uint16(b), c, false); ma != mb {
 					t.Errorf("scripts %d and %d are one run, and under %q one is set by model %d "+
 						"and the other by %d", a, b, c, ma, mb)
 				}

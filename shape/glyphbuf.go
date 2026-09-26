@@ -41,7 +41,32 @@ type Glyph struct {
 
 	// XOffset and YOffset displace the glyph from the pen without moving the
 	// pen. This is how a mark is placed over its base.
+	//
+	// In a run set upright they displace it from where it is hung — see
+	// VOriginX — rather than from the pen itself.
 	XOffset, YOffset float64
+
+	// YAdvance is how far the pen moves after this glyph along the page's
+	// vertical axis, in the font's own orientation: up is positive, so a run
+	// set down the page advances by a negative number, as HarfBuzz and a PDF
+	// W2 array both state it. It is zero in a run set across the page, and
+	// in a run set upright (Features.Vertical) it is the pen's only advance —
+	// XAdvance is zero there. It starts as the glyph's vertical advance: vmtx's,
+	// or where the face has none the height of its line. See vertical.go.
+	YAdvance float64
+
+	// VOriginX and VOriginY are, in a run set upright, where the glyph is hung
+	// from: the point of the glyph, measured from its own horizontal origin,
+	// that is put at the pen. Half the glyph's horizontal advance across, and
+	// down from the top by what VORG or vmtx state, or the fallback HarfBuzz
+	// takes where they state nothing. Both are zero in a run set across the
+	// page.
+	//
+	// So an upright glyph's horizontal origin is drawn at the pen plus
+	// (XOffset-VOriginX, YOffset-VOriginY); a format that places a glyph by
+	// its vertical origin itself, as PDF's vertical writing does from W2, is
+	// given the origin and the offsets separately.
+	VOriginX, VOriginY float64
 
 	// lig records this glyph's part in a ligature, and is unexported because it
 	// is bookkeeping between the substitution pass and the positioning one
@@ -313,6 +338,13 @@ func (f *Face) ShapeGlyphsWith(s string, features ...string) ([]Glyph, int) {
 }
 
 func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Glyph, int) {
+	if ctx.features.Vertical {
+		// An upright run is not cut by direction: CSS Writing Modes §5.1 has
+		// every character of it treated as strong left-to-right, and HarfBuzz
+		// sets a top-to-bottom run in the order it is written, mirroring
+		// nothing. See Features.Vertical.
+		return f.shapeDirection(s, scriptBehind(ctx.before), scriptAhead(ctx.after), false, extra, ctx)
+	}
 	runs := bidiVisualRuns(s)
 	if len(runs) <= 1 {
 		// One direction throughout, which is nearly all text: shaped as one run
@@ -395,7 +427,7 @@ func (f *Face) shapeDirection(s string, behind, ahead uint16, rtl bool, extra []
 	if !f.composite() {
 		// A face set by character code has no rules to read per script, and
 		// nothing to merge a neighbour's glyphs into.
-		return f.shapeByCode(s, rtl)
+		return f.shapeByCode(s, rtl, ctx.features.Vertical)
 	}
 	if ctx.mergeBefore != "" || ctx.mergeAfter != "" {
 		return f.shapeMerged(s, rtl, extra, ctx)
@@ -446,7 +478,7 @@ func (f *Face) shapeDirection(s string, behind, ahead uint16, rtl bool, extra []
 // the whole paragraph and cannot be read off one run of it.
 func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, ctx shapeContext) ([]Glyph, int) {
 	if !f.composite() {
-		return f.shapeByCode(s, rtl)
+		return f.shapeByCode(s, rtl, ctx.features.Vertical)
 	}
 	// Which model sets the run is decided by the script and by the tag the
 	// font's rules for it were read under — see categorize — and it decides
@@ -455,7 +487,8 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	lang := openTypeLanguage(ctx.features.Language)
 	l := f.layoutFor(script, lang)
 	chosen := f.chosenScriptTag(script, lang)
-	model := categorize(script, chosen)
+	vertical := ctx.features.Vertical
+	model := categorize(script, chosen, vertical)
 	// Rule L4: a bracket in a right-to-left run is drawn as the bracket that
 	// mirrors it, and the substitution is on the character, before the font is
 	// asked for a glyph at all. Where the font has no glyph for the mirror the
@@ -463,6 +496,12 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	runes, offsets := bidiRunCharacters(s, rtl)
 	if rtl {
 		f.keepUnmirrorable(s, runes, offsets)
+	}
+	// The same substitution for a run set upright, in a face with no 'vert'
+	// to give the vertical forms by glyph: the character's own vertical form,
+	// where the face has one. See rotateForVertical.
+	if vertical && !l.offersVert() {
+		f.rotateForVertical(runes)
 	}
 	// Thai and Lao's one rearrangement of the text, which every shaper makes
 	// whatever the font says, and for a Thai font with no Thai rules of its own
@@ -637,8 +676,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	sh.position(buf, p, model)
 	// The pair that spans the boundary to the next run, which the pass above
 	// cannot see because the glyph on the far side of it is not in this buffer.
-	// See boundarykern.go.
-	if len(sh.l.kern) > 0 && ctx.kerns && !ctx.features.NoKerning {
+	// See boundarykern.go. Not for a run set upright, which is not kerned:
+	// the pairs are the 'kern' feature's, and a vertical run applies none.
+	if len(sh.l.kern) > 0 && ctx.kerns && !ctx.features.NoKerning && !vertical {
 		kctx := ctx
 		if ctx.cutBefore {
 			kctx.before = ""
@@ -661,6 +701,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// widths, in the order it is drawn. See stch.go.
 	if p.stch {
 		buf = f.applyStch(buf, rtl)
+	}
+	if vertical {
+		unhangFromOrigin(buf)
 	}
 	for _, g := range buf {
 		f.used[g.GID] = true
@@ -759,8 +802,10 @@ const fractionSlash = 0x2044
 // character at the width the font publishes, and that is what this does.
 //
 // Callers get the same Glyph values either way, so Draw, Measure and the
-// fallback stack do not have to know which kind of face they were given.
-func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
+// fallback stack do not have to know which kind of face they were given — and
+// a run set upright gets its vertical metrics here too, by the same rules and
+// from the same tables where the face has them. See verticalRune.
+func (f *Face) shapeByCode(s string, rtl, vertical bool) ([]Glyph, int) {
 	runes, offsets := bidiRunCharacters(s, rtl)
 	// A simple face draws nothing for these either. It is more visible here, if
 	// anything: WinAnsi gives U+00AD a code of its own, so a soft hyphen without
@@ -799,7 +844,7 @@ func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
 			for _, p := range parts {
 				code, _ := f.GlyphID(p)
 				width, _ := f.Advance(p)
-				buf = append(buf, Glyph{GID: code, Cluster: offsets[i], XAdvance: width})
+				buf = append(buf, f.byCode(code, offsets[i], width, p, vertical))
 				drew(p, code)
 			}
 			continue
@@ -807,7 +852,7 @@ func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
 		// The same substitution Measure and Encode make: see missingByCode.
 		missing++
 		code, width := f.missingByCode()
-		buf = append(buf, Glyph{GID: code, Cluster: offsets[i], XAdvance: width})
+		buf = append(buf, f.byCode(code, offsets[i], width, ' ', vertical))
 		drew(' ', code)
 	}
 	if rtl {
@@ -818,6 +863,21 @@ func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
 		reverseGlyphs(buf)
 	}
 	return buf, missing
+}
+
+// byCode is one glyph of a face set by character code: the code, drawn for the
+// character r, at the width the face publishes for it — or, in a run set
+// upright, with the vertical metrics the face has for the character in its
+// place. The metrics are asked by character because the code names no glyph
+// the face's tables are indexed by. See verticalRune.
+func (f *Face) byCode(code, cluster int, width float64, r rune, vertical bool) Glyph {
+	g := Glyph{GID: code, Cluster: cluster, XAdvance: width}
+	if vertical {
+		advance, x, y := f.verticalRune(r)
+		g.XAdvance, g.YAdvance = 0, -f.scale(advance)
+		g.VOriginX, g.VOriginY = f.scale(x), f.scale(y)
+	}
+	return g
 }
 
 // MeasureGlyphs is the width a shaped run occupies at a given size, which is

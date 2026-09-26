@@ -123,8 +123,10 @@ type DrawText struct {
 	//
 	// The em is the advance because CSS Writing Modes §4.4 says to synthesize
 	// the vertical metrics a face does not state, and the em box is the
-	// synthesis. It is not an approximation of a number the font has: for the
-	// faces this engine reads, there is no such number.
+	// synthesis. Layout measures every upright run so, including in a face
+	// that does state them: its vmtx advances and its origins are what the
+	// run shaped with shape.Features.Vertical reports, per glyph, and layout
+	// does not yet read them.
 	Upright bool
 	Face    *shape.Face
 	Size    style.Unit

@@ -487,6 +487,46 @@ type layout struct {
 	// plans are the shaping plans built from this layout, so that a run does not
 	// collect and sort its stages again. See planFor.
 	plans *planCache
+	// vertGSUB and vertGPOS are the first 'vert' in each table's FeatureList,
+	// whatever script or language system lists it, or none: what a run set
+	// upright applies where its own language system lists no 'vert'. See
+	// flagGlobalSearch.
+	vertGSUB, vertGPOS globalFeature
+}
+
+// globalFeature is one feature found in a table's FeatureList by its tag
+// alone: the lookups it names at the coordinates in force, and whether the
+// table has it at all — a feature with no lookups is still found, as HarfBuzz
+// finds it.
+type globalFeature struct {
+	lookups []int
+	found   bool
+}
+
+// firstFeature is the first feature in a layout table's FeatureList with the
+// given tag: HarfBuzz's hb_ot_layout_table_find_feature, which is how it finds
+// a feature a run's language system does not list. The walk stops where the
+// list does, and at the bound every reader of the list is held to.
+func firstFeature(t []byte, tag string, varied featureSubst) globalFeature {
+	if len(t) < 10 {
+		return globalFeature{}
+	}
+	off := font.Be16(t, 6)
+	if off <= 0 || off+2 > len(t) {
+		return globalFeature{}
+	}
+	list := t[off:]
+	n := min(font.Be16(list, 0), maxDeclaredList)
+	for i := 0; i < n; i++ {
+		rec := 2 + 6*i
+		if rec+6 > len(list) {
+			break
+		}
+		if string(list[rec:rec+4]) == tag {
+			return globalFeature{lookups: featureLookupList(list, i, varied), found: true}
+		}
+	}
+	return globalFeature{}
 }
 
 // Lookup flags (ISO/IEC 14496-22, LookupFlag). The high byte is a mark
@@ -675,6 +715,7 @@ func readPositioning(tables map[string][]byte, sel featureSet, required int, coo
 			}
 		}
 		l.readRequiredPositioning(gpos, required, varied)
+		l.vertGPOS = firstFeature(gpos, "vert", varied)
 	}
 	if len(l.kern) == 0 {
 		// Only as a fallback: a font with both should be read through GPOS,
@@ -733,9 +774,11 @@ func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout, coord
 	l.gsub = nil
 	l.featureLookups = nil
 	l.requiredTag, l.requiredLookups = "", nil
+	l.vertGSUB = globalFeature{}
 	l.plans = &planCache{}
 	if gsub := tables["GSUB"]; len(gsub) >= 10 {
 		feats := tableFeatures{sel: gsubSel, varied: readFeatureVariations(gsub, coords)}
+		l.vertGSUB = firstFeature(gsub, "vert", feats.varied)
 		idx := indexFeatures(gsub, feats)
 		l.readGSUBLigatures(gsub, idx)
 		l.readSingleSubstitutions(gsub, idx)

@@ -82,24 +82,39 @@ func (sh shaper) singlePosAt(sub []byte, buf []Glyph, at int) int {
 		return 0
 	}
 	format := font.Be16(sub, 4)
-	var adj singleAdjust
+	var rec []byte
 	switch font.Be16(sub, 0) {
 	case 1:
-		adj = readValueRecord(sub[6:], format)
+		rec = sub[6:]
 	case 2:
 		size := valueSize(format)
 		off := 8 + covered*size
 		if covered >= font.Be16(sub, 6) || off+size > len(sub) {
 			return 0
 		}
-		adj = readValueRecord(sub[off:], format)
+		rec = sub[off:]
 	default:
 		return 0
 	}
-	buf[at].XOffset += sh.f.scale(adj.xPlacement)
-	buf[at].YOffset += sh.f.scale(adj.yPlacement)
-	buf[at].XAdvance += sh.f.scale(adj.xAdvance)
+	sh.applyValue(&buf[at], rec, format)
 	return 1
+}
+
+// applyValue applies a ValueRecord to a glyph: its placements, and the advance
+// along the line — XAdvance across the page, and in a run set upright
+// YAdvance, which the record states growing downwards and Glyph.YAdvance
+// states growing up. The advance for the other axis is read past and not
+// applied, as HarfBuzz applies it: a font's kerning does not shorten an
+// upright run, and its 'vkrn' does not widen a horizontal one.
+func (sh shaper) applyValue(g *Glyph, rec []byte, format int) {
+	adj := readValueRecord(rec, format)
+	g.XOffset += sh.f.scale(adj.xPlacement)
+	g.YOffset += sh.f.scale(adj.yPlacement)
+	if sh.features.Vertical {
+		g.YAdvance -= sh.f.scale(valueYAdvance(rec, format))
+		return
+	}
+	g.XAdvance += sh.f.scale(adj.xAdvance)
 }
 
 // pairPosAt applies a type 2 subtable to the pair beginning at a position: the
@@ -184,13 +199,10 @@ func (sh shaper) pairPosAt(sub []byte, buf []Glyph, at, flags int) int {
 	default:
 		return 0
 	}
-	adj := pairAdjustFrom(rec, format1, format2)
-	buf[at].XOffset += sh.f.scale(int(adj.firstX))
-	buf[at].YOffset += sh.f.scale(int(adj.firstY))
-	buf[at].XAdvance += sh.f.scale(int(adj.firstAdvance))
-	buf[next].XOffset += sh.f.scale(int(adj.secondX))
-	buf[next].YOffset += sh.f.scale(int(adj.secondY))
-	buf[next].XAdvance += sh.f.scale(int(adj.secondAdvance))
+	sh.applyValue(&buf[at], rec, format1)
+	if size1 := valueSize(format1); size1 <= len(rec) {
+		sh.applyValue(&buf[next], rec[size1:], format2)
+	}
 	if format2 != 0 {
 		return next - at + 1
 	}
@@ -244,35 +256,61 @@ func (sh shaper) cursiveAt(sub []byte, buf []Glyph, at, flags int) int {
 		return 0
 	}
 	i, j := prev, at
-	if sh.rtl {
+	vertical := sh.features.Vertical
+	switch {
+	case vertical:
+		// Down the page the joint is between the exit and the entry heights,
+		// and it is the vertical advance that gives ground: HarfBuzz's
+		// top-to-bottom case, which is the left-to-right one on the other
+		// axis.
+		buf[i].YAdvance = sh.f.scale(exit.y) + buf[i].YOffset
+		d := sh.f.scale(entry.y) + buf[j].YOffset
+		buf[j].YAdvance -= d
+		buf[j].YOffset -= d
+	case sh.rtl:
 		d := sh.f.scale(exit.x) + buf[i].XOffset
 		buf[i].XAdvance -= d
 		buf[i].XOffset -= d
 		buf[j].XAdvance = sh.f.scale(entry.x) + buf[j].XOffset
-	} else {
+	default:
 		buf[i].XAdvance = sh.f.scale(exit.x) + buf[i].XOffset
 		d := sh.f.scale(entry.x) + buf[j].XOffset
 		buf[j].XAdvance -= d
 		buf[j].XOffset -= d
 	}
 	child, parent := i, j
-	dy := sh.f.scale(entry.y - exit.y)
+	// Across the line: the height, or in a run set upright the offset to the
+	// side.
+	cross := sh.f.scale(entry.y - exit.y)
+	if vertical {
+		cross = sh.f.scale(entry.x - exit.x)
+	}
 	if flags&flagRightToLeft == 0 {
 		child, parent = parent, child
-		dy = -dy
+		cross = -cross
 	}
 	g := sh.gp
 	sh.reverseCursive(buf, child, parent, 0)
 	g.chain[child] = parent - child
 	g.kind[child] = attachCursive
-	buf[child].YOffset = dy
+	*sh.acrossOf(&buf[child]) = cross
 	// A parent that hung from this child is cut loose from it rather than
 	// left in a loop.
 	if g.chain[parent] == -g.chain[child] {
 		g.chain[parent] = 0
-		buf[parent].YOffset = 0
+		*sh.acrossOf(&buf[parent]) = 0
 	}
 	return 1
+}
+
+// acrossOf is a glyph's offset across the line: its height, or in a run set
+// upright its offset to the side. It is the offset a cursive attachment hangs
+// a glyph by.
+func (sh shaper) acrossOf(g *Glyph) *float64 {
+	if sh.features.Vertical {
+		return &g.XOffset
+	}
+	return &g.YOffset
 }
 
 // reverseCursive turns round the chain a glyph hangs from, so that what it was
@@ -293,7 +331,7 @@ func (sh shaper) reverseCursive(buf []Glyph, i, newParent, nesting int) {
 		return
 	}
 	sh.reverseCursive(buf, j, newParent, nesting+1)
-	buf[j].YOffset = -buf[i].YOffset
+	*sh.acrossOf(&buf[j]) = -*sh.acrossOf(&buf[i])
 	g.chain[j] = -chain
 	g.kind[j] = attachCursive
 }

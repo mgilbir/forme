@@ -103,7 +103,7 @@ func (f *Face) FormsFollowNeighbours(s string, off Features) bool {
 // rules does not give them to a run of another.
 func (f *Face) formsFollowIn(piece string, script uint16, lang otLanguage, off Features) bool {
 	l := f.layoutFor(script, lang)
-	model := categorize(script, f.chosenScriptTag(script, lang))
+	model := categorize(script, f.chosenScriptTag(script, lang), off.Vertical)
 	var mask glyphMask
 	switch model {
 	case modelArabic:
