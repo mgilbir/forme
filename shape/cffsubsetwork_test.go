@@ -237,6 +237,13 @@ type cidPrivate struct{ at, size int }
 
 // cidCFF builds a CID-keyed CFF of the given number of glyphs, every one in
 // Font DICT 0, with one Font DICT for each of fds and privates at the end.
+//
+// Every glyph adds two numbers before it ends. The subset of a CID-keyed font
+// drops the subroutines its glyphs do not call and rewrites the Private DICTs
+// around the rest, unless a glyph does something the renumbering cannot follow
+// exactly — and an arithmetic operator is one — when every Private DICT region
+// is copied whole. That copying, and where the copies go, is what the tests on
+// this fixture are about; cffrenumber_test.go has the renumbering.
 func cidCFF(glyphs int, fds []cidPrivate, privates []byte) []byte {
 	topDict := func(cs, fdArray, fdSelect int) []byte {
 		var d []byte
@@ -261,7 +268,7 @@ func cidCFF(glyphs int, fds []cidPrivate, privates []byte) []byte {
 	}
 	charstrings := make([][]byte, glyphs)
 	for i := range charstrings {
-		charstrings[i] = []byte{14}
+		charstrings[i] = []byte{139, 139, 12, 10, 14} // 0 0 add endchar
 	}
 	head := []byte{1, 0, 4, 4}
 	name := writeCFFIndex([][]byte{[]byte("CID")})
@@ -365,7 +372,7 @@ func TestACIDSubsetKeepsItsSubroutinesWithTheirDict(t *testing.T) {
 	first := append(privateWithSubrs(6), returns(3)...)
 	second := append(append(privateWithSubrs(6+5), make([]byte, 5)...), returns(4)...)
 	cff := cidCFF(3, []cidPrivate{{0, 6}, {len(first), 6}}, append(first, second...))
-	out, err := subsetCFF(cff, keepAll(3), fullBudget())
+	out, _, err := subsetCFF(cff, keepAll(3), fullBudget())
 	if err != nil {
 		t.Fatalf("subsetting: %v", err)
 	}
@@ -387,7 +394,7 @@ func TestACIDSubsetRefusesSubroutinesInsideTheirDict(t *testing.T) {
 	// which read as an empty INDEX ending five bytes in.
 	priv := append([]byte{139, 20}, privateWithSubrs(3)...)
 	cff := cidCFF(2, []cidPrivate{{0, len(priv)}}, priv)
-	if _, err := subsetCFF(cff, keepAll(2), fullBudget()); err == nil ||
+	if _, _, err := subsetCFF(cff, keepAll(2), fullBudget()); err == nil ||
 		!strings.Contains(err.Error(), "inside itself") {
 		t.Errorf("a CID-keyed Private DICT naming subroutines inside itself was "+
 			"subsetted (%v); the Top DICT's Private is refused for it", err)
@@ -405,7 +412,7 @@ func TestFontDictsSharingAPrivateDictShareItsCopy(t *testing.T) {
 		shared[i] = cidPrivate{0, 6}
 	}
 	cff := cidCFF(2, shared, priv)
-	out, err := subsetCFF(cff, keepAll(2), fullBudget())
+	out, _, err := subsetCFF(cff, keepAll(2), fullBudget())
 	if err != nil {
 		t.Fatalf("subsetting: %v", err)
 	}
@@ -436,7 +443,7 @@ func TestOverlappingPrivateDictsAreRefused(t *testing.T) {
 	}
 	privates = append(privates, returns(n)...)
 	cff := cidCFF(2, fds, privates)
-	out, err := subsetCFF(cff, keepAll(2), fullBudget())
+	out, _, err := subsetCFF(cff, keepAll(2), fullBudget())
 	if err == nil {
 		t.Errorf("fifty overlapping Private DICTs were subsetted, from %d bytes to %d",
 			len(cff), len(out))
@@ -458,14 +465,14 @@ func TestTheCIDSubsetChargesWhatItReads(t *testing.T) {
 	}
 	cff := cidCFF(2, spec, privates)
 	b := fullBudget()
-	if _, err := subsetCFF(cff, keepAll(2), b); err != nil {
+	if _, _, err := subsetCFF(cff, keepAll(2), b); err != nil {
 		t.Fatalf("subsetting: %v", err)
 	}
 	if b.Spent() < fds*100 {
 		t.Errorf("the subset of %d Font DICTs of a hundred subroutines each spent %d "+
 			"units; it reads at least %d INDEX entries", fds, b.Spent(), fds*100)
 	}
-	if _, err := subsetCFF(cff, keepAll(2), font.NewBudget(1000)); err == nil ||
+	if _, _, err := subsetCFF(cff, keepAll(2), font.NewBudget(1000)); err == nil ||
 		!strings.Contains(err.Error(), "units of work") {
 		t.Errorf("a subset given 1000 units for 4000 subroutines returned %v, "+
 			"want the budget's error", err)

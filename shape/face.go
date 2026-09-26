@@ -55,9 +55,10 @@
 // # Subsetting
 //
 // Both glyf and CFF outlines are subsetted, by the same rule: glyph indices are
-// retained and a dropped glyph becomes an empty one. A CID-keyed CFF is
-// subsetted the same way, and keeps its charset, so the CIDs Encode writes
-// still name the glyphs they did.
+// retained and a dropped glyph becomes an empty one. A CID-keyed CFF is the
+// exception. Its subset holds only the glyphs kept, renumbered in their order,
+// with a charset that gives each the CID it had — so the CIDs Encode writes
+// still name the glyphs they did, and the subset carries nothing else.
 package shape
 
 import (

@@ -41,6 +41,11 @@ import (
 // trade is deliberate, and it is the thing to revisit if that 160 KB ever
 // matters more than the correctness it buys.
 //
+// A CID-keyed CFF is the exception, and is renumbered. The codes written for it
+// are CIDs, not glyph indices, and its charset maps them to glyphs — so a
+// subset that writes a new charset for the glyphs it keeps changes no code a
+// document holds. See cffsubset.go and cffrenumber.go.
+//
 // # What is dropped
 //
 // Everything not needed to render the kept glyphs: layout tables (GSUB, GPOS,

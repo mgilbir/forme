@@ -94,17 +94,22 @@ func writeCFFIndex(items [][]byte) []byte {
 	if len(items) == 0 {
 		return []byte{0, 0}
 	}
+	// total is the last offset, which is one past the data: offsets count from
+	// 1. It is what the offset size has to hold, so data of 255 bytes needs two
+	// bytes an offset. The bounds were 1<<8, 1<<16 and 1<<24, one past what each
+	// size holds, and an INDEX whose last offset landed on one was written with
+	// that offset truncated.
 	total := 1
 	for _, it := range items {
 		total += len(it)
 	}
 	offSize := 1
 	switch {
-	case total > 1<<24:
+	case total > 0xFFFFFF:
 		offSize = 4
-	case total > 1<<16:
+	case total > 0xFFFF:
 		offSize = 3
-	case total > 1<<8:
+	case total > 0xFF:
 		offSize = 2
 	}
 	out := make([]byte, 0, 3+(len(items)+1)*offSize+total)

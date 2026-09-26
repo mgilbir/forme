@@ -343,6 +343,13 @@ func (f *Face) CharacterCollection() (registry, ordering string, supplement int,
 // a reader can check the program against what the file claims. Both have to be
 // computed from what the subsetter actually kept rather than from what was
 // asked for, since keeping one glyph can require keeping another.
+//
+// kept is the face's own glyph indices, ascending — the numbers GlyphCode,
+// GlyphAdvance and Used take — whatever the program numbers them. For every
+// face but a CID-keyed CFF the subset keeps those numbers. A CID-keyed CFF's
+// subset is renumbered: kept[i] is glyph i of the program. Nothing a document
+// writes changes with it, because such a face is addressed by CID (GlyphCode)
+// and the subset's charset gives each glyph the CID it had.
 func (f *Face) SubsetGlyphs() (program []byte, kept []int, err error) {
 	return f.subset()
 }
