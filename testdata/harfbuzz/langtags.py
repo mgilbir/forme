@@ -28,7 +28,9 @@ import random
 import re
 import sys
 
-import uharfbuzz as hb
+from oracle import harfbuzz
+
+hb = harfbuzz()
 
 header_path, out_path = sys.argv[1], sys.argv[2]
 header = open(header_path, encoding="utf-8").read()

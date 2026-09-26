@@ -3,7 +3,7 @@
 // A test about fonts needs a font, and a real one is a poor fixture: it is
 // megabytes, it carries every table at once, and it cannot be made to say the
 // one wrong thing a reader is supposed to survive. So these build the smallest
-// sfnt, CFF or Type 1 program that has the feature under test — a kern pair, a
+// sfnt or CFF program that has the feature under test — a kern pair, a
 // ligature, a mark class, a cmap subtable of a chosen format — and nothing else.
 //
 // It is a package of its own because more than one package reads font
@@ -32,100 +32,7 @@ package fonttest
 import (
 	"encoding/binary"
 	"fmt"
-	"strconv"
-	"strings"
 )
-
-// Type1Program builds a minimal Type 1 font program defining exactly the named
-// glyphs, in the eexec-encrypted form a Type 1 reader expects.
-//
-// The charstrings are filler. What a caller wants from this is the set of glyph
-// names the program declares — which is what a font's outlines are addressed by
-// in Type 1, and what a format carrying the font has to agree with it about.
-func Type1Program(names []string) []byte {
-	var priv strings.Builder
-	// lenIV 0 keeps the filler charstrings from needing a decryption prefix.
-	priv.WriteString("dup /Private 8 dict dup begin\n/lenIV 0 def\n")
-	// The dict count is written, because every real Type 1 font writes one and
-	// a fixture shaped around a reader's mistake tests the mistake.
-	priv.WriteString("2 index /CharStrings " + strconv.Itoa(len(names)) + " dict dup begin\n")
-	for _, n := range names {
-		// "/name len RD <len bytes> ND"
-		priv.WriteString("/" + n + " 1 RD \x8b ND\n")
-	}
-	priv.WriteString("end\nend\nmark currentfile closefile\n")
-
-	// eexec encryption is the inverse of eexecDecrypt(data, 55665, 4): four
-	// leading pad bytes are consumed by the decryptor's discard.
-	plain := append([]byte("pad!"), priv.String()...)
-	var r uint16 = 55665
-	const c1, c2 = 52845, 22719
-	enc := make([]byte, 0, len(plain))
-	for _, p := range plain {
-		c := p ^ byte(r>>8)
-		r = (uint16(c)+r)*c1 + c2
-		enc = append(enc, c)
-	}
-	return append([]byte(type1Header), enc...)
-}
-
-const type1Header = "%!PS-AdobeFont-1.0\n/FontMatrix [0.001 0 0 0.001 0 0] readonly def\ncurrentfile eexec\n"
-
-// Type1ProgramHex is Type1Program with the encrypted portion in hexadecimal,
-// which is the other form the format allows and the one a font that had to
-// survive a seven-bit channel is in.
-//
-// Type1Hex says how to write the digits. The zero value is one unbroken line of
-// lower-case, which is the simplest thing a writer does.
-type Type1Hex struct {
-	// Wrap is how many digits to put on a line before a newline, because a real
-	// font in this form wraps — Adobe's own tools at 64 — and the decoder's
-	// tolerance of white space between digits is the whole reason it does not
-	// simply unhex. Zero writes one unbroken line.
-	Wrap int
-
-	// Upper writes A-F rather than a-f. Both are digits and fonts use both, so
-	// a decoder that handled one case would be wrong for half the fonts in the
-	// world and right for every fixture that forgot to ask.
-	Upper bool
-
-	// Odd drops the last digit, so the program is a hex string with an odd
-	// number of digits. A reader pads it with a trailing zero, which changes the
-	// final byte; the program is then damaged, and what a caller wants from it
-	// is that the reader does something defined rather than reading off the end.
-	Odd bool
-}
-
-func Type1ProgramHex(names []string, opts Type1Hex) []byte {
-	body := Type1Program(names)[len(type1Header):]
-	digits := make([]byte, 0, 2*len(body))
-	for _, b := range body {
-		digits = append(digits, hexDigit(b>>4, opts.Upper), hexDigit(b&0x0F, opts.Upper))
-	}
-	if opts.Odd {
-		digits = digits[:len(digits)-1]
-	}
-
-	out := []byte(type1Header)
-	for i, d := range digits {
-		if opts.Wrap > 0 && i > 0 && i%opts.Wrap == 0 {
-			out = append(out, '\n')
-		}
-		out = append(out, d)
-	}
-	return append(out, '\n')
-}
-
-func hexDigit(v byte, upper bool) byte {
-	switch {
-	case v < 10:
-		return '0' + v
-	case upper:
-		return 'A' + v - 10
-	default:
-		return 'a' + v - 10
-	}
-}
 
 // CmapFormat4 assembles a segment-mapping cmap subtable from {startCode,
 // endCode, idDelta} segments, with no glyph index array.

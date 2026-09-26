@@ -263,6 +263,14 @@ var makeRef = regexp.MustCompile(`\$\(([A-Za-z_][A-Za-z0-9_]*)\)`)
 // than expanding to nothing.
 func makeVars(t *testing.T) map[string]string {
 	t.Helper()
+	return makeVarsFor(t, append(tables.Names(tables.Manifest), "TABLE_VARS")...)
+}
+
+// makeVarsFor is makeVars for the variables named, which need not be the
+// manifest's: THIRD_PARTY_NOTICES names the pins and paths of its sources by
+// the Makefile's variables too.
+func makeVarsFor(t *testing.T, names ...string) map[string]string {
+	t.Helper()
 	raw := map[string]string{}
 	for _, l := range makefileLines(t) {
 		if m := assignment.FindStringSubmatch(l); m != nil {
@@ -285,7 +293,7 @@ func makeVars(t *testing.T) map[string]string {
 		})
 	}
 	out := map[string]string{}
-	for _, name := range append(tables.Names(tables.Manifest), "TABLE_VARS") {
+	for _, name := range names {
 		v := expand(name, 0)
 		if strings.Contains(v, "$(") {
 			t.Fatalf("%s expands to %q, which this cannot finish expanding", name, v)

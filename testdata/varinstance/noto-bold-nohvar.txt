@@ -6,6 +6,9 @@
 # rest is fontTools'; see instance.py for why they come from different
 # places.
 #
+harfbuzz 14.5.0
+uharfbuzz 0.56.2
+fonttools 4.65.0
 font fonts/notosans/NotoSans-Variable.ttf
 font-sha256 bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d
 strip-hvar yes

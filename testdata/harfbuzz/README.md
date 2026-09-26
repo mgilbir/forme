@@ -78,6 +78,7 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `corpus.txt`, `arabic.txt`, `khmer.txt`, `javanese.txt`, `balinese.txt`, `tibetan.txt` | the strings, one per line |
 | `shape.py` | shapes one corpus with one font and writes its expectations |
 | `*.expected.txt` | glyph, advance and offset for each, in font units |
+| `*.dflt.expected.txt` | the same for the Javanese, Balinese and Tibetan corpora shaped in `und-x-hbscdflt` — see below |
 | `difffuzz.py` | generates text instead of listing it — see below |
 
 Each corpus is weighted towards the places shaping decides something rather than
@@ -114,6 +115,19 @@ many paths once.
   because a lookup is named by index and cutting the list breaks every reference
   past the cut.
 
+## The default model
+
+A language tag can name the script tag a run is looked up under, and
+`und-x-hbscdflt` names `DFLT`. A Javanese, Balinese or Tibetan run in a font
+that states rules there is then set by the default model: the font's features
+over the text as it is written, with no syllables and no reordering. It is what
+a font written without the script's own model gets too. `shape.py` takes the
+tag as a fourth argument and records it, and
+`shape/defaultmodel_test.go` holds the default model to HarfBuzz over the
+Javanese, Balinese and Tibetan corpora, whose answers under it differ from the script models' in 630,
+404 and 1,324 strings. Khmer's font answers the same either way and is not
+repeated.
+
 ## Why two scripts for one engine
 
 The Universal Shaping Engine claims some seventy scripts. It was written against
@@ -130,9 +144,33 @@ something lands in pieces.
 ## Regenerating
 
 ```sh
-python3 -m venv .hbenv && .hbenv/bin/pip install uharfbuzz
-PYTHON=.hbenv/bin/python make hbshaping
+make hbenv
+PYTHON=.hbenv/bin/python make hboracles
 ```
+
+`make hbenv` is
+
+```sh
+python3 -m venv .hbenv
+.hbenv/bin/pip install --require-hashes --no-deps -r testdata/harfbuzz/requirements.txt
+```
+
+The oracle is one HarfBuzz release: `HARFBUZZ_VERSION` in the Makefile, the
+release HarfBuzz's own data files are fetched at, taken through the uharfbuzz
+release that carries it — `requirements.txt` pins it by version and by the
+digest of every file PyPI publishes for it, and pip refuses anything else. The
+recipe used to be a bare `pip install uharfbuzz`, which is whatever PyPI serves
+that day, and it had left the expectation files at three releases: 14.3.0,
+14.4.0 and 14.5.0. Regenerated at 14.5.0 they did not move, but nothing would
+have said so if they had.
+
+Every file the oracles write records the HarfBuzz and uharfbuzz it came from.
+The generators refuse to run on any other (`oracle.py`), and
+`shape/oraclepin_test.go` refuses a file that records any other — including
+`testdata/varinstance`, whose advances are HarfBuzz's and which records the
+pinned fontTools as well. Moving to a new release is moving the pin, the
+digests and `HARFBUZZ_VERSION` together, regenerating every file, and reading
+what moved.
 
 Review the diff to `expected.txt` before committing. A change there is HarfBuzz
 changing its mind, and is worth understanding rather than accepting.
@@ -307,7 +345,7 @@ a mark attached by one lookup whose target a later lookup moves, which HarfBuzz
 follows along the line and not across it. CoreText follows neither axis, and
 the case was listed as HarfBuzz's asymmetry. It is HarfBuzz's model — the cross
 axis settled when the mark is attached, the main axis carried to the end — and
-fonts are tested against it; positioning follows it now (`attachMarks` in
+fonts are tested against it; positioning follows it now (`placeMark` and `propagate` in
 `shape/position.go`), and with the class unmasked the fuzzer finds none left.
 
 The mark-stacking class this section used to end on — 334 differences over

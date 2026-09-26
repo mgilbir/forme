@@ -54,13 +54,12 @@ import (
 // is in — see painter.outlines, which reads outline-style, outline-width and
 // outline-color the way the border painting reads theirs. §8.6's slicing is not
 // applied to it: CSS 2.1 §18.4 says that "in contrast to borders, the outline is
-// not open at the line box's end or start", so each fragment gets a whole ring.
+// not open at the line box's end or start", so no piece's ring is left open.
 // For a box broken across lines, CSS UI 4 §5 says the outline should be one
-// outline, or a minimum set of outlines, enclosing all of the box's pieces. A
-// ring round each piece is a set that encloses them, though not the smallest
-// where two pieces touch: there a browser that joins them draws one shape and
-// this draws two rings that cross. It is a "should", and a piece-by-piece ring
-// is what the rest of this file's slice model gives for nothing.
+// outline, or a minimum set of outlines, enclosing all of the box's pieces, so
+// where two pieces' rings meet they are drawn as the one shape round both —
+// see painter.joinedOutline — and where they do not each piece keeps its own
+// ring.
 
 // maxInlineDecorations bounds how many of these fragments one document may
 // produce.
@@ -167,18 +166,45 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs, widths []style.
 	}
 	sort.SliceStable(order, func(a, b int) bool { return xs[order[a]] < xs[order[b]] })
 
-	// The piece each box has open, and the visual position it was last seen at.
-	// A box absent from the item before this one has been interrupted, so what
-	// follows is a new piece rather than more of the old one.
-	open := map[*Box]int{}
-	lastAt := map[*Box]int{}
+	// The boxes the item before this one sat in, outermost first, each with the
+	// piece it has open and the extent it has covered so far: the chain of the
+	// last item, kept as a stack. A box absent from the item before this one
+	// has been interrupted, so what follows is a new piece rather than more of
+	// the old one — and a box in both is at the same depth of both chains,
+	// because a chain is the painting boxes above an item, outermost first.
+	//
+	// The stack is what keeps a line linear in what it holds. Walking the whole
+	// chain of every item and widening every piece in it cost the depth for each
+	// item, and d bordered spans nested round a word are 3d items, each inside
+	// up to d of them: the square of the depth. Here an item widens only the
+	// innermost open piece, and a piece hands what it covered to the one round
+	// it when it closes, so each item costs what it changes: the boxes it opens
+	// and the ones it closes, each once.
+	type openPiece struct {
+		box         *Box
+		piece       int // index in d.pieces, or -1 when room refused one
+		left, right style.Unit
+	}
+	var open []openPiece
+	// close pops the open down to n boxes, writing each piece's extent and
+	// handing it to the piece round it.
+	close := func(n int) {
+		for len(open) > n {
+			top := open[len(open)-1]
+			open = open[:len(open)-1]
+			if top.piece >= 0 {
+				d.pieces[top.piece].left, d.pieces[top.piece].right = top.left, top.right
+			}
+			if len(open) > 0 {
+				under := &open[len(open)-1]
+				under.left, under.right = min(under.left, top.left), max(under.right, top.right)
+			}
+		}
+	}
 
-	for pos, k := range order {
+	for _, k := range order {
 		item := items[k]
 		chain := d.l.inlineChain(item)
-		if len(chain) == 0 {
-			continue
-		}
 		left := at.Add(xs[k])
 		// The width the item took on *this* line, which for a space a
 		// justified line stretched is more than the font gave it.
@@ -195,48 +221,54 @@ func (d *inlineDecor) addLine(index int, items []inlineItem, xs, widths []style.
 		if sp := item.EdgeLetterSpacing; sp != 0 && !item.Inset {
 			right = right.Sub(sp)
 		}
-		for _, box := range chain {
-			if pi, ok := open[box]; ok && lastAt[box] == pos-1 {
-				if left < d.pieces[pi].left {
-					d.pieces[pi].left = left
+		// How much of the item before's chain this one shares. The two agree
+		// up to some depth and nowhere below it, so the walk down from the
+		// shorter length stops at the first box they share, and it passes only
+		// boxes that are about to be closed.
+		keep := min(len(open), len(chain))
+		for keep > 0 && open[keep-1].box != chain[keep-1] {
+			keep--
+		}
+		close(keep)
+		for _, box := range chain[keep:] {
+			piece := -1
+			if d.room(box) {
+				_, seen := d.last[box]
+				// §10.8.1's vertical-align on this box, which moved its text and
+				// has to move its ink by exactly as much. It is the *box's* own
+				// accumulation and not the item's: the item carries the sum down
+				// to the innermost box it sits in, and a fragment for a box
+				// halfway up that chain is placed by the sum down to itself.
+				//
+				// The extents are the box's line-height split around its
+				// baseline — §10.8's inline box — rather than the font's content
+				// area the fragment is drawn over, which is §10.6.1's and a
+				// different question.
+				base := baseline
+				if va, ok := d.l.inlineAligns[box]; ok {
+					above, below := d.l.leadingAt(box, box.FontSize.Mul(scale))
+					base = base.Add(stack.Shift(va, above, below))
 				}
-				if right > d.pieces[pi].right {
-					d.pieces[pi].right = right
+				d.pieces = append(d.pieces, inlinePiece{
+					box: box, line: index, left: left, right: right,
+					baseline: base, first: !seen, scale: scale,
+				})
+				if d.last == nil {
+					d.last = make(map[*Box]int)
 				}
-				lastAt[box] = pos
-				continue
+				piece = len(d.pieces) - 1
+				d.last[box] = piece
 			}
-			if !d.room(box) {
-				continue
-			}
-			_, seen := d.last[box]
-			// §10.8.1's vertical-align on this box, which moved its text and has
-			// to move its ink by exactly as much. It is the *box's* own
-			// accumulation and not the item's: the item carries the sum down to
-			// the innermost box it sits in, and a fragment for a box halfway up
-			// that chain is placed by the sum down to itself.
-			//
-			// The extents are the box's line-height split around its baseline —
-			// §10.8's inline box — rather than the font's content area the
-			// fragment is drawn over, which is §10.6.1's and a different
-			// question.
-			base := baseline
-			if va, ok := d.l.inlineAligns[box]; ok {
-				above, below := d.l.leadingAt(box, box.FontSize.Mul(scale))
-				base = base.Add(stack.Shift(va, above, below))
-			}
-			d.pieces = append(d.pieces, inlinePiece{
-				box: box, line: index, left: left, right: right,
-				baseline: base, first: !seen, scale: scale,
-			})
-			if d.last == nil {
-				d.last = make(map[*Box]int)
-			}
-			d.last[box] = len(d.pieces) - 1
-			open[box] = len(d.pieces) - 1
-			lastAt[box] = pos
+			open = append(open, openPiece{box: box, piece: piece, left: left, right: right})
+		}
+		if n := len(open); n > 0 {
+			// The item widens the innermost piece it is in; the ones round that
+			// learn of it when it closes.
+			top := &open[n-1]
+			top.left, top.right = min(top.left, left), max(top.right, right)
 		}
 	}
+	close(0)
 }
 
 // room reports whether another piece may be recorded, and says so once when it
@@ -371,45 +403,42 @@ type insetEnds struct{ start, end int }
 // are the first and last pieces, which is what this used to assume; with a box
 // the reordering cut into several pieces on one line they are the extremes of
 // that line, and every piece between them carries nothing.
+//
+// Two walks of the pieces: one for each box's first and last line, and one
+// for the pieces at the ends of those. It walked every piece once for every
+// box, which a line of d painting spans made the square of d.
 func (d *inlineDecor) insetCarriers() map[*Box]insetEnds {
-	type span struct{ first, last int }
-	lines := map[*Box]span{}
+	type span struct {
+		first, last int
+		ends        insetEnds
+	}
+	lines := map[*Box]*span{}
 	for i := range d.pieces {
 		p := d.pieces[i]
 		s, ok := lines[p.box]
 		if !ok {
-			lines[p.box] = span{p.line, p.line}
+			lines[p.box] = &span{first: p.line, last: p.line, ends: insetEnds{-1, -1}}
 			continue
 		}
-		if p.line < s.first {
-			s.first = p.line
-		}
-		if p.line > s.last {
-			s.last = p.line
-		}
-		lines[p.box] = s
+		s.first, s.last = min(s.first, p.line), max(s.last, p.line)
 	}
-
+	for i := range d.pieces {
+		p := d.pieces[i]
+		s := lines[p.box]
+		startsRight := beginsAtRight(p.box)
+		// The end the box begins on, on its first line: the rightmost piece
+		// when it begins at its right, and the leftmost otherwise.
+		if p.line == s.first && (s.ends.start < 0 || further(p, d.pieces[s.ends.start], startsRight)) {
+			s.ends.start = i
+		}
+		// And the other end on its last line.
+		if p.line == s.last && (s.ends.end < 0 || further(p, d.pieces[s.ends.end], !startsRight)) {
+			s.ends.end = i
+		}
+	}
 	out := make(map[*Box]insetEnds, len(lines))
 	for b, s := range lines {
-		startsRight := beginsAtRight(b)
-		startAt, endAt := -1, -1
-		for i := range d.pieces {
-			p := d.pieces[i]
-			if p.box != b {
-				continue
-			}
-			// The end the box begins on, on its first line: the rightmost piece
-			// when it begins at its right, and the leftmost otherwise.
-			if p.line == s.first && (startAt < 0 || further(p, d.pieces[startAt], startsRight)) {
-				startAt = i
-			}
-			// And the other end on its last line.
-			if p.line == s.last && (endAt < 0 || further(p, d.pieces[endAt], !startsRight)) {
-				endAt = i
-			}
-		}
-		out[b] = insetEnds{start: startAt, end: endAt}
+		out[b] = s.ends
 	}
 	return out
 }
@@ -451,6 +480,14 @@ func (l *layouter) inlineChain(item inlineItem) []*Box {
 // style, background-color and all, so keeping it would paint the parent's
 // background a second time — and would paint a *block's* background over its own
 // text, since the text box inside a <p> is an inline box by this test.
+//
+// A box's chain is its parent's with at most the box itself added, and it is
+// built that way: the walk goes up only as far as the first box already
+// answered, and each box on the way down extends the chain above it. Walked
+// whole from every box, a paragraph of spans nested d deep with a word in each
+// asked d boxes each whether they paint — the square of the depth, parsing
+// backgrounds and borders all the way. The chains share their prefixes, so they
+// are read-only, which the one caller already treats them as.
 func (l *layouter) paintedInlines(b *Box) []*Box {
 	if b == nil {
 		return nil
@@ -458,30 +495,46 @@ func (l *layouter) paintedInlines(b *Box) []*Box {
 	if got, ok := l.inlineChains[b]; ok {
 		return got
 	}
+	// Up to the first box answered, or to where every chain ends.
+	var path []*Box
 	var out []*Box
-	for cur := b; cur != nil && cur.Outer == OuterInline; cur = cur.Parent {
-		if cur.Replaced != nil || isAtomicInline(cur) {
+	for cur := b; cur != nil; cur = cur.Parent {
+		if got, ok := l.inlineChains[cur]; ok {
+			out = got
 			break
 		}
-		if cur.IsText() {
-			continue
+		path = append(path, cur)
+		if cur.Outer != OuterInline || cur.Replaced != nil || isAtomicInline(cur) {
+			// The block container whose lines these are, or an atomic inline,
+			// which is a formatting context of its own and paints itself: no
+			// chain reaches past either, and neither is on one.
+			out = nil
+			break
 		}
-		if l.inlinePaints(cur) || cur.Position.positioned() {
+	}
+	// Down again, outermost first, which is tree order among boxes that nest —
+	// and so the order Appendix E paints them in, each over the one it is
+	// inside.
+	for i := len(path) - 1; i >= 0; i-- {
+		cur := path[i]
+		switch {
+		case cur.Outer != OuterInline || cur.Replaced != nil || isAtomicInline(cur):
+			out = nil
+		case cur.IsText():
+		case l.inlinePaints(cur) || cur.Position.positioned():
 			// A *positioned* inline box is kept whether or not it draws
 			// anything, because §10.1 forms the containing block of an
 			// absolutely positioned descendant from the padding boxes of this
 			// box's own fragments — so the fragments have to exist. It paints
 			// nothing extra: a fragment with no background and no border draws
 			// nothing, exactly as it did when there was no fragment at all.
-			out = append(out, cur)
+			//
+			// A copy rather than an append in place, which would write into
+			// the spare room of the chain above, and so into a sibling's.
+			out = append(out[:len(out):len(out)], cur)
 		}
+		l.inlineChains[cur] = out
 	}
-	// Outermost first, which is tree order among boxes that nest — and so the
-	// order Appendix E paints them in, each over the one it is inside.
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
-	l.inlineChains[b] = out
 	return out
 }
 

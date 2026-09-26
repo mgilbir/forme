@@ -119,15 +119,20 @@ func TestAFontReadInPartIsReported(t *testing.T) {
 	}
 }
 
-// partlyReadFont is shape's fixture of the same name: one SinglePos subtable
-// whose coverage names the whole glyph space records times over, which is a
-// few bytes each asking for sixty-five thousand glyphs.
+// partlyReadFont is shape's wideCoverageFont: one PairPos subtable whose
+// coverage names the whole glyph space records times over, which is a few
+// bytes each asking for sixty-five thousand glyphs. A pair lookup, because the
+// flat reading of a face's kerning still expands the glyphs that begin a pair
+// at load; a single adjustment is searched where a glyph is met and costs
+// nothing to load.
 func partlyReadFont(records int) []byte {
-	sub := make([]byte, 6)
+	sub := make([]byte, 12)
 	binary.BigEndian.PutUint16(sub[0:], 1)      // posFormat 1
-	binary.BigEndian.PutUint16(sub[2:], 12)     // coverage offset
-	binary.BigEndian.PutUint16(sub[4:], 0x0004) // XAdvance only
-	sub = append(sub, 0, 1, 0, 0, 0, 0)
+	binary.BigEndian.PutUint16(sub[4:], 0x0004) // valueFormat1: XAdvance
+	binary.BigEndian.PutUint16(sub[8:], 1)      // one pair set
+	binary.BigEndian.PutUint16(sub[10:], 12)    // at 12
+	sub = append(sub, 0, 1, 0, 1, 0, 1)
+	binary.BigEndian.PutUint16(sub[2:], uint16(len(sub))) // coverage offset
 	cov := make([]byte, 4+6*records)
 	binary.BigEndian.PutUint16(cov[0:], 2)
 	binary.BigEndian.PutUint16(cov[2:], uint16(records))
@@ -142,7 +147,7 @@ func partlyReadFont(records int) []byte {
 		Glyphs: []fonttest.Glyph{{Rune: 'a', Advance: 500, HasShape: true}},
 		Extra: map[string][]byte{
 			"GPOS": fonttest.GPOSLookups(
-				[]fonttest.Lookup{{Type: 1, Subtables: [][]byte{sub}}},
+				[]fonttest.Lookup{{Type: 2, Subtables: [][]byte{sub}}},
 				map[string][]int{"kern": {0}}),
 		},
 	})

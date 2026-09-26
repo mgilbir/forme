@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -113,11 +115,62 @@ const (
 	svgAsDocument
 )
 
-func svgContent(data []byte, as svgAs) *ReplacedContent {
+// svgNames says how the names in an SVG's source are spelled, which decides
+// how they are compared.
+//
+// SVG is XML, and an XML name is case-sensitive: in a file, and in an <svg>
+// in an XHTML document, "RECT" is not a rect and "VIEWBOX" is not a viewBox.
+// An <svg> written in an HTML document is read by HTML's parser, which folds
+// every name to lower case and then gives SVG's own names their case back
+// by the tables in html/foreignnames.go — so there "<RECT VIEWBOX>" is a rect
+// with a viewBox, and "<rect viewbox>" is too. Every name is put in the form
+// that parser would have given it and then compared exactly; they were all
+// compared ASCII case-insensitively, which was HTML's answer in a file too.
+type svgNames uint8
+
+const (
+	// svgXMLNames is a file, or an <svg> in an XHTML document: the names are
+	// what they spell.
+	svgXMLNames svgNames = iota
+	// svgHTMLNames is an <svg> in an HTML document.
+	svgHTMLNames
+)
+
+// element is a start tag with its names as the document's language reads
+// them. In XML that is the tag as it came; in HTML the element name and the
+// names of its attributes are folded and adjusted as the tree builder does
+// (§13.2.6.5 and §13.2.6.1). A prefixed attribute keeps its prefix, folded:
+// "XLINK:HREF" is HTML's xlink:href. A prefix the decoder has already turned
+// into a namespace name — which holds a colon, as every URI does — is left as
+// it is, because a namespace name is compared as spelled.
+func (n svgNames) element(se xml.StartElement) xml.StartElement {
+	if n != svgHTMLNames {
+		return se
+	}
+	out := se.Copy()
+	if !strings.Contains(out.Name.Space, ":") {
+		out.Name.Space = ascii.Lower(out.Name.Space)
+	}
+	out.Name.Local = html.AdjustSVGTagName(ascii.Lower(out.Name.Local))
+	for i := range out.Attr {
+		a := &out.Attr[i]
+		if a.Name.Space == "" {
+			a.Name.Local = html.AdjustSVGAttributeName(ascii.Lower(a.Name.Local))
+			continue
+		}
+		if !strings.Contains(a.Name.Space, ":") {
+			a.Name.Space = ascii.Lower(a.Name.Space)
+		}
+		a.Name.Local = ascii.Lower(a.Name.Local)
+	}
+	return out
+}
+
+func svgContent(data []byte, as svgAs, names svgNames) *ReplacedContent {
 	if len(data) > maxSVGBytes {
 		return nil
 	}
-	root, rects, ok := svgReduce(data)
+	root, rects, ok := svgReduce(data, names)
 	if !ok {
 		return nil
 	}
@@ -132,7 +185,7 @@ func svgContent(data []byte, as svgAs) *ReplacedContent {
 // asked for rather than the 300 by 150 a replaced element with no dimensions
 // falls back to. Giving it the default would be laying out something the
 // document said nothing about, at a size it never mentioned.
-func svgIntrinsicSize(data []byte, as svgAs) *ReplacedContent {
+func svgIntrinsicSize(data []byte, as svgAs, names svgNames) *ReplacedContent {
 	if len(data) > maxSVGBytes {
 		return nil
 	}
@@ -149,7 +202,7 @@ func svgIntrinsicSize(data []byte, as svgAs) *ReplacedContent {
 		if !isStart {
 			continue
 		}
-		if !strings.EqualFold(se.Name.Local, "svg") {
+		if se = names.element(se); se.Name.Local != "svg" {
 			return nil
 		}
 		out := svgContentOf(se, nil, as)
@@ -187,7 +240,7 @@ func svgContentOf(root xml.StartElement, rects []svgRect, as svgAs) *ReplacedCon
 	// that changes the mapping in a way this can express: the rest differ in
 	// *where* a uniformly scaled picture sits, and the default — xMidYMid meet —
 	// is what uniform means here.
-	if strings.HasPrefix(strings.TrimSpace(strings.ToLower(attrOf(root, "preserveAspectRatio"))), "none") {
+	if strings.HasPrefix(ascii.TrimSpace(ascii.Lower(attrOf(root, "preserveAspectRatio"))), "none") {
 		pic.uniform = false
 	}
 
@@ -273,7 +326,7 @@ func (l svgLen) resolve(extent float64) float64 {
 // no operation for — a path, a circle, text, an image, a <use> — or something
 // that could change what the rectangles paint, which <style>, <script>, <g> and
 // <defs> all can. There is no safe default, so there is none.
-func svgReduce(data []byte) (root xml.StartElement, rects []svgRect, ok bool) {
+func svgReduce(data []byte, names svgNames) (root xml.StartElement, rects []svgRect, ok bool) {
 	dec := xml.NewDecoder(strings.NewReader(string(data)))
 	// No entity a document declares is expanded, internal or external:
 	// encoding/xml reads a DTD as an opaque directive and knows only the
@@ -308,8 +361,9 @@ func svgReduce(data []byte) (root xml.StartElement, rects []svgRect, ok bool) {
 		if elements++; elements > maxSVGElements {
 			return xml.StartElement{}, nil, false
 		}
+		se = names.element(se)
 		if !haveRoot {
-			if !strings.EqualFold(se.Name.Local, "svg") {
+			if se.Name.Local != "svg" {
 				return xml.StartElement{}, nil, false
 			}
 			root, haveRoot = se, true
@@ -319,7 +373,7 @@ func svgReduce(data []byte) (root xml.StartElement, rects []svgRect, ok bool) {
 			}
 			continue
 		}
-		switch strings.ToLower(se.Name.Local) {
+		switch se.Name.Local {
 		case "title", "desc", "metadata":
 			// Not drawn, and not read: what they hold is prose about the
 			// picture, and it is text rather than elements, so the loop passes
@@ -408,15 +462,15 @@ func svgPresentation(e xml.StartElement, from svgInherited,
 	p, shown := from, true
 	for _, a := range e.Attr {
 		k := svgAttrKindOf(a.Name, kind)
-		v := strings.TrimSpace(a.Value)
-		inherit := strings.EqualFold(v, "inherit")
+		v := ascii.TrimCSSSpace(a.Value)
+		inherit := ascii.EqualFold(v, "inherit")
 		switch k {
 		case svgInert, svgOwn:
 		case svgFill:
 			if inherit {
 				continue
 			}
-			if strings.EqualFold(v, "none") {
+			if ascii.EqualFold(v, "none") {
 				p.fill, p.fillNone, p.fillSet = style.RGBA{}, true, true
 				continue
 			}
@@ -429,9 +483,9 @@ func svgPresentation(e xml.StartElement, from svgInherited,
 			if inherit {
 				continue
 			}
-			p.stroke = v != "" && !strings.EqualFold(v, "none")
+			p.stroke = v != "" && !ascii.EqualFold(v, "none")
 		case svgVisibility:
-			switch strings.ToLower(v) {
+			switch ascii.Lower(v) {
 			case "inherit":
 			case "visible":
 				p.hidden = false
@@ -445,7 +499,7 @@ func svgPresentation(e xml.StartElement, from svgInherited,
 			// value leaves it in. A display that is not a keyword is not a
 			// value at all and the attribute is ignored, as SVG 2 ignores an
 			// invalid presentation attribute.
-			if strings.EqualFold(v, "none") {
+			if ascii.EqualFold(v, "none") {
 				shown = false
 			}
 		case svgAlpha:
@@ -458,7 +512,7 @@ func svgPresentation(e xml.StartElement, from svgInherited,
 			// What shows outside the viewport. The picture is clipped to it
 			// here, which is what "hidden", "scroll" and "clip" say and what
 			// "visible" and "auto" do not.
-			switch strings.ToLower(v) {
+			switch ascii.Lower(v) {
 			case "hidden", "scroll", "clip":
 			default:
 				return p, false, false
@@ -480,7 +534,7 @@ func svgAlphaValue(v string) (float64, bool) {
 	if strings.HasSuffix(v, "%") {
 		v, scale = strings.TrimSuffix(v, "%"), 100
 	}
-	n, ok := parseNumber(strings.TrimSpace(v))
+	n, ok := parseNumber(ascii.TrimSpace(v))
 	if !ok {
 		return 0, false
 	}
@@ -555,9 +609,9 @@ var svgAttributes = func() map[string]svgAttrKind {
 		filter:refuses style:refuses rx:refuses ry:refuses
 		requiredExtensions:refuses requiredFeatures:refuses systemLanguage:refuses
 	`, "\n") {
-		for _, f := range strings.Fields(line) {
+		for _, f := range ascii.Fields(line) {
 			name, kind, _ := strings.Cut(f, ":")
-			out[strings.ToLower(name)] = map[string]svgAttrKind{
+			out[name] = map[string]svgAttrKind{
 				"fill": svgFill, "stroke": svgStroke, "visibility": svgVisibility,
 				"display": svgDisplay, "alpha": svgAlpha, "overflow": svgOverflow,
 				"inert": svgInert, "refuses": svgRefuses,
@@ -571,7 +625,7 @@ var svgAttributes = func() map[string]svgAttrKind {
 // as its own.
 func svgRootAttribute(name string) (svgAttrKind, bool) {
 	switch name {
-	case "width", "height", "viewbox", "preserveaspectratio":
+	case "width", "height", "viewBox", "preserveAspectRatio":
 		return svgOwn, true
 	case "x", "y":
 		// Not read on an outermost <svg>, which is placed by the page.
@@ -588,9 +642,10 @@ func svgRectAttribute(name string) (svgAttrKind, bool) {
 	return 0, false
 }
 
-// svgAttrKindOf classifies one attribute by its name.
+// svgAttrKindOf classifies one attribute by its name, which is compared as
+// spelled: see svgNames.
 func svgAttrKindOf(n xml.Name, own func(string) (svgAttrKind, bool)) svgAttrKind {
-	local := strings.ToLower(n.Local)
+	local := n.Local
 	switch {
 	case n.Space == "xmlns" || local == "xmlns":
 		// A namespace declaration.
@@ -623,7 +678,7 @@ func svgAttrKindOf(n xml.Name, own func(string) (svgAttrKind, bool)) svgAttrKind
 // percentage of the viewport. An absent one is zero, which is the initial value
 // of every one of x, y, width and height.
 func svgCoord(raw string) (svgLen, bool) {
-	s := strings.TrimSpace(raw)
+	s := ascii.TrimSpace(raw)
 	if s == "" {
 		return svgLen{}, true
 	}
@@ -767,11 +822,11 @@ func unitOf(px float64) style.Unit {
 // svgFillColour reads a fill attribute. An absent fill is black, which is SVG's
 // initial value and not a guess.
 func svgFillColour(raw string) (style.RGBA, bool) {
-	s := strings.TrimSpace(raw)
+	s := ascii.TrimCSSSpace(raw)
 	if s == "" {
 		return style.RGBA{A: 1}, true // black
 	}
-	if strings.EqualFold(s, "none") {
+	if ascii.EqualFold(s, "none") {
 		// Draws nothing, which is not the same as drawing white. An SVG whose
 		// only shape is invisible paints nothing at all, and "nothing" is not a
 		// colour this can hand back.
@@ -785,9 +840,10 @@ func svgFillColour(raw string) (style.RGBA, bool) {
 }
 
 // attrOf returns an element's attribute by local name, ignoring the namespace.
+// The name is compared as spelled: see svgNames.
 func attrOf(e xml.StartElement, name string) string {
 	for _, a := range e.Attr {
-		if strings.EqualFold(a.Name.Local, name) {
+		if a.Name.Local == name {
 			return a.Value
 		}
 	}
@@ -801,19 +857,19 @@ func attrOf(e xml.StartElement, name string) string {
 // is read as absent, which is what makes "width: 100%" on an SVG give the box no
 // width of its own rather than a nonsensical one.
 func svgLength(raw string) (style.Unit, bool) {
-	s := strings.TrimSpace(raw)
+	s := ascii.TrimSpace(raw)
 	if s == "" || strings.HasSuffix(s, "%") {
 		return 0, false
 	}
 	for _, unit := range []string{"px", "pt", "pc", "cm", "mm", "in", "em", "ex"} {
-		if strings.HasSuffix(strings.ToLower(s), unit) {
+		if strings.HasSuffix(ascii.Lower(s), unit) {
 			// Only px is a length this can resolve without a font or a device.
 			// The rest are real SVG units and reading them as pixels would be a
 			// wrong number rather than a missing one.
 			if unit != "px" {
 				return 0, false
 			}
-			s = strings.TrimSpace(s[:len(s)-2])
+			s = ascii.TrimSpace(s[:len(s)-2])
 			break
 		}
 	}
@@ -842,11 +898,11 @@ func svgLength(raw string) (style.Unit, bool) {
 // and a negative one is not a length, and both would otherwise arrive as a
 // fraction the sizing would multiply an area by.
 func svgPercent(raw string) (float64, bool) {
-	s := strings.TrimSpace(raw)
+	s := ascii.TrimSpace(raw)
 	if !strings.HasSuffix(s, "%") {
 		return 0, false
 	}
-	v, ok := parseNumber(strings.TrimSpace(strings.TrimSuffix(s, "%")))
+	v, ok := parseNumber(ascii.TrimSpace(strings.TrimSuffix(s, "%")))
 	if !ok || v <= 0 {
 		return 0, false
 	}

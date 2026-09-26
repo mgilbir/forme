@@ -1,9 +1,8 @@
 package paragraph
 
 import (
-	"strings"
-	"unicode"
-
+	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 )
 
@@ -19,11 +18,20 @@ import (
 // they can search for, and a character with no glyph often cannot be shown at
 // all in whatever is reading the report.
 func DescribeRune(r rune) string {
-	out := "U+" + strings.ToUpper(hex(uint32(r)))
-	if unicode.IsPrint(r) {
+	out := "U+" + ascii.Upper(hex(uint32(r)))
+	if printable(r) {
 		out += " (" + string(r) + ")"
 	}
 	return out
+}
+
+// printable reports whether a character can be shown between the parentheses:
+// a letter, a mark, a number, punctuation, a symbol, or the ASCII space — which
+// is what package unicode's IsPrint asked, answered from this engine's release.
+// A control, a format character or a separator would show as nothing, or break
+// the line the diagnostic is on.
+func printable(r rune) bool {
+	return r == ' ' || charprop.Is(r, charprop.L|charprop.M|charprop.N|charprop.P|charprop.S)
 }
 
 func hex(v uint32) string {

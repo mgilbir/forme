@@ -392,6 +392,10 @@ func TestMatchLangIsExtendedFiltering(t *testing.T) {
 // tag, and they must not read four different tags. Reading lang alone made an
 // XHTML document that declared itself with xml:lang a document with no language
 // at all, here as much as in the text.
+//
+// On an element carrying both, xml:lang wins: HTML §3.2.6.2 asks for the lang
+// in the XML namespace first. This test said lang won there until the user
+// decided it by the section's order; element c was turned round with it.
 func TestMatchLangReadsXMLLangToo(t *testing.T) {
 	doc := parseDoc(t, `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" `+
 		`"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">`+
@@ -404,16 +408,18 @@ func TestMatchLangReadsXMLLangToo(t *testing.T) {
 <p id="d">d</p></body></html>`)
 	check(t, doc, map[string]string{
 		"p:lang(en)": "a",
-		"p:lang(fr)": "b",
-		// lang wins on the element carrying both, and the further xml:lang does
-		// not come back for the one that lost.
-		"p:lang(de)": "c",
+		// xml:lang wins on the element carrying both, and the lang that lost
+		// does not come back for it.
+		"p:lang(fr)": "b c",
+		"p:lang(de)": "",
 		"p:lang(es)": "",
 	})
 	// An HTML document does not read it, because the HTML parser stores it as a
-	// name in no namespace and a browser ignores it there.
-	html := parseDoc(t, `<div id="outer" xml:lang="en"><p id="a">a</p></div>`)
-	check(t, html, map[string]string{"p:lang(en)": ""})
+	// name in no namespace and the section gives that no effect — alone, or
+	// beside a lang it would have beaten.
+	html := parseDoc(t, `<div id="outer" xml:lang="en"><p id="a">a</p>`+
+		`<p id="b" xml:lang="fr" lang="de">b</p></div>`)
+	check(t, html, map[string]string{"p:lang(en)": "", "p:lang(fr)": "", "p:lang(de)": "b"})
 }
 
 // TestHTMLAttributeValuesAreFoldedInAnHTMLDocument.
@@ -514,6 +520,23 @@ func TestTheFoldingIsASCIIAndNotUnicodes(t *testing.T) {
 	})
 }
 
+// TestATypeIsFoldedAsASCIIToo is the same rule for element names, which HTML
+// also compares ASCII case-insensitively. The matcher asked strings.EqualFold,
+// which is Unicode's simple case folding — from the toolchain's release, not
+// the engine's — and under it U+212A KELVIN SIGN is "k" and U+017F LONG S is
+// "s": a selector naming neither <kbd> nor <span> selected both.
+func TestATypeIsFoldedAsASCIIToo(t *testing.T) {
+	doc := parseDoc(t, `<p id="p"><kbd id="k">k</kbd><span id="s">s</span><span id="t">t</span></p>`)
+	check(t, doc, map[string]string{
+		"\u212Abd":                    "",
+		"\u017Fpan":                   "",
+		"KBD":                         "k",
+		"SPAN":                        "s t",
+		"SpAn:nth-of-type(2)":         "t",
+		"p > \u017Fpan:first-of-type": "",
+	})
+}
+
 // TestMatchIsRightToLeft is a performance property rather than a correctness
 // one, and it is asserted because the alternative is quietly quadratic.
 // Matching from the subject outwards rejects most elements on their own name;
@@ -606,9 +629,12 @@ func deepChain(depth int) string {
 		strings.Repeat("</div>", depth)
 }
 
-// expensiveSelector costs the depth of the tree to the fourth power on a
-// paragraph under nested div.x, and matches nothing. See
-// TestMatchBudgetTripsAndIsReported.
+// expensiveSelector matches nothing, and costs a walk of every ancestor from
+// every ancestor for each of its levels of :is() on a paragraph under nested
+// div.x: three times the square of the depth, which at two hundred is six times
+// the per-match budget. It was the depth to the fourth power until each
+// argument list's answer was remembered per element; see matchesList and
+// TestNestedIsIsLinearInItsNesting. See TestMatchBudgetTripsAndIsReported.
 const expensiveSelector = ":is(:is(:is(.nowhere .x) .x) .x) p"
 
 // TestMatchNeverPanics is the totality property. Every document the html package

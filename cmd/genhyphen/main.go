@@ -41,10 +41,27 @@
 //
 // name is the Go identifier the table is declared under, and key is the tag
 // paragraph.HyphenationOf resolves a document's lang attribute to.
+//
+// # A file offered under a choice of licences
+//
+// Hungarian's is offered under MPL 1.1, GPL 2.0 or LGPL 2.1, at the
+// recipient's option, and this repository takes it under the MPL 1.1. That
+// licence asks for more than the header: its Exhibit A notice in each file of
+// the Source Code (§3.5), with its blanks filled, and a note of what was
+// changed (§3.3). -mpl names the licence's text, pinned by -mpl-sha256, and
+// the generator writes the notice from it — the fixed sentences quoted from
+// the licence, the blanks filled from the pattern file's own header, and
+// refusing a file whose header does not offer the MPL 1.1 or does not name
+// its initial developer:
+//
+//	go run ./cmd/genhyphen -source <url> -mpl <MPL-1.1.txt> -mpl-source <url> -mpl-sha256 <hex> \
+//		<name> <key> <hyph-LANG.tex>
 package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"go/format"
@@ -56,6 +73,9 @@ import (
 
 func main() {
 	source := flag.String("source", "", "the URL the patterns were fetched from, at their pinned commit")
+	mpl := flag.String("mpl", "", "the MPL 1.1's text, when this repository takes the file under it")
+	mplSource := flag.String("mpl-source", "", "the URL the MPL 1.1's text was fetched from")
+	mplPin := flag.String("mpl-sha256", "", "the SHA-256 the MPL 1.1's text is pinned to")
 	flag.Parse()
 	args := flag.Args()
 	if len(args) != 3 || *source == "" {
@@ -185,6 +205,13 @@ func main() {
 	for _, line := range header {
 		fmt.Fprintln(&b, strings.TrimRight("//"+line, " "))
 	}
+	if *mpl != "" {
+		if *mplSource == "" || *mplPin == "" {
+			fmt.Fprintln(os.Stderr, "-mpl without -mpl-source and -mpl-sha256: the notice has to say which text it is from")
+			os.Exit(2)
+		}
+		writeMPLNotice(&b, *mpl, *mplSource, *mplPin, filepath.Base(path), header)
+	}
 	fmt.Fprintf(&b, "var %sHyphenation = hyphenSource{\n", name)
 	fmt.Fprintf(&b, "\tkey:   %q,\n", key)
 	fmt.Fprintf(&b, "\tleft:  %d,\n", left)
@@ -202,6 +229,114 @@ func main() {
 		os.Exit(1)
 	}
 	os.Stdout.Write(out)
+}
+
+// writeMPLNotice writes the notice the MPL 1.1 asks for in each file of Covered
+// Code: Exhibit A, its fixed sentences read from the licence's own text and its
+// blanks from the pattern file's header, and the §3.3 note of the change.
+func writeMPLNotice(b *strings.Builder, licence, source, pin, file string, header []string) {
+	data, err := os.ReadFile(licence)
+	if err != nil {
+		fail("reading " + licence + ": " + err.Error())
+	}
+	if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != pin {
+		fail(fmt.Sprintf("%s has SHA-256 %x, and the MPL 1.1 is pinned to %s", licence, sum, pin))
+	}
+	text := string(data)
+	if !strings.Contains(text, "MOZILLA PUBLIC LICENSE") || !strings.Contains(text, "Version 1.1") {
+		fail(licence + " is not the Mozilla Public License 1.1")
+	}
+	// Exhibit A's two fixed paragraphs: from the opening quote to the first
+	// blank the licensee fills in.
+	i := strings.Index(text, "EXHIBIT A")
+	if i < 0 {
+		fail(licence + " has no Exhibit A")
+	}
+	exhibit := text[i:]
+	start := strings.Index(exhibit, "``")
+	end := strings.Index(exhibit, "The Original Code is")
+	if start < 0 || end < start {
+		fail(licence + "'s Exhibit A is not the shape this reads")
+	}
+	var fixed []string
+	for _, l := range strings.Split(exhibit[start+2:end], "\n") {
+		fixed = append(fixed, strings.TrimSpace(l))
+	}
+	for len(fixed) > 0 && fixed[len(fixed)-1] == "" {
+		fixed = fixed[:len(fixed)-1]
+	}
+
+	// The blanks, from the header.
+	field := func(key string) string {
+		for _, l := range header {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(l), key+":"); ok && strings.TrimSpace(v) != "" {
+				return strings.TrimSpace(v)
+			}
+		}
+		fail(file + "'s header has no " + key + ", which the MPL notice needs")
+		return ""
+	}
+	offered := false
+	for k, l := range header {
+		if strings.TrimSpace(l) == "name: MPL" && k+1 < len(header) &&
+			strings.TrimSpace(header[k+1]) == "version: 1.1" {
+			offered = true
+		}
+	}
+	if !offered {
+		fail(file + "'s header does not offer the MPL 1.1")
+	}
+	title := field("title")
+	developer := field("initial_developer")
+	copyright := strings.TrimPrefix(field("copyright"), "Copyright (C) ")
+	var contributors []string
+	for k, l := range header {
+		if strings.TrimSpace(l) != "contributors:" {
+			continue
+		}
+		for _, c := range header[k+1:] {
+			v, ok := strings.CutPrefix(strings.TrimSpace(c), "- ")
+			if !ok {
+				break
+			}
+			contributors = append(contributors, v)
+		}
+	}
+	if len(contributors) == 0 {
+		fail(file + "'s header lists no MPL contributors")
+	}
+
+	fmt.Fprintln(b, "//")
+	fmt.Fprintln(b, "// The file is offered under a choice of licences, and this repository takes")
+	fmt.Fprintln(b, "// it, and this table made from it, under the Mozilla Public License 1.1.")
+	fmt.Fprintln(b, "// The notice its Exhibit A asks for in each file, with the blanks filled")
+	fmt.Fprintln(b, "// from the header above; the licence's text is in THIRD_PARTY_NOTICES.")
+	fmt.Fprintf(b, "//\n// Licence text: %s\n// SHA-256: %s\n//\n", source, pin)
+	for _, l := range fixed {
+		if l == "" {
+			fmt.Fprintln(b, "//")
+		} else {
+			fmt.Fprintln(b, "//\t"+l)
+		}
+	}
+	fmt.Fprintln(b, "//")
+	fmt.Fprintf(b, "//\tThe Original Code is %s, %s.\n", file, title)
+	fmt.Fprintln(b, "//")
+	fmt.Fprintf(b, "//\tThe Initial Developer of the Original Code is %s.\n", developer)
+	fmt.Fprintf(b, "//\tPortions created by the Initial Developer are Copyright (C) %s.\n", copyright)
+	fmt.Fprintln(b, "//\tAll Rights Reserved.")
+	fmt.Fprintln(b, "//")
+	fmt.Fprintf(b, "//\tContributor(s): %s.\n", strings.Join(contributors, ", "))
+	fmt.Fprintln(b, "//")
+	fmt.Fprintf(b, "// Modified, as §3.3 asks it be said: cmd/genhyphen copies %s's\n", file)
+	fmt.Fprintln(b, "// \\patterns and \\hyphenation blocks into this Go file, one entry per line,")
+	fmt.Fprintln(b, "// and adds nothing to them, removes nothing and changes no entry. The date of")
+	fmt.Fprintln(b, "// each change is the commit that made it.")
+}
+
+func fail(msg string) {
+	fmt.Fprintln(os.Stderr, "genhyphen:", msg)
+	os.Exit(1)
 }
 
 // number reads the integer at the end of a "left: 2" header line.

@@ -180,10 +180,15 @@ func TestAKernPairPastTheOldBoundIsApplied(t *testing.T) {
 }
 
 // TestALegacyKernPairCountBeyondTheBoundStopsBeingAdded is the bound that is
-// left: the legacy kern table still lists its pairs, because it states each one
-// explicitly, and every pair listed is a map entry kept for the life of the
+// left: the flat reading of the legacy kern table, which the pair across a run
+// boundary asks (see kernLookup), still lists its pairs, because it states each
+// one explicitly, and every pair listed is a map entry kept for the life of the
 // face. The count is a running total rather than a per-subtable one, so a font
 // cannot get past it by spreading them out — and tripping it is reported.
+//
+// The positioning pass reads the table's own bytes (legacykern.go), searching
+// each subtable's sorted pairs where a pair is met, so there is no list for it
+// to bound; this asks the flat reading directly.
 func TestALegacyKernPairCountBeyondTheBoundStopsBeingAdded(t *testing.T) {
 	const glyphs = 600
 	const perSubtable = 1100
@@ -214,28 +219,28 @@ func TestALegacyKernPairCountBeyondTheBoundStopsBeingAdded(t *testing.T) {
 			Pairs: []fonttest.KernPair{{Left: glyphs, Right: glyphs, Adjust: -250}}})
 		return boundsFace(t, glyphs, map[string][]byte{"kern": fonttest.LegacyKern(subs)})
 	}
-	text := string([]rune{rune(0x40 + glyphs), rune(0x40 + glyphs)})
-	advance := func(f *Face) float64 {
-		got, _ := f.ShapeGlyphs(text)
-		if len(got) != 2 {
-			t.Fatalf("shaping two glyphs gave %d", len(got))
+	listed := func(f *Face) bool {
+		for i := range f.layout.kern {
+			if _, ok := f.layout.kern[i].pair(glyphs, glyphs); ok {
+				return true
+			}
 		}
-		return got[0].XAdvance
+		return false
 	}
 
-	// Under the bound the pair applies, or this says nothing about the bound.
+	// Under the bound the pair is listed, or this says nothing about the bound.
 	small := build(8)
-	if adv := advance(small); adv != 250 {
-		t.Fatalf("with a few subtables the last pair moved the advance to %v, want 250; "+
-			"the fixture does not reach what the bound is being asked about", adv)
+	if !listed(small) {
+		t.Fatal("with a few subtables the last pair was not listed; the fixture does " +
+			"not reach what the bound is being asked about")
 	}
 	if limits := small.LayoutLimits(); len(limits) != 0 {
 		t.Errorf("a table under the bound reports limits: %q", limits)
 	}
 	big := build(subtables)
-	if adv := advance(big); adv != 500 {
-		t.Errorf("the pair past the total of %d was added and moved the advance to "+
-			"%v; past the bound the face stops taking them", maxPairs, adv)
+	if listed(big) {
+		t.Errorf("the pair past the total of %d was listed; past the bound the "+
+			"face stops taking them", maxPairs)
 	}
 	limits := big.LayoutLimits()
 	if len(limits) != 1 || !strings.Contains(limits[0], "kerning pairs") {

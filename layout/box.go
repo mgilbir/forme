@@ -5,12 +5,13 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
 
-// The box tree: the fourth of §3's stages, turning a styled document into the
-// boxes layout will position.
+// The box tree: the stage after the cascade and before block layout, turning a
+// styled document into the boxes layout will position.
 //
 // It is a separate stage because the document tree and the box tree are not the
 // same shape, and the places they differ are where layout goes wrong if the
@@ -19,11 +20,12 @@ import (
 // generated. And whether a box is block-level or inline-level is a property of
 // the *box*, decided by the cascade, not of the tag that produced it.
 //
-// # Why this is in package render rather than its own
+// # Why this is in package layout rather than its own
 //
-// §3 sketches each stage as a package. What it actually requires is that each
-// stage have "a data structure at its boundary" so §7's oracle can attach, and
-// Box is that. Splitting the stages into packages would mean moving the finding
+// The design this engine was planned from sketched each stage as a package.
+// What it actually required is that each stage have a data structure at its
+// boundary, so that a test can read what the stage produced without the stages
+// after it, and Box is that. Splitting the stages into packages would mean moving the finding
 // vocabulary below them all — the box stage reports, so it cannot sit above the
 // package that defines a finding — and that is a rearrangement to make on
 // evidence rather than in advance.
@@ -289,6 +291,10 @@ type Box struct {
 	// needs to sort it. Two overlapping cards written one after the other would
 	// otherwise stack in whichever order the placement pass happened to reach
 	// them, which is stable, invisible and wrong.
+	//
+	// Inside a flex or grid container the tie-break is order-modified document
+	// order, which the painter builds from this and the items' "order": see
+	// orderKey.
 	Order int
 
 	// noLeadInset and noTrailInset mark a piece of an inline box that was split
@@ -514,6 +520,10 @@ func mustPx(px float64) style.Unit {
 }
 
 type boxBuilder struct {
+	// languageMemo answers the language questions each text node asks. See
+	// languageMemo.
+	languageMemo
+
 	styles map[*html.Node]style.ComputedStyle
 	pseudo map[style.PseudoKey]style.ComputedStyle
 	// ownFontSize and ownPseudoFontSize say which elements declared a font-size
@@ -816,10 +826,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 
 	// ::before and ::after bracket the element's own children rather than
 	// replacing them, which is why they are added here and not by the caller.
-	if before := b.generated(n, "before", fontSize); before != nil {
-		before.Parent = box
-		box.Children = append(box.Children, before)
-	}
+	b.addGenerated(box, n, "before", fontSize)
 	// A control that shows a value rather than markup — a text field, a submit
 	// button — has that value here as an ordinary text box. It comes before the
 	// element's own children because an <input> is void and has none, and
@@ -839,7 +846,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	// none. With the property at its initial value nothing is added and the
 	// element stays what it was: a break opportunity that marks no boundary in
 	// the text, which is what the flattening makes of an empty one.
-	if strings.EqualFold(n.Name, "wbr") {
+	if ascii.EqualFold(n.Name, "wbr") {
 		if wst := b.wordSpaceTransformFor(cs); wst.Transforms() {
 			sep := &html.Node{Type: html.TextNode, Text: "\u200b", Offset: n.Offset}
 			if t := b.textBox(sep, cs, fontSize); t != nil {
@@ -849,10 +856,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		}
 	}
 	b.appendChildren(box, n, cs, fontSize)
-	if after := b.generated(n, "after", fontSize); after != nil {
-		after.Parent = box
-		box.Children = append(box.Children, after)
-	}
+	b.addGenerated(box, n, "after", fontSize)
 	if isBlockContainer(box) {
 		// §5.12.2's ::first-letter, which applies to a block container and is
 		// done here because the letter is a stretch of text that has already
@@ -908,7 +912,7 @@ func replacedFallback(n *html.Node) bool {
 	if n == nil || n.Type != html.ElementNode {
 		return false
 	}
-	return strings.EqualFold(n.Name, "canvas") || strings.EqualFold(n.Name, "video")
+	return ascii.EqualFold(n.Name, "canvas") || ascii.EqualFold(n.Name, "video")
 }
 
 // appendChildren builds an element's children into a box, following the ones
@@ -970,16 +974,9 @@ func (b *boxBuilder) appendContents(box *Box, n *html.Node, parentFontSize style
 	}
 	cs := b.styles[n]
 	fontSize := b.fontSizeOf(n, parentFontSize)
-	add := func(c *Box) {
-		if c == nil {
-			return
-		}
-		c.Parent = box
-		box.Children = append(box.Children, c)
-	}
-	add(b.generated(n, "before", fontSize))
+	b.addGenerated(box, n, "before", fontSize)
 	b.appendChildren(box, n, cs, fontSize)
-	add(b.generated(n, "after", fontSize))
+	b.addGenerated(box, n, "after", fontSize)
 }
 
 // replacedByItsContents reports whether an element is one that "display:
@@ -1009,7 +1006,7 @@ func contentsIsHonoured(n *html.Node, cs style.ComputedStyle, root *html.Node) b
 	if n == nil || cs.IsZero() {
 		return false
 	}
-	if !strings.EqualFold(strings.TrimSpace(cs.Get("display")), "contents") {
+	if !ascii.EqualFold(ascii.TrimCSSSpace(cs.Get("display")), "contents") {
 		return false
 	}
 	if n == root {
@@ -1026,7 +1023,7 @@ func contentsIsHonoured(n *html.Node, cs style.ComputedStyle, root *html.Node) b
 // not — it offers a break opportunity and marks no boundary in the text, so
 // "sur<wbr/>name" is one word and "capitalize" gives it one capital.
 func endsAWord(n *html.Node) bool {
-	return n != nil && n.Type == html.ElementNode && strings.EqualFold(n.Name, "br")
+	return n != nil && n.Type == html.ElementNode && ascii.EqualFold(n.Name, "br")
 }
 
 // fontSizeOfStyle resolves a font-size from a computed style that belongs to no
@@ -1109,7 +1106,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	}
 	collapse := preservedInAControl(n, inherited.Get("white-space-collapse"))
 	text := collapseWhitespaceAfter(n.Text, collapse, wst,
-		before, writingSystemAt(n))
+		before, b.writingSystemAt(n))
 	b.reportPhraseSeparators(n, text, wst)
 	// Whether the run of white space this node ends with is still open, asked
 	// of the collapsed text and *before* the transform below rewrites it. See
@@ -1130,7 +1127,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	b.settleSigma(text)
 	var openSigma int
 	text, b.afterWord, b.caseContext, openSigma = transformTextIn(text, kind, b.afterWord,
-		languageAt(n), b.caseContext)
+		b.languageAt(n), b.caseContext)
 	// After the transform rather than before it, because what the next node
 	// follows is the text that will be on the page: "full-width" turns a space
 	// into U+3000, which nothing collapses, and the rules below are about the
@@ -1224,6 +1221,10 @@ const (
 	// inline-level box does not go through, so the box is laid out as the
 	// inline box it is and without a marker.
 	displayGapInlineListItem
+	// displayGapAnnotation is "ruby-text" or "ruby-text-container", laid out
+	// as an inline box; it is a gap of its own only outside any ruby, since
+	// inside one it is the ruby's. See unlaidBoxIsNotTheBoxAsked.
+	displayGapAnnotation
 )
 
 // parseDisplay is css-display-3's grammar, for every value the cascade accepts.
@@ -1242,7 +1243,7 @@ const (
 // ruby, which defaults to inline" — and "list-item" alone is a block flow list
 // item.
 func parseDisplay(raw string) displayType {
-	value := strings.ToLower(strings.TrimSpace(raw))
+	value := ascii.Lower(ascii.TrimCSSSpace(raw))
 	switch value {
 	case "none":
 		return displayType{outer: OuterNone, inner: InnerFlow}
@@ -1291,13 +1292,18 @@ func parseDisplay(raw string) displayType {
 		// one, and inline is what the element would have been. The caller
 		// reports it.
 		return displayType{outer: OuterInline, inner: InnerFlow}
-	case "ruby-base", "ruby-base-container", "ruby-text", "ruby-text-container":
+	case "ruby-base", "ruby-base-container":
 		// The boxes a ruby is built from, laid out as the inline boxes they
-		// are. Inside a ruby, that ruby's own report says the annotation is not
-		// lifted; see unlaidBoxIsNotTheBoxAsked. An annotation outside any ruby
-		// is not reported, and a browser would lift it above an anonymous base:
-		// that is the one value here still laid out otherwise without a word.
+		// are. A base alone is what a ruby with no annotation comes to, so it
+		// is the box asked for wherever it is.
 		return displayType{outer: OuterInline, inner: InnerFlow}
+	case "ruby-text", "ruby-text-container":
+		// An annotation, laid out as the inline box it is rather than lifted
+		// above its base. Inside a ruby, that ruby's own report says so; one
+		// outside any ruby is wrapped by css-ruby-1 §2.2 in an anonymous ruby
+		// of its own and lifted above an empty base, and is reported itself.
+		// See unlaidBoxIsNotTheBoxAsked.
+		return displayType{outer: OuterInline, inner: InnerFlow, gap: displayGapAnnotation}
 	case "math":
 		// MathML Core: on an element that is not MathML, "math" computes to
 		// "flow", and with no outside value that is an inline box. The one
@@ -1314,7 +1320,7 @@ func parseDisplay(raw string) displayType {
 		outer, inner   string
 		haveOuter, has bool
 	)
-	for _, w := range strings.Fields(value) {
+	for _, w := range ascii.CSSFields(value) {
 		switch w {
 		case "block", "inline", "run-in":
 			if haveOuter {
@@ -1414,7 +1420,7 @@ func replacesItsOwnContent(n *html.Node) bool {
 	if n == nil {
 		return false
 	}
-	switch strings.ToLower(n.Name) {
+	switch ascii.Lower(n.Name) {
 	case "img", "object":
 		return true
 	case "svg", "math":
@@ -1435,7 +1441,7 @@ func replacesItsOwnContent(n *html.Node) bool {
 // need the writing mode, and answering them as "left" would be right for a
 // left-to-right document and silently wrong for the documents they exist for.
 func floatOf(cs style.ComputedStyle) FloatSide {
-	switch strings.ToLower(strings.TrimSpace(cs.Get("float"))) {
+	switch ascii.Lower(ascii.TrimCSSSpace(cs.Get("float"))) {
 	case "left":
 		return FloatLeft
 	case "right":
@@ -1445,7 +1451,7 @@ func floatOf(cs style.ComputedStyle) FloatSide {
 }
 
 func clearOf(cs style.ComputedStyle) ClearSide {
-	switch strings.ToLower(strings.TrimSpace(cs.Get("clear"))) {
+	switch ascii.Lower(ascii.TrimCSSSpace(cs.Get("clear"))) {
 	case "left":
 		return ClearLeft
 	case "right":
@@ -1535,7 +1541,7 @@ func overflowClipsAxes(cs style.ComputedStyle) (x, y bool) {
 // overflowOn is one axis's value, lower-cased, with an absent one read as the
 // initial "visible".
 func overflowOn(cs style.ComputedStyle, axis string) string {
-	v := strings.ToLower(strings.TrimSpace(cs.Get(axis)))
+	v := ascii.Lower(ascii.TrimCSSSpace(cs.Get(axis)))
 	if v == "" {
 		return "visible"
 	}
@@ -1919,7 +1925,7 @@ func mayInsetHorizontally(cs style.ComputedStyle) bool {
 // zero rather than sharing out the space, which is what makes an inline box
 // uncentreable.
 func isZeroLength(v string) bool {
-	switch s := strings.ToLower(strings.TrimSpace(v)); s {
+	switch s := ascii.Lower(ascii.TrimCSSSpace(v)); s {
 	case "", "0", "auto":
 		return true
 	default:
@@ -2144,7 +2150,7 @@ func onlyDocumentWhiteSpace(run []*Box) bool {
 		if !c.IsText() {
 			return false
 		}
-		if strings.Trim(c.Text, " \t\n\r") != "" {
+		if !paragraph.IsDocumentWhiteSpace(c.Text) {
 			return false
 		}
 	}
@@ -2174,7 +2180,7 @@ func hasInFlowContent(run []*Box) bool {
 		if !whiteSpaceOf(c.Style.Get("white-space-collapse")).Collapse {
 			return true
 		}
-		if strings.TrimSpace(c.Text) != "" {
+		if !paragraph.IsDocumentWhiteSpace(c.Text) {
 			return true
 		}
 	}
@@ -2196,16 +2202,32 @@ func (b *boxBuilder) listValueOf(n *html.Node, listItem bool) (int, bool) {
 	return 0, false
 }
 
+// languageMemo is the language in force at each node, worked out once per node
+// for a pass over the document rather than once per question.
+//
+// The questions are many. Every text node is asked its casing language and its
+// writing system when its box is built, and again, with its hyphenation and its
+// orthography, when it is laid out; each was a walk to the root reading the
+// attributes of every element above it. A paragraph of nested spans, each
+// holding a word, paid the square of its depth in walks. See html.Languages,
+// which is the memo and says why it belongs to one pass.
+//
+// The box builder, the layouter and the replaced-content loader each hold one,
+// because each is one pass over a tree that does not change during it.
+type languageMemo struct {
+	html.Languages
+}
+
 // languageAt is the language in force at a node: the nearest lang attribute at
 // or above it.
 //
 // It is read here rather than resolved through the cascade because it is not a
 // CSS property — it is an HTML attribute, and the cascade carries no entry for
-// it. html.Node.Language does the walk, and is shared with the three readers
+// it. html.Node.Language is the rule, and is shared with the three readers
 // below and with :lang() in the selector matcher: they ask four different
 // questions of the tag and must not ask four different tags.
-func languageAt(n *html.Node) paragraph.Language {
-	if v, ok := n.Language(); ok {
+func (m *languageMemo) languageAt(n *html.Node) paragraph.Language {
+	if v, ok := m.Of(n); ok {
 		return paragraph.LanguageOf(v)
 	}
 	return ""
@@ -2218,8 +2240,8 @@ func languageAt(n *html.Node) paragraph.Language {
 // romanised Chinese and divides between its syllables where "zh" is Han and does
 // not. See paragraph.HyphenationOf, which is a different question from
 // languageAt's and must not be answered with it.
-func hyphenationAt(n *html.Node) paragraph.Language {
-	if v, ok := n.Language(); ok {
+func (m *languageMemo) hyphenationAt(n *html.Node) paragraph.Language {
+	if v, ok := m.Of(n); ok {
 		return paragraph.HyphenationOf(v)
 	}
 	return ""
@@ -2230,8 +2252,8 @@ func hyphenationAt(n *html.Node) paragraph.Language {
 // The tag whole, as writingSystemAt reads it and for the same reason: what
 // decides is the script, and "zh-Latn" is romanised Chinese where "zh" is not.
 // See paragraph.OrthographyOf.
-func orthographyAt(n *html.Node) paragraph.Orthography {
-	if v, ok := n.Language(); ok {
+func (m *languageMemo) orthographyAt(n *html.Node) paragraph.Orthography {
+	if v, ok := m.Of(n); ok {
 		return paragraph.OrthographyOf(v)
 	}
 	return paragraph.OrthographyPlain
@@ -2245,8 +2267,8 @@ func orthographyAt(n *html.Node) paragraph.Orthography {
 // this reads the tag whole: "ain-Kana" is Ainu written in katakana and is
 // typeset as Japanese, and "ja-Latn" is Japanese romanised and is not. See
 // paragraph.WritingSystemOf.
-func writingSystemAt(n *html.Node) paragraph.WritingSystem {
-	if v, ok := n.Language(); ok {
+func (m *languageMemo) writingSystemAt(n *html.Node) paragraph.WritingSystem {
+	if v, ok := m.Of(n); ok {
 		return paragraph.WritingSystemOf(v)
 	}
 	return paragraph.WritingSystemOther
@@ -2274,7 +2296,7 @@ func (b *boxBuilder) reportPhraseSeparators(n *html.Node, text string,
 	if b.reportedPhraseSeparators || !wst.Invents() {
 		return
 	}
-	if !paragraph.PhrasesUnfound(text, writingSystemAt(n)) {
+	if !paragraph.PhrasesUnfound(text, b.writingSystemAt(n)) {
 		return
 	}
 	b.reportedPhraseSeparators = true

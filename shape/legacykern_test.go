@@ -8,16 +8,11 @@ import (
 
 // The legacy 'kern' table: kerning as a font written before GPOS states it.
 //
-// readKernTable is only reached when GPOS carried no pairs, which is why no
-// corpus font reaches it — every face in testdata/harfbuzz and every face the
-// reftests load states its kerning in GPOS, and a face with both is read through
-// GPOS by design. Coverage bore that out: readKernTable ran on the empty tables
-// of fonts that have none and kernFormat0 had never been entered at all.
-//
-// That is the shape of fault worth a fixture rather than a deletion. The reader
-// is not dead — a real face with a 'kern' table and no GPOS reaches it, and the
-// format is what an old Type 1-derived TrueType font uses — it is only that
-// nothing in the corpora is such a font. So the font is built here.
+// No face in testdata/harfbuzz and none the reftests load has one, so the font
+// is built here. What each fixture asserts is what HarfBuzz 14.5.0 answers for
+// it, and the Google Fonts sweep is where the rule was measured: 756 Latin
+// strings in faces with only a kern table were set differently before the
+// table was applied as HarfBuzz applies it (legacykern.go).
 const (
 	lkAdvance = 500
 	lkTighten = -150
@@ -56,72 +51,137 @@ func legacyKernFace(t *testing.T, kern []byte, gpos []byte) *Face {
 	return f
 }
 
-// firstAdvanceOf shapes a two-glyph string and returns the advance of the first
-// glyph, which is the one a 'kern' record adjusts.
-func firstAdvanceOf(t *testing.T, f *Face, s string) float64 {
+// shapedUnits shapes a string and returns each glyph's advance and offsets in
+// the face's units, which the fixtures here are stated in.
+func shapedUnits(t *testing.T, f *Face, s string) [][3]float64 {
 	t.Helper()
 	glyphs, missing := f.ShapeGlyphs(s)
 	if missing != 0 {
 		t.Fatalf("shaping %q: %d characters have no glyph", s, missing)
 	}
-	if len(glyphs) != 2 {
-		t.Fatalf("shaping %q gave %d glyphs, want 2", s, len(glyphs))
+	var out [][3]float64
+	for _, g := range glyphs {
+		out = append(out, [3]float64{g.XAdvance, g.XOffset, g.YOffset})
 	}
-	return glyphs[0].XAdvance
+	return out
 }
 
+func sameUnits(a, b [][3]float64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestALegacyKernTableIsApplied is the table applied as HarfBuzz applies it:
+// half the number on the first glyph's advance and the rest on the second's,
+// with the second drawn back by that rest, so the pair ends where the whole
+// number would have put it and each glyph carries half. The fixture's answers
+// are HarfBuzz 14.5.0's for this font, shaped through uharfbuzz.
 func TestALegacyKernTableIsApplied(t *testing.T) {
 	f := legacyKernFace(t, fonttest.LegacyKern([]fonttest.KernSubtable{{
 		Coverage: fonttest.KernHorizontal,
 		Pairs:    []fonttest.KernPair{{Left: lkA, Right: lkV, Adjust: lkTighten}},
 	}}), nil)
 
-	if got, want := firstAdvanceOf(t, f, "AV"), float64(lkAdvance+lkTighten); got != want {
-		t.Errorf("AV set the A %v wide; the face's only kerning is a legacy "+
-			"'kern' table closing the pair by %d, so the A should be %v",
-			got, -lkTighten, want)
+	half := float64(lkTighten / 2)
+	if got, want := shapedUnits(t, f, "AV"), [][3]float64{
+		{lkAdvance + half, 0, 0}, {lkAdvance + half, half, 0}}; !sameUnits(got, want) {
+		t.Errorf("AV is %v; the face's only kerning is a legacy 'kern' table closing "+
+			"the pair by %d, which HarfBuzz sets as %v", got, -lkTighten, want)
 	}
 	// The pair and nothing else: a record is a pair, not a glyph.
-	if got, want := firstAdvanceOf(t, f, "VA"), float64(lkAdvance); got != want {
-		t.Errorf("VA set the V %v wide; the table states A-V and not V-A, so "+
-			"the V should be its own %v", got, want)
+	plain := [][3]float64{{lkAdvance, 0, 0}, {lkAdvance, 0, 0}}
+	if got := shapedUnits(t, f, "VA"); !sameUnits(got, plain) {
+		t.Errorf("VA is %v; the table states A-V and not V-A", got)
 	}
-	if got, want := firstAdvanceOf(t, f, "AA"), float64(lkAdvance); got != want {
-		t.Errorf("AA set the first A %v wide; the table states A-V and not A-A, "+
-			"so it should be its own %v", got, want)
+	if got := shapedUnits(t, f, "AA"); !sameUnits(got, plain) {
+		t.Errorf("AA is %v; the table states A-V and not A-A", got)
 	}
 }
 
-// The subtables the reader is documented to skip, each one stated as a table
-// that would kern if it were taken.
-//
-// Every one of these describes positioning this package does not apply, and the
-// failure they guard against is not a missing feature but a wrong number: a
-// cross-stream value is a vertical movement, and a minimum is a floor rather
-// than an adjustment, so reading either as an advance adjustment would close a
-// gap the font never asked to close.
-func TestOnlyPlainHorizontalKerningIsTaken(t *testing.T) {
+// TestAnOddKernIsSplitAsHarfBuzzSplitsIt: the first glyph's half is the number
+// shifted right, which rounds a negative odd number down, and the second takes
+// what is left.
+func TestAnOddKernIsSplitAsHarfBuzzSplitsIt(t *testing.T) {
+	f := legacyKernFace(t, fonttest.LegacyKern([]fonttest.KernSubtable{{
+		Coverage: fonttest.KernHorizontal,
+		Pairs:    []fonttest.KernPair{{Left: lkA, Right: lkV, Adjust: -151}},
+	}}), nil)
+	if got, want := shapedUnits(t, f, "AV"), [][3]float64{
+		{lkAdvance - 76, 0, 0}, {lkAdvance - 75, -75, 0}}; !sameUnits(got, want) {
+		t.Errorf("AV kerned by -151 is %v, want %v", got, want)
+	}
+}
+
+// Which subtables are applied: every format 0 subtable that kerns along the
+// line, whatever it says about minimums and overrides — HarfBuzz reads neither
+// bit — and one that kerns across it, as a movement across. A vertical one is
+// not, in a horizontal run. The answers are HarfBuzz 14.5.0's.
+func TestWhichLegacyKernSubtablesAreApplied(t *testing.T) {
+	half := float64(lkTighten / 2)
+	kerned := [][3]float64{{lkAdvance + half, 0, 0}, {lkAdvance + half, half, 0}}
+	plain := [][3]float64{{lkAdvance, 0, 0}, {lkAdvance, 0, 0}}
+	across := [][3]float64{{lkAdvance, 0, 0}, {lkAdvance, 0, lkTighten}}
 	for _, c := range []struct {
 		name     string
 		coverage int
+		want     [][3]float64
 	}{
-		{"vertical", 0x0000},              // bit 0 clear
-		{"minimum values", 0x0003},        // bit 1
-		{"cross-stream", 0x0005},          // bit 2
-		{"override", 0x0009},              // bit 3
-		{"format 1", 0x0101},              // high byte
-		{"format 2", 0x0201},              //
-		{"cross-stream override", 0x000D}, // bits 2 and 3
+		{"vertical", 0x0000, plain},               // bit 0 clear
+		{"minimum values", 0x0003, kerned},        // bit 1
+		{"cross-stream", 0x0005, across},          // bit 2
+		{"override", 0x0009, kerned},              // bit 3
+		{"cross-stream override", 0x000D, across}, // bits 2 and 3
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := legacyKernFace(t, fonttest.LegacyKern([]fonttest.KernSubtable{{
 				Coverage: c.coverage,
 				Pairs:    []fonttest.KernPair{{Left: lkA, Right: lkV, Adjust: lkTighten}},
 			}}), nil)
-			if got, want := firstAdvanceOf(t, f, "AV"), float64(lkAdvance); got != want {
-				t.Errorf("a %s subtable moved the A to %v; it describes "+
-					"positioning this package does not apply, so it should be "+
-					"skipped and the A left at %v", c.name, got, want)
+			if got := shapedUnits(t, f, "AV"); !sameUnits(got, c.want) {
+				t.Errorf("a %s subtable sets AV as %v, want %v", c.name, got, c.want)
+			}
+		})
+	}
+}
+
+// TestAKernAcrossTheLineCarriesWhatFollows: HarfBuzz ties the whole run into a
+// chain for a subtable that kerns across the line, so a glyph raised or
+// lowered takes every glyph after it along.
+func TestAKernAcrossTheLineCarriesWhatFollows(t *testing.T) {
+	f := legacyKernFace(t, fonttest.LegacyKern([]fonttest.KernSubtable{{
+		Coverage: 0x0005,
+		Pairs:    []fonttest.KernPair{{Left: lkA, Right: lkV, Adjust: lkTighten}},
+	}}), nil)
+	if got, want := shapedUnits(t, f, "AVA"), [][3]float64{
+		{lkAdvance, 0, 0}, {lkAdvance, 0, lkTighten}, {lkAdvance, 0, lkTighten}}; !sameUnits(got, want) {
+		t.Errorf("AVA across the line is %v, want %v", got, want)
+	}
+}
+
+// The formats this package does not read are passed over, and a subtable
+// after one is still reached. That is this package's limitation and not
+// HarfBuzz's answer — HarfBuzz reads format 2's classes and format 1's state
+// machine — so what is asserted is only that the pairs of a format 0 reading
+// are not taken out of bytes that are something else.
+func TestAKernFormatThisDoesNotReadIsPassedOver(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		coverage int
+	}{{"format 1", 0x0101}, {"format 2", 0x0201}} {
+		t.Run(c.name, func(t *testing.T) {
+			f := legacyKernFace(t, fonttest.LegacyKern([]fonttest.KernSubtable{{
+				Coverage: c.coverage,
+				Pairs:    []fonttest.KernPair{{Left: lkA, Right: lkV, Adjust: lkTighten}},
+			}}), nil)
+			if got := shapedUnits(t, f, "AV"); got[0][0] != lkAdvance {
+				t.Errorf("a %s subtable was read as pairs: %v", c.name, got)
 			}
 		})
 	}
@@ -135,7 +195,7 @@ func TestOnlyPlainHorizontalKerningIsTaken(t *testing.T) {
 // rather than the whole subtable, would pass every fixture above.
 func TestAKernSubtableAfterASkippedOneIsStillRead(t *testing.T) {
 	f := legacyKernFace(t, fonttest.LegacyKern([]fonttest.KernSubtable{
-		{Coverage: 0x0005, Pairs: []fonttest.KernPair{ // cross-stream, skipped
+		{Coverage: 0x0000, Pairs: []fonttest.KernPair{ // vertical, skipped
 			{Left: lkA, Right: lkV, Adjust: 900},
 			{Left: lkV, Right: lkA, Adjust: 900},
 		}},
@@ -144,14 +204,15 @@ func TestAKernSubtableAfterASkippedOneIsStillRead(t *testing.T) {
 		}},
 	}), nil)
 
-	if got, want := firstAdvanceOf(t, f, "AV"), float64(lkAdvance+lkTighten); got != want {
-		t.Errorf("with a skipped subtable in front of it the A came out %v; "+
-			"the second subtable states the pair and should still be found, "+
-			"putting the A at %v", got, want)
+	half := float64(lkTighten / 2)
+	if got, want := shapedUnits(t, f, "AV"), [][3]float64{
+		{lkAdvance + half, 0, 0}, {lkAdvance + half, half, 0}}; !sameUnits(got, want) {
+		t.Errorf("with a skipped subtable in front of it AV is %v; the second "+
+			"subtable states the pair and should still be found, giving %v", got, want)
 	}
 }
 
-// GPOS wins, and the legacy table is not read at all.
+// GPOS wins where it offers 'kern', and the legacy table is not read at all.
 //
 // A font with both is a font being migrated, and its 'kern' table is the older
 // statement. Taking both would apply the kerning twice.
@@ -164,20 +225,41 @@ func TestGPOSIsPreferredToTheLegacyKernTable(t *testing.T) {
 		}}),
 		fonttest.GPOS([]fonttest.KernPair{{Left: lkA, Right: lkV, Adjust: gposTighten}}))
 
-	got := firstAdvanceOf(t, f, "AV")
-	switch {
-	case got == float64(lkAdvance+gposTighten):
-		// What is wanted: GPOS alone.
-	case got == float64(lkAdvance+lkTighten):
-		t.Errorf("AV set the A %v wide, which is the legacy table's number; "+
-			"a font stating both should be read through GPOS, giving %v",
-			got, lkAdvance+gposTighten)
-	case got == float64(lkAdvance+gposTighten+lkTighten):
-		t.Errorf("AV set the A %v wide, which is both numbers; the font is "+
-			"being kerned twice and GPOS alone should give %v",
-			got, lkAdvance+gposTighten)
-	default:
-		t.Errorf("AV set the A %v wide; GPOS states %d, so it should be %v",
-			got, gposTighten, lkAdvance+gposTighten)
+	if got, want := shapedUnits(t, f, "AV"), [][3]float64{
+		{lkAdvance + gposTighten, 0, 0}, {lkAdvance, 0, 0}}; !sameUnits(got, want) {
+		t.Errorf("AV is %v; a font stating both should be kerned by GPOS alone, giving %v",
+			got, want)
+	}
+}
+
+// TestTheLegacyTableKernsBesideAGPOSWithNoKerning: what decides is whether
+// GPOS offers the run 'kern', not whether there is a GPOS. A face whose GPOS
+// only attaches marks is kerned by its kern table, as HarfBuzz kerns it.
+func TestTheLegacyTableKernsBesideAGPOSWithNoKerning(t *testing.T) {
+	f := legacyKernFace(t,
+		fonttest.LegacyKern([]fonttest.KernSubtable{{
+			Coverage: fonttest.KernHorizontal,
+			Pairs:    []fonttest.KernPair{{Left: lkA, Right: lkV, Adjust: lkTighten}},
+		}}),
+		fonttest.GPOSPairsUnder("mark", []fonttest.KernPair{{Left: lkV, Right: lkA, Adjust: -10}}))
+
+	half := float64(lkTighten / 2)
+	if got, want := shapedUnits(t, f, "AV"), [][3]float64{
+		{lkAdvance + half, 0, 0}, {lkAdvance + half, half, 0}}; !sameUnits(got, want) {
+		t.Errorf("AV is %v; GPOS states no 'kern', so the legacy table should give %v",
+			got, want)
+	}
+}
+
+// TestFontKerningNoneTurnsTheLegacyTableOff: it is kerning, and a document
+// that turned kerning off has turned it off.
+func TestFontKerningNoneTurnsTheLegacyTableOff(t *testing.T) {
+	f := legacyKernFace(t, fonttest.LegacyKern([]fonttest.KernSubtable{{
+		Coverage: fonttest.KernHorizontal,
+		Pairs:    []fonttest.KernPair{{Left: lkA, Right: lkV, Adjust: lkTighten}},
+	}}), nil)
+	glyphs, _ := f.ShapeGlyphsInContext("AV", "", "", Features{NoKerning: true})
+	if len(glyphs) != 2 || glyphs[0].XAdvance != lkAdvance || glyphs[1].XOffset != 0 {
+		t.Errorf("with kerning off AV is %+v", glyphs)
 	}
 }

@@ -23,9 +23,9 @@ type KernSubtable struct {
 	Pairs    []KernPair
 }
 
-// KernHorizontal is the coverage of the one kind of subtable this engine
-// applies: horizontal, adjustments rather than minimums, not cross-stream, not
-// an override, format 0.
+// KernHorizontal is the coverage of the plain subtable: horizontal,
+// adjustments rather than minimums, not cross-stream, not an override, format
+// 0.
 const KernHorizontal = 0x0001
 
 // LegacyKern builds a version 0 'kern' table — the Microsoft one, with 16-bit

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -102,7 +101,7 @@ import (
 func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 	joins := false
 	for i := range items {
-		if isShapedRun(items[i]) && contextCanChange(items[i].Face) {
+		if isShapedRun(items[i]) && contextCanChange(items[i]) {
 			joins = true
 			break
 		}
@@ -165,7 +164,7 @@ func (l *layouter) linkShapingContext(items []inlineItem) []inlineItem {
 		// is a different question from whether the context reaches the run at
 		// all. See Item.ContextKerns.
 		kerns := true
-		if contextCanChange(items[i].Face) {
+		if contextCanChange(items[i]) {
 			if n := nb.before[i]; n.ok {
 				var lost bool
 				before, lost = text.before(n.j, i, nb.blank[n.j])
@@ -582,17 +581,33 @@ func sameShaping(a, b inlineItem) bool {
 	// measured in one font at one size, and a pair positioned across a boundary
 	// where the sizes differ is a number that belongs to neither of them.
 	//
-	// So the size breaks the boundary for a face that kerns and not for one
-	// that joins. A face that does both is read as joining, because that is the
+	// So the size breaks the boundary for a run that kerns and not for one
+	// that joins. A run that does both is read as joining, because that is the
 	// difference a reader sees: a letter in the wrong form is a different
 	// letter, and a pair off by a fraction of an em is a gap.
-	return a.Size == b.Size || a.Face.HasJoiningForms()
+	//
+	// The run and not the face: whether a letter's form follows its
+	// neighbours is a question about the rules its script selects. Asked of
+	// the face, a Latin word in a font that also sets Arabic was read as
+	// joining, and a kern pair was positioned across a change of size between
+	// two of its runs — the number that belongs to neither.
+	return a.Size == b.Size || a.Face.FormsFollowNeighbours(a.Text, a.Off)
 }
 
 // contextCanChange reports whether the text either side of a run can change what
 // the run is: which glyphs it is set in, or where they sit.
-func contextCanChange(f *shape.Face) bool {
-	return f.HasJoiningForms() || f.HasKerning() || f.HasLigatures()
+//
+// It is the run's question and the face answers it for the run: from the rules
+// the run's script and language select, and for everything this package reads
+// from a context — the forms a cursive or Indic run takes, the script a run of
+// digits or punctuation is set in, and the pair kerned across the edge. It was
+// asked of the face, as whether the font had forms, kerning or 'liga' under any
+// script at all, so a font whose rules for the run's script were somewhere else
+// was answered for a script the run is not in, and a span of punctuation
+// between two Chinese words was shaped as though it had no neighbours. See
+// shape.Face.ContextCanChange.
+func contextCanChange(it inlineItem) bool {
+	return it.Face.ContextCanChange(it.Text, it.Off)
 }
 
 // itemShaping is everything about how an item is set that its own text does not
@@ -670,6 +685,9 @@ func mergeGroupTexts(items []inlineItem, nb neighbours, text func() runText) mer
 	// items between them, asked of every run — and the items between two runs
 	// can be every soft hyphen of a word.
 	var breaks []int
+	// Which translucent inline box each run is inside, asked of every
+	// boundary between two runs and answered once per box. See translucency.
+	tr := translucency{}
 	for i := 0; i < len(items); {
 		if !isShapedRun(items[i]) {
 			i++
@@ -689,7 +707,7 @@ func mergeGroupTexts(items []inlineItem, nb neighbours, text func() runText) mer
 		last := i
 		for {
 			n := nb.after[last]
-			if !n.ok || !sharesGlyphsWith(items, last, n.j, breaks) {
+			if !n.ok || !sharesGlyphsWith(items, last, n.j, breaks, tr) {
 				break
 			}
 			last = n.j
@@ -741,7 +759,7 @@ func mergeGroupTexts(items []inlineItem, nb neighbours, text func() runText) mer
 // TestAFaceChangeIsNotKernedAcross. A pair positioned across a font change is
 // not that font's pair, and a *glyph* across one is not that font's glyph at
 // all — a glyph index means nothing outside the font it came from.
-func sharesGlyphsWith(items []inlineItem, from, to int, breaks []int) bool {
+func sharesGlyphsWith(items []inlineItem, from, to int, breaks []int, tr translucency) bool {
 	a, b := items[from], items[to]
 	if !sameShaping(a, b) || a.Size != b.Size || a.Face != b.Face {
 		return false
@@ -782,7 +800,7 @@ func sharesGlyphsWith(items []inlineItem, from, to int, breaks []int) bool {
 	if a.Offset != b.Offset {
 		return false
 	}
-	if !samePaint(heldBox(a.Box), heldBox(b.Box)) {
+	if !samePaint(heldBox(a.Box), heldBox(b.Box), tr) {
 		return false
 	}
 	// The lines ruled across them, which are drawn from the run and not from the
@@ -829,7 +847,7 @@ func sharesGlyphsWith(items []inlineItem, from, to int, breaks []int) bool {
 // runs with different ones are two alphas. Every property the painter reads
 // per run belongs here or in sharesGlyphsWith, which is the rule this list is
 // kept by.
-func samePaint(a, b *Box) bool {
+func samePaint(a, b *Box, tr translucency) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
@@ -838,26 +856,57 @@ func samePaint(a, b *Box) bool {
 			return false
 		}
 	}
-	return isHidden(a) == isHidden(b) && translucentInline(a) == translucentInline(b)
+	return isHidden(a) == isHidden(b) && tr.inline(a) == tr.inline(b)
 }
 
-// translucentInline is the innermost non-atomic inline box around b, b
-// included, that asks for an opacity below one, or nil. It is the walk the
-// painter's inlineDim makes, and stops where that one does: at the block, or at
-// an atomic inline, whose opacity is the fragment's and not the run's.
-func translucentInline(b *Box) *Box {
-	for cur := b; cur != nil && cur.Outer == OuterInline; cur = cur.Parent {
-		if cur.Replaced != nil || isAtomicInline(cur) {
-			return nil
+// translucency is, for each box of one paragraph, the innermost non-atomic
+// inline box around it, itself included, that asks for an opacity below one, or
+// nil. It is the walk the painter's inlineDim makes, and stops where that one
+// does: at the block, or at an atomic inline, whose opacity is the fragment's
+// and not the run's.
+//
+// It is a memo because every boundary between two runs asks it of both, and the
+// walk is up every inline box around the run, parsing each one's opacity: a
+// paragraph of spans nested d deep with a word in each paid d walks of up to d
+// boxes. The painter has the same walk in inlineDim and memoizes it for the
+// same reason. The answer from a box is the answer from every box the walk from
+// it passes, so the walk stops at the first box already answered and fills in
+// the ones it passed.
+type translucency map[*Box]*Box
+
+// inline is the translucent inline box around b.
+func (t translucency) inline(b *Box) *Box {
+	var path []*Box
+	var found *Box
+	for cur := b; cur != nil; cur = cur.Parent {
+		if got, ok := t[cur]; ok {
+			found = got
+			break
 		}
-		if cur.IsText() {
-			continue
-		}
-		if groupsItsPaint(cur) {
-			return cur
+		path = append(path, cur)
+		if next, done := translucentStep(cur); done {
+			found = next
+			break
 		}
 	}
-	return nil
+	for _, c := range path {
+		t[c] = found
+	}
+	return found
+}
+
+// translucentStep is one box of translucency's walk: whether the walk ends
+// at cur, and with what.
+func translucentStep(cur *Box) (found *Box, done bool) {
+	switch {
+	case cur.Outer != OuterInline, cur.Replaced != nil, isAtomicInline(cur):
+		return nil, true
+	case cur.IsText():
+		return nil, false
+	case groupsItsPaint(cur):
+		return cur, true
+	}
+	return nil, false
 }
 
 // sameDecorations reports whether two runs carry the same lines, declared by the

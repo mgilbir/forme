@@ -2,8 +2,9 @@ package paragraph
 
 import (
 	"strings"
-	"unicode"
 
+	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 )
 
@@ -68,7 +69,7 @@ type Language string
 // A tag with no script subtag is taken at its word: "tr" is Turkish in the
 // alphabet Turkish is written in.
 func LanguageOf(tag string) Language {
-	tag = strings.ToLower(strings.TrimSpace(tag))
+	tag = ascii.Lower(ascii.TrimSpace(tag))
 	primary, rest, _ := strings.Cut(tag, "-")
 	for rest != "" {
 		var sub string
@@ -249,7 +250,7 @@ func afterSoftDotted(before string) bool {
 	for i := len(before); i > 0; {
 		r, size := lastRuneIn(before[:i])
 		i -= size
-		if unicode.Is(unicode.Properties["Soft_Dotted"], r) {
+		if charprop.SoftDotted(r) {
 			return true
 		}
 		if ccc := shape.CombiningClass(r); ccc == 0 || ccc == 230 {
@@ -344,34 +345,18 @@ func UnfinalSigma(text string, at int) string {
 }
 
 // cased is Unicode's Cased property: Lowercase, Uppercase, or the titlecase
-// category. Go's tables carry every part of it under another name.
-func cased(r rune) bool {
-	return unicode.Is(unicode.Ll, r) || unicode.Is(unicode.Lu, r) ||
-		unicode.Is(unicode.Lt, r) ||
-		unicode.Is(unicode.Properties["Other_Lowercase"], r) ||
-		unicode.Is(unicode.Properties["Other_Uppercase"], r)
-}
+// category.
+func cased(r rune) bool { return charprop.Cased(r) }
 
 // caseIgnorable is Unicode's Case_Ignorable: the marks and modifiers, plus the
-// handful of punctuation characters that appear *inside* words.
+// punctuation characters that appear *inside* words — Word_Break's MidLetter,
+// MidNumLet and Single_Quote. An apostrophe in "ΟΔΟΣ'" must not make the sigma
+// non-final.
 //
-// The punctuation is Word_Break's MidLetter, MidNumLet and Single_Quote, which
-// Go's tables do not carry. It is written out because it is short and because
-// every character in it is one somebody's spelling depends on: an apostrophe in
-// "ΟΔΟΣ'" must not make the sigma non-final.
-func caseIgnorable(r rune) bool {
-	switch r {
-	case '\'', '.', ':', '^', '`', 0x00A8, 0x00AD, 0x00AF, 0x00B4, 0x00B7, 0x00B8,
-		0x02D8, 0x02D9, 0x02DA, 0x02DB, 0x02DC, 0x02DD, 0x0374, 0x0387, 0x055A,
-		0x055B, 0x055D, 0x055F, 0x05F4, 0x0559, 0x058A, 0x05F3, 0x0F0B, 0x2018,
-		0x2019, 0x2024, 0x2027, 0x2054, 0xFE13, 0xFE52, 0xFE55, 0xFF07, 0xFF0E,
-		0xFF1A, 0xFF3E, 0xFF40, 0xFF70, 0xFF9E, 0xFF9F:
-		return true
-	}
-	return unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) ||
-		unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Lm, r) ||
-		unicode.Is(unicode.Sk, r)
-}
+// It was the categories from Go's tables and the punctuation written out by
+// hand, because Go's tables do not carry Word_Break. DerivedCoreProperties.txt
+// states the property whole, and internal/charprop reads it from there.
+func caseIgnorable(r rune) bool { return charprop.CaseIgnorable(r) }
 
 // lastRuneIn is utf8.DecodeLastRuneInString by another name, kept here so the
 // backward scans above read as scans rather than as decoding.

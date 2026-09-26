@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Font-relative lengths, turned into absolute ones where the cascade can.
@@ -140,7 +141,7 @@ func absolutiseValues(vals []css.ComponentValue, size, root Unit) bool {
 			continue
 		}
 		var basis Unit
-		switch strings.ToLower(vals[i].Token.Unit) {
+		switch ascii.Lower(vals[i].Token.Unit) {
 		case "em":
 			basis = size
 		case "rem":
@@ -202,9 +203,9 @@ const DefaultMonospaceFontSize = 13
 // a question a preference for "monospace" was ever the answer to.
 func monospaceDefault(cs ComputedStyle) bool {
 	first, _, _ := strings.Cut(cs.Get("font-family"), ",")
-	first = strings.TrimSpace(first)
+	first = ascii.TrimCSSSpace(first)
 	first = strings.Trim(first, `"'`)
-	switch strings.ToLower(strings.TrimSpace(first)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(first)) {
 	case "monospace", "ui-monospace":
 		return true
 	}

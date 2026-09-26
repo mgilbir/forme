@@ -1,9 +1,8 @@
 package layout
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -55,7 +54,7 @@ const (
 // does not read has to mean. It is reported where it is read rather than here,
 // because a value is worth one finding and not one per box that has it.
 func objectFitOf(value string) (objectFit, bool) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case "", "fill":
 		return objectFill, true
 	case "contain":
@@ -182,7 +181,7 @@ func (l *layouter) checkObjectFit(b *Box) {
 	l.reportOnce("object-fit:"+raw, Finding{
 		Rule:   RuleUnsupportedValue,
 		Source: AtHTML(offsetOf(b)),
-		Message: "the value " + quoteValue(strings.TrimSpace(raw)) + " of object-fit" +
+		Message: "the value " + quoteValue(ascii.TrimCSSSpace(raw)) + " of object-fit" +
 			" is not one this engine reads; the content was stretched to its box",
 		Path:     PathOf(b.Element),
 		Property: "object-fit",
@@ -220,7 +219,7 @@ func (l *layouter) resolveObjectPosition(b *Box) {
 	if b.objectPos != nil {
 		return
 	}
-	raw := strings.TrimSpace(b.Style.Get("object-position"))
+	raw := ascii.TrimCSSSpace(b.Style.Get("object-position"))
 	pos := centredObject()
 	if raw != "" {
 		vals, _ := css.ParseComponentValues(raw)

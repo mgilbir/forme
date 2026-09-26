@@ -6,9 +6,9 @@ import (
 	"math"
 	"sort"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -589,7 +589,7 @@ func trimRunSpace(v DrawText) DrawText {
 // leavesInk reports whether a run has anything in it that puts ink on the page.
 func leavesInk(text string) bool {
 	for _, r := range text {
-		if unicode.IsSpace(r) || marksNoPaper(r) || isDefaultIgnorable(r) {
+		if charprop.WhiteSpace(r) || marksNoPaper(r) || isDefaultIgnorable(r) {
 			continue
 		}
 		return true
@@ -1010,7 +1010,7 @@ func blankCluster(text string, cluster int) bool {
 		return false
 	}
 	r, _ := utf8.DecodeRuneInString(text[cluster:])
-	return unicode.IsSpace(r) || marksNoPaper(r) || isDefaultIgnorable(r)
+	return charprop.WhiteSpace(r) || marksNoPaper(r) || isDefaultIgnorable(r)
 }
 
 // Text that is buried, which is the other half of resolving occlusion.

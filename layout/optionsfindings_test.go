@@ -250,7 +250,7 @@ func TestAnSVGsDeclaredEntitiesAreNotExpanded(t *testing.T) {
 	body := `<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY c "green">]>` +
 		`<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">` +
 		`<rect width="100%" height="100%" fill="&c;"/></svg>`
-	if got := svgContent([]byte(body), svgAsImage); got != nil {
+	if got := svgContent([]byte(body), svgAsImage, svgXMLNames); got != nil {
 		t.Errorf("a declared entity was expanded into %v", got.Solid)
 	}
 }

@@ -1,11 +1,11 @@
 package layout
 
 import (
-	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/style"
 )
@@ -90,7 +90,7 @@ func (b *boxBuilder) applyFirstLetter(box *Box, n *html.Node, fontSize style.Uni
 		// pseudo-element's is a second one, over the letter alone, and it is
 		// what "text-transform: uppercase" on a ::first-letter means. It is
 		// given no word boundary, because a first letter begins one.
-		if got, _ := transformText(head.Text, kind, wordClosed, languageAt(n)); got != "" {
+		if got, _ := transformText(head.Text, kind, wordClosed, b.languageAt(n)); got != "" {
 			head.Text = got
 		}
 	}
@@ -150,7 +150,7 @@ func firstLetterDeclared(fl, own style.ComputedStyle) map[string]string {
 // naming one is one thing the author has to know and not one per paragraph.
 func (b *boxBuilder) reportFirstLetter(n *html.Node, box *Box, fl style.ComputedStyle) {
 	for _, name := range firstLetterReports {
-		v := strings.TrimSpace(fl.Get(name))
+		v := ascii.TrimCSSSpace(fl.Get(name))
 		if v == "" || v == style.Undeclared(name, box.Style.Get(name)) {
 			continue
 		}
@@ -209,7 +209,7 @@ func firstTextBox(box *Box) (parent *Box, at int) {
 			return nil, 0
 		}
 		if c.IsText() {
-			if strings.TrimSpace(c.Text) == "" {
+			if blank(c.Text) {
 				// White space alone is not the first letter and does not end
 				// the search: "<p> <span>x</span>" has its letter in the span.
 				continue
@@ -237,7 +237,7 @@ func firstLetterLen(text string) int {
 	i := 0
 	for i < len(text) {
 		r, n := utf8.DecodeRuneInString(text[i:])
-		if !unicode.IsSpace(r) {
+		if !charprop.WhiteSpace(r) {
 			break
 		}
 		i += n
@@ -255,8 +255,7 @@ func firstLetterLen(text string) int {
 func skipPunctuation(text string, i int) int {
 	for i < len(text) {
 		r, n := utf8.DecodeRuneInString(text[i:])
-		if !unicode.IsPunct(r) && !unicode.Is(unicode.Ps, r) && !unicode.Is(unicode.Pe, r) &&
-			!unicode.Is(unicode.Pi, r) && !unicode.Is(unicode.Pf, r) {
+		if !charprop.Is(r, charprop.P) {
 			break
 		}
 		i += n

@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -73,10 +73,16 @@ func randomColumnContent(r *rand.Rand, depth int, box *Box, refuser *Box) *Fragm
 // thousands of random trees, at every height a balanced pour could choose and
 // at several column counts.
 func TestThePourIsTheLiteralPour(t *testing.T) {
+	// The generator makes boxes shorter than their own top edge, which get
+	// that edge back in every column and never end. With overflow columns
+	// both pours stop at the bound, and the bound is lowered so that they
+	// get there quickly.
+	defer func(n int) { maxOverflowColumns = n }(maxOverflowColumns)
+	maxOverflowColumns = 256
 	plain := &Box{Style: style.Initial()}
 	refuser := &Box{Style: style.Initial().With("box-decoration-break", "clone")}
 	r := rand.New(rand.NewSource(1))
-	compared, refused := 0, 0
+	compared, refused, forcedCompared, overflowCompared := 0, 0, 0, 0
 	for trial := 0; trial < 800; trial++ {
 		src := randomColumnContent(r, 0, plain, refuser)
 		breaks := sortedBreaks(columnBreaks(src, 0, nil))
@@ -101,20 +107,73 @@ func TestThePourIsTheLiteralPour(t *testing.T) {
 				}
 				compared++
 			}
-			if bh, ok := balancedHeight(breaks, n); true {
-				wh, wok := balancedHeightByScan(breaks, n)
+			if bh, ok := balancedHeight(breaks, nil, n); true {
+				wh, wok := balancedHeightByScan(breaks, nil, n)
 				if ok != wok || bh != wh {
 					t.Fatalf("trial %d, %d columns: the balanced height is %d, %v by "+
 						"halving and %d, %v by trying each", trial, n, bh, ok, wh, wok)
+				}
+			}
+			// And with forced breaks: a random few of the breakpoints, the
+			// last included now and then. The balanced height against the
+			// scan over every height a column can have, and the pour at it —
+			// each column ending at a forced break or at the last breakpoint
+			// that fits — against the literal pour told the same.
+			var forced []style.Unit
+			for _, b := range breaks {
+				if r.Intn(5) == 0 {
+					forced = append(forced, b)
+				}
+			}
+			bh, ok := balancedHeight(breaks, forced, n)
+			wh, wok := balancedHeightByScan(breaks, forced, n)
+			if ok != wok || bh != wh {
+				t.Fatalf("trial %d, %d columns, forced at %v: the balanced height is %d, "+
+					"%v by halving and %d, %v by trying each", trial, n, forced, bh, ok, wh, wok)
+			}
+			for _, h := range append([]style.Unit{bh}, heights...) {
+				c := columns{n: n, width: style.Unit(640), gap: style.Unit(64)}
+				snap := []style.Unit(nil)
+				if h == bh && ok {
+					snap = breaks
+				}
+				for _, overflow := range []bool{false, true} {
+					want, got := cloneForTest(src), cloneForTest(src)
+					wantOK := fillColumnsByCopyWith(want, c, h, forced, snap, overflow)
+					gotOK, _ := fillColumnsWith(got, c, h,
+						&columnEnds{forced: forced, breaks: snap, overflow: overflow})
+					if wantOK != gotOK {
+						t.Fatalf("trial %d, %d columns at %d, forced at %v, overflow %v: "+
+							"the literal pour said %v and this one %v", trial, n, h, forced,
+							overflow, wantOK, gotOK)
+					}
+					if !wantOK {
+						continue
+					}
+					if d := fragmentDiff("pour", want, got); d != "" {
+						t.Fatalf("trial %d, %d columns at %d, forced at %v, overflow %v: %s",
+							trial, n, h, forced, overflow, d)
+					}
+					if overflow {
+						overflowCompared++
+					} else {
+						forcedCompared++
+					}
 				}
 			}
 		}
 	}
 	// A comparison that never compared a successful pour, or never a refused
 	// one, has not tested both halves.
-	if compared < 500 || refused < 500 {
-		t.Fatalf("compared %d pours and %d refusals; the generator is not producing "+
-			"both", compared, refused)
+	if compared < 500 || refused < 500 || forcedCompared < 500 {
+		t.Fatalf("compared %d pours, %d refusals and %d pours with forced breaks; the "+
+			"generator is not producing all three", compared, refused, forcedCompared)
+	}
+	// And overflow columns: more pours succeed with them than without, and
+	// the difference is the ones that needed them.
+	if overflowCompared <= forcedCompared {
+		t.Fatalf("compared %d pours with overflow columns and %d without; the "+
+			"generator never needs overflow columns", overflowCompared, forcedCompared)
 	}
 }
 
@@ -243,6 +302,16 @@ func printable(v reflect.Value) string {
 // copied everything below it, and a balanced height tried every breakpoint
 // with a fit that scanned for the breakpoint before each one: 32,000 lines in
 // a million columns took seventy-six seconds.
+//
+// The million columns are the copying's shape. Two columns are the balancing's,
+// and a whole layout does not show it at any size the suite can afford: the
+// balancing of before f6c6437, copied back in, read 6.8 to 7.4 here at a
+// thousand lines against a bound of 8, and 10.8 at four thousand, where one
+// layout of the larger side takes half a second. The lines are laid out in
+// time linear in them either way, and at these sizes that is most of what is
+// timed. So the case is kept for what it does hold — that two columns pour in
+// time linear in the lines — and the balancing is held on its own by
+// TestBalancingIsNotQuadraticInTheBreaks, which the same copy fails.
 func TestPouringIsLinearInTheLines(t *testing.T) {
 	for _, cols := range []string{"2", "1000000"} {
 		doc := func(n int) Built {
@@ -254,7 +323,7 @@ func TestPouringIsLinearInTheLines(t *testing.T) {
 		w, _ := style.FromPx(600)
 		h, _ := style.FromPx(100000)
 		var smallLines, largeLines int
-		lo, hi, ratio := layoutScaling(func() {
+		c := costtest.Time(t, "pouring n lines into column-count "+cols, func() {
 			smallLines = pouredLines(Layout(small.Root, Size{W: w, H: h}, nil, nil))
 		}, func() {
 			largeLines = pouredLines(Layout(large.Root, Size{W: w, H: h}, nil, nil))
@@ -266,9 +335,9 @@ func TestPouringIsLinearInTheLines(t *testing.T) {
 			t.Fatalf("column-count %s: %d and %d lines were poured; the fixture is "+
 				"meant to pour 1000 and 4000", cols, smallLines, largeLines)
 		}
-		if ratio > 8 {
+		if c.Ratio > 8 {
 			t.Errorf("column-count %s: four times the lines took %.1f times as long "+
-				"(%v against %v); a linear pour is about four", cols, ratio, hi, lo)
+				"(%v against %v); a linear pour is about four", cols, c.Ratio, c.Large, c.Small)
 		}
 	}
 }
@@ -293,33 +362,6 @@ func pouredLines(root *Fragment) int {
 		return 0
 	}
 	return n
-}
-
-// layoutScaling measures one shape at n and at four times n, the way
-// html/parsecost_test.go's scaling does: in windows of equal length, turn
-// about, the least of nine rounds each, so that a busy machine slows both
-// sides alike and the ratio is the curve's.
-func layoutScaling(small, large func()) (lo, hi time.Duration, ratio float64) {
-	bestSmall, bestLarge := time.Duration(1<<62), time.Duration(1<<62)
-	for r := 0; r < 9; r++ {
-		start := time.Now()
-		for i := 0; i < 4; i++ {
-			small()
-		}
-		if el := time.Since(start); el < bestSmall {
-			bestSmall = el
-		}
-		start = time.Now()
-		large()
-		if el := time.Since(start); el < bestLarge {
-			bestLarge = el
-		}
-	}
-	lo, hi = bestSmall/4, bestLarge
-	if lo <= 0 {
-		return lo, hi, 0
-	}
-	return lo, hi, float64(hi) / float64(lo)
 }
 
 // TestAPourIsBoundedInPieces is maxPourPieces firing: a pour that would make
@@ -364,13 +406,14 @@ func TestBalancingIsNotQuadraticInTheBreaks(t *testing.T) {
 	}
 	small, large := breaks(10000), breaks(40000)
 	var hs, hl style.Unit
-	lo, hi, ratio := layoutScaling(func() { hs, _ = balancedHeight(small, 2) },
-		func() { hl, _ = balancedHeight(large, 2) })
+	c := costtest.Time(t, "balancing n breakpoints in two columns",
+		func() { hs, _ = balancedHeight(small, nil, 2) },
+		func() { hl, _ = balancedHeight(large, nil, 2) })
 	if hs != small[len(small)/2-1] || hl != large[len(large)/2-1] {
 		t.Fatalf("two columns of equal lines balance at half of them: got %d and %d", hs, hl)
 	}
-	if ratio > 8 {
+	if c.Ratio > 8 {
 		t.Errorf("four times the breakpoints took %.1f times as long (%v against %v); "+
-			"a search by halving is about four", ratio, hi, lo)
+			"a search by halving is about four", c.Ratio, c.Large, c.Small)
 	}
 }

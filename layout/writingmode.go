@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -101,7 +102,7 @@ func writingModeOf(b *Box) writingMode {
 		// second box declaring horizontal-tb inside a vertical one.
 		return writingModeOf(b.Parent)
 	}
-	switch strings.ToLower(strings.TrimSpace(b.Style.Get("writing-mode"))) {
+	switch ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("writing-mode"))) {
 	case "vertical-rl":
 		return verticalRL
 	case "vertical-lr":
@@ -597,7 +598,7 @@ func (l *layouter) refusesPhysicalGeometry(b *Box) string {
 	return ""
 }
 
-func trimmedLower(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+func trimmedLower(s string) string { return ascii.Lower(ascii.TrimCSSSpace(s)) }
 
 // uprightText reports whether the text of a box is set upright, standing the
 // way it does in the code charts, rather than turned with the page.

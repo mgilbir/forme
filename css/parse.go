@@ -1,6 +1,10 @@
 package css
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mgilbir/forme/internal/ascii"
+)
 
 // The parser of CSS Syntax Level 3 §5: the layer that turns a flat token stream
 // into rules, declarations and the nested component values they are built from.
@@ -982,7 +986,7 @@ func takeImportant(vals []ComponentValue) ([]ComponentValue, bool) {
 		return vals, false
 	}
 	if v := vals[word]; !v.IsToken() || v.Token.Kind != Ident ||
-		!strings.EqualFold(v.Token.Value, "important") {
+		!ascii.EqualFold(v.Token.Value, "important") {
 		return vals, false
 	}
 

@@ -269,28 +269,30 @@ func TestTheLanguageComesFromTheNearestAncestor(t *testing.T) {
 
 // TestXMLLangIsALanguageToo.
 //
-// HTML §3.2.6 says xml:lang *is* the language attribute where there is no lang
-// beside it, and half the older test suite is XHTML, where xml:lang is the
-// natural spelling. Read lang alone, "<div xml:lang='tr'>" was a document with
-// no language at all: the Turkish tailoring never ran and the page came out
-// with the wrong letters on it.
+// HTML §3.2.6 says xml:lang *is* the language attribute, and half the older
+// test suite is XHTML, where xml:lang is the natural spelling. Read lang alone,
+// "<div xml:lang='tr'>" was a document with no language at all: the Turkish
+// tailoring never ran and the page came out with the wrong letters on it.
 //
 // The precedence is per element rather than per document. A lang on a child
 // beats an xml:lang on its parent by being nearer, and an xml:lang on the child
-// beats a lang on the parent for the same reason; the two only meet on one
-// element, and there lang wins.
+// beats a lang on the parent for the same reason. The two only meet on one
+// element, and there xml:lang wins: §3.2.6.2's steps ask for "a lang attribute
+// in the XML namespace" before "a lang in no namespace". This test said lang
+// won there until the user decided it by the section's order, and the two cases
+// that meet on one element were turned round with it.
 //
 // Only in a document that is XML. The HTML parser stores "xml:lang" as a
-// literal attribute name in no namespace, and a browser reading an HTML
-// document ignores it — so honouring it there would be a language this engine
-// invented.
+// literal attribute name in no namespace, which the section says "has no effect
+// on language processing" — so honouring it there would be a language this
+// engine invented, and it does not stop a lang beside it being read either.
 func TestXMLLangIsALanguageToo(t *testing.T) {
 	for _, tc := range []struct{ markup, want, what string }{
 		{`<div id="p" xml:lang="tr">i</div>`, "İ", "on the element itself"},
 		{`<div xml:lang="tr"><div id="p">i</div></div>`, "İ", "on an ancestor"},
-		{`<div xml:lang="tr" lang="en"><div id="p">i</div></div>`, "I",
-			"lang wins on the element that carries both"},
-		{`<div xml:lang="en" lang="tr"><div id="p">i</div></div>`, "İ",
+		{`<div xml:lang="tr" lang="en"><div id="p">i</div></div>`, "İ",
+			"xml:lang wins on the element that carries both"},
+		{`<div xml:lang="en" lang="tr"><div id="p">i</div></div>`, "I",
 			"and the other way round"},
 		{`<div xml:lang="tr"><div id="p" lang="en">i</div></div>`, "I",
 			"a nearer lang beats a further xml:lang"},
@@ -304,11 +306,15 @@ func TestXMLLangIsALanguageToo(t *testing.T) {
 	}
 	// And in an HTML document it is not a language, which is the half that says
 	// this is the specification's rule and not "any attribute with lang in the
-	// name".
-	if got := drawn(paintOf(t, `<div id="p" xml:lang="tr">i</div>`,
-		noDefaults+`#p { text-transform: uppercase }`)); got != "I" {
-		t.Errorf("an HTML document read xml:lang as a language: the page reads %q, want %q",
-			got, "I")
+	// name" — neither alone nor beside a lang it would win against in XHTML.
+	for _, tc := range []struct{ markup, want, what string }{
+		{`<div id="p" xml:lang="tr">i</div>`, "I", "alone"},
+		{`<div id="p" xml:lang="en" lang="tr">i</div>`, "İ", "beside a lang"},
+	} {
+		if got := drawn(paintOf(t, tc.markup, noDefaults+`#p { text-transform: uppercase }`)); got != tc.want {
+			t.Errorf("an HTML document read xml:lang %s as a language: the page reads %q, want %q",
+				tc.what, got, tc.want)
+		}
 	}
 }
 

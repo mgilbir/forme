@@ -3,7 +3,8 @@ package css
 import (
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/mgilbir/forme/internal/costtest"
 )
 
 // The parser of CSS Syntax Level 3 §5.
@@ -396,30 +397,22 @@ func TestACappedBlockIsSkippedAsItIsGrouped(t *testing.T) {
 //
 // The bound is on how the time grows, from one number of declarations to four
 // times it, since a time of its own would not survive the race detector's job.
+// The parser counts nothing it could be read from instead, so it is timed; see
+// costtest.Time for how a busy machine is kept from deciding the ratio.
 func TestTheLookAheadIsLinear(t *testing.T) {
 	const decl = "a: f(g(1), [2], (3) {4}); "
-	measure := func(n int) time.Duration {
+	parse := func(n int) func() {
 		src := strings.Repeat(decl, n) + "b: 1"
-		best := time.Duration(1 << 62)
-		for range 3 {
-			start := time.Now()
-			decls, _, _ := ParseDeclarations(src)
-			if el := time.Since(start); el < best {
-				best = el
-			}
-			if len(decls) != n+1 {
-				t.Fatalf("%d declarations read as %d", n+1, len(decls))
-			}
+		if decls, _, _ := ParseDeclarations(src); len(decls) != n+1 {
+			t.Fatalf("%d declarations read as %d", n+1, len(decls))
 		}
-		return best
+		return func() { ParseDeclarations(src) }
 	}
 	const n = 500
-	small, large := measure(n), measure(4*n)
-	ratio := float64(large) / float64(small)
-	t.Logf("%d declarations in %v, %d in %v: %.1f times", n, small, 4*n, large, ratio)
-	if ratio > 8 {
+	c := costtest.Time(t, "declarations with a function in each", parse(n), parse(4*n))
+	if c.Ratio > 8 {
 		t.Errorf("four times the declarations took %.1f times as long (%v against %v); "+
-			"the look-ahead is reading past where the parser stops", ratio, large, small)
+			"the look-ahead is reading past where the parser stops", c.Ratio, c.Large, c.Small)
 	}
 }
 

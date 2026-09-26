@@ -2,8 +2,8 @@ package layout
 
 import (
 	"strconv"
-	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -125,7 +125,7 @@ func (p PositionScheme) outOfFlow() bool {
 // in this property that genuinely needs a scroll position, so it is the one this
 // engine cannot answer.
 func positionOf(cs style.ComputedStyle) PositionScheme {
-	switch strings.ToLower(strings.TrimSpace(cs.Get("position"))) {
+	switch ascii.Lower(ascii.TrimCSSSpace(cs.Get("position"))) {
 	case "relative":
 		return PositionRelative
 	case "absolute":
@@ -142,8 +142,8 @@ func positionOf(cs style.ComputedStyle) PositionScheme {
 // an invalid declaration, and the initial value stands — which is what a browser
 // does and what keeps a typo from silently reordering a page.
 func zIndexOf(cs style.ComputedStyle) (int, bool) {
-	raw := strings.TrimSpace(cs.Get("z-index"))
-	if raw == "" || strings.EqualFold(raw, "auto") {
+	raw := ascii.TrimCSSSpace(cs.Get("z-index"))
+	if raw == "" || ascii.EqualFold(raw, "auto") {
 		return 0, true
 	}
 	n, err := strconv.Atoi(raw)
@@ -173,6 +173,13 @@ type forcedGeometry struct {
 	// real number.
 	height    style.Unit
 	hasHeight bool
+	// contentHeight lays the box out as though its height were auto, whatever
+	// it declares, and is ignored where hasHeight is set. It is how a flex
+	// column asks what an item's content comes to: a layout that honoured a
+	// declared "height: 60px" answered 60 for twenty pixels of text, and
+	// Flexbox §9.2's "content" basis and §4.5's content size suggestion are
+	// both the twenty. See measuredMain.
+	contentHeight bool
 }
 
 // relativeOffset computes §9.4.3's visual offset for a box.
@@ -275,10 +282,10 @@ type absCandidate struct {
 	// This is a place in the tree and not a containing block, and it decides
 	// nothing about the geometry: where the box is resolved against is §10.1's
 	// answer and is usually somewhere else entirely, and the painting order
-	// among boxes at the same stacking level is keyed on document order rather
-	// than on where in the fragment tree they ended up. What hanging it
-	// somewhere buys is that the fragment tree stays a tree, so every consumer
-	// that walks it reaches the box.
+	// among boxes at the same stacking level is keyed on (order-modified)
+	// document order rather than on where in the fragment tree they ended up.
+	// What hanging it somewhere buys is that the fragment tree stays a tree, so
+	// every consumer that walks it reaches the box.
 	parent *Fragment
 	// staticX and staticY are the static position — where the box's margin box
 	// would have started had it been in the flow — relative to parent's content

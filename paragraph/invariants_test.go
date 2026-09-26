@@ -3,9 +3,9 @@ package paragraph
 import (
 	"strings"
 	"testing"
-	"unicode"
 
 	"github.com/mgilbir/forme/bidi"
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -189,7 +189,7 @@ func brokenLines(t *testing.T, br *Breaker, items []Item, width float64) [][]Ite
 func visible(s string) string {
 	var b strings.Builder
 	for _, r := range s {
-		if unicode.IsSpace(r) || unicode.Is(unicode.Cc, r) || r == 0x200B {
+		if charprop.WhiteSpace(r) || charprop.Is(r, charprop.Cc) || r == 0x200B {
 			continue
 		}
 		b.WriteRune(r)

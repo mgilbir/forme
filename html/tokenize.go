@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // The tokenizer.
@@ -85,7 +87,7 @@ const (
 
 type token struct {
 	kind        tokenKind
-	name        string // lowercased, for tags
+	name        string // for tags: lowercased in HTML, as written in XHTML
 	attrs       []Attribute
 	text        string
 	selfClosing bool
@@ -232,13 +234,13 @@ func looksLikeXML(src string) bool {
 	if strings.HasPrefix(strings.TrimLeft(head, " \t\r\n\uFEFF"), "<?xml") {
 		return true
 	}
-	if i := indexFold(head, "<!doctype"); i >= 0 {
+	if i := ascii.IndexFold(head, "<!doctype"); i >= 0 {
 		if end := strings.IndexByte(head[i:], '>'); end >= 0 {
 			// "xhtml" anywhere in it: the public identifiers are spelled
 			// "-//W3C//DTD XHTML 1.0 Strict//EN" and, in documents that got it
 			// slightly wrong, "-//W3C//DTD//XHTML 1.0"; the system identifiers
 			// all name an xhtml DTD. "<!DOCTYPE html>" names nothing.
-			if indexFold(head[i:i+end], "xhtml") >= 0 {
+			if ascii.IndexFold(head[i:i+end], "xhtml") >= 0 {
 				return true
 			}
 		}
@@ -455,71 +457,30 @@ const (
 	cdataClose = "]]>"
 )
 
-// hasPrefixFold and indexFold are case-insensitive prefix and substring
-// searches over ASCII, and they exist because the obvious spellings of both are
-// quadratic on a document this engine is expected to take from anywhere.
-//
-// "strings.HasPrefix(strings.ToLower(src[pos:]), ...)" lowercases everything
-// from the cursor to the end of the file, and it sat in the path taken at *every*
-// "<". A document of forty thousand tags therefore lowercased its own length
-// forty thousand times: forty gigabytes of work for a megabyte of HTML, which
-// measured at sixty-six seconds while the same document's layout took a third of
-// one. Anything past a few hundred kilobytes of small elements was effectively a
+// The case-insensitive searches here are internal/ascii's, and they are not
+// spelled "strings.HasPrefix(strings.ToLower(src[pos:]), ...)" for a reason
+// beyond the folding. That spelling lowercases everything from the cursor to
+// the end of the file, and it sat in the path taken at *every* "<". A document
+// of forty thousand tags therefore lowercased its own length forty thousand
+// times: forty gigabytes of work for a megabyte of HTML, which measured at
+// sixty-six seconds while the same document's layout took a third of one.
+// Anything past a few hundred kilobytes of small elements was effectively a
 // hang, reachable by anyone who could hand this engine a file.
 //
 // Only ASCII is folded, which is what the HTML syntax needs: tag and doctype
 // names are ASCII, and folding beyond it would make "İ" a match for "i".
-func hasPrefixFold(s, prefix string) bool {
-	if len(s) < len(prefix) {
-		return false
-	}
-	for i := 0; i < len(prefix); i++ {
-		if lowerASCII(s[i]) != lowerASCII(prefix[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-// indexFold returns the first index of a substring, ignoring ASCII case.
-//
-// The scan is anchored on the first byte so that the inner comparison runs only
-// where it can succeed, which keeps the search linear in the source rather than
-// in the source times the needle.
-func indexFold(s, sub string) int {
-	if sub == "" {
-		return 0
-	}
-	first := lowerASCII(sub[0])
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if lowerASCII(s[i]) != first {
-			continue
-		}
-		if hasPrefixFold(s[i:], sub) {
-			return i
-		}
-	}
-	return -1
-}
-
-func lowerASCII(c byte) byte {
-	if c >= 'A' && c <= 'Z' {
-		return c + 'a' - 'A'
-	}
-	return c
-}
 
 // findEndTag locates "</name" followed by a tag terminator, from position i.
 func (t *tokenizer) findEndTag(name string, i int) int {
 	want := "</" + name
 	for {
-		j := indexFold(t.src[i:], want)
+		j := ascii.IndexFold(t.src[i:], want)
 		if j < 0 {
 			return -1
 		}
 		at := i + j
 		after := at + 2 + len(name)
-		if after >= len(t.src) || t.src[after] == '>' || isSpace(t.src[after]) || t.src[after] == '/' {
+		if after >= len(t.src) || t.src[after] == '>' || ascii.IsSpace(t.src[after]) || t.src[after] == '/' {
 			return at
 		}
 		i = at + 1
@@ -544,7 +505,7 @@ func (t *tokenizer) markup() (token, bool) {
 		return token{}, false
 	}
 
-	if hasPrefixFold(t.src[t.pos:], "<!doctype") {
+	if ascii.HasPrefixFold(t.src[t.pos:], "<!doctype") {
 		return t.doctype(), true
 	}
 
@@ -638,12 +599,18 @@ func (t *tokenizer) doctype() token {
 func (t *tokenizer) endTag() (token, bool) {
 	start := t.pos
 	t.pos += 2
-	name := t.readName()
-	if name == "" {
+	// HTML's end tag open state: a name begins only with an ASCII letter, as a
+	// start tag's does. Anything else — "</1x>", "</ſpan>", "</>" — is not an
+	// end tag, and the standard reads it as a bogus comment to the next ">", or
+	// as nothing at all for "</>". It used to be read as a tag whenever the
+	// characters after "</" could continue a name, so "</1x>" was an end tag
+	// "1x" that closed nothing.
+	if t.pos >= len(t.src) || !isNameStart(t.src[t.pos]) {
 		t.fail(start, "an end tag with no name")
 		t.skipTo('>')
 		return token{}, false
 	}
+	name := t.readName()
 	t.skipSpace()
 	if t.pos < len(t.src) && t.src[t.pos] == '>' {
 		t.pos++
@@ -770,7 +737,7 @@ func (t *tokenizer) attribute(tag string) Attribute {
 	// what every browser shows. Reported once for the value.
 	start := t.pos
 	reported := false
-	for t.pos < len(t.src) && !isSpace(t.src[t.pos]) && t.src[t.pos] != '>' {
+	for t.pos < len(t.src) && !ascii.IsSpace(t.src[t.pos]) && t.src[t.pos] != '>' {
 		switch c := t.src[t.pos]; c {
 		case '"', '\'', '<', '=', '`':
 			if !reported {
@@ -792,23 +759,50 @@ func (t *tokenizer) attrValue(s string, off int) string {
 
 func (t *tokenizer) readName() string {
 	start := t.pos
-	// A colon is part of a name, in HTML as well as in XML.
+	// The name runs to white space, "/" or ">", and to nothing else. That is
+	// HTML's tag name state (§13.2.5.8), which has exactly those three
+	// terminators and appends every other character it meets: an ASCII capital
+	// lowercased, a NUL as U+FFFD with a parse error, and anything else — a
+	// digit, a ".", a quote, a letter outside ASCII — as it stands.
 	//
-	// XML gives a name an optional namespace prefix — the suite writes its
-	// inline SVG as "<svg:svg>" — and a reader that stopped at the colon read
-	// the end tag "</svg:svg>" as "</svg" and reported the document as
-	// malformed. HTML has no namespaces and no prefixes, and its tag-name state
-	// ends only at white space, "/" or ">" — so a colon is simply part of the
-	// name there. It was admitted in XML alone, which made "<o:p>" — the tag a
-	// Word document is full of — an element "o" with an attribute ":p", and
-	// "</o:p>" an end tag that was never closed.
+	// It stopped at the first byte that was not an ASCII letter, digit, "-",
+	// "_" or ":", and the rest of the name became an attribute. "<aſb>" was an
+	// element "a" with an attribute "ſb", "<x.y>" an "x" with ".y", and the end
+	// tag "</aſb>" was an end tag "a" followed by markup that did not close it.
+	// A custom element's name may hold any of those — "<math-α>" and
+	// "<emotion-😍>" are valid ones — and every browser reads them whole.
 	//
-	// What the prefix *means* is the parser's question, not this one's: see
-	// parser.resolveName.
-	for t.pos < len(t.src) && (isNamePart(t.src[t.pos]) || t.src[t.pos] == ':') {
+	// A colon is part of a name, in HTML as well as in XML, which the rule
+	// above now says without a special case: XML gives a name an optional
+	// namespace prefix — the suite writes its inline SVG as "<svg:svg>" — and
+	// HTML's tag name state has no reason to stop at one either. It was once
+	// admitted in XML alone, which made "<o:p>" — the tag a Word document is
+	// full of — an element "o" with an attribute ":p". What the prefix *means*
+	// is the parser's question, not this one's: see parser.resolveName.
+	//
+	// The folding is ASCII's and only ASCII's (see internal/ascii). strings.ToLower
+	// is Unicode's, and it would make a KELVIN SIGN the letter k: "<X\u212ABD>"
+	// would open an element "xkbd" that nobody wrote.
+	//
+	// And it is HTML's alone. An XML name is case-sensitive, so in an XHTML
+	// document "<P>" is an element named P, which is not a paragraph, and the
+	// name is kept as it is written. See xmlName.
+	for t.pos < len(t.src) && !ascii.IsSpace(t.src[t.pos]) && t.src[t.pos] != '/' && t.src[t.pos] != '>' {
 		t.pos++
 	}
-	return strings.ToLower(t.src[start:t.pos])
+	return t.nuls(t.xmlName(t.src[start:t.pos]), start, "a tag name", nulReplaced)
+}
+
+// xmlName is a tag or attribute name as the document's language reads it:
+// folded to ASCII lower case in HTML, which is case-insensitive, and as
+// written in XHTML, which is XML and is not. Folded there, "<p LANG='tr'>"
+// was a paragraph in Turkish, where XML has an attribute named LANG that is
+// not lang and gives the paragraph no language at all.
+func (t *tokenizer) xmlName(name string) string {
+	if t.xml {
+		return name
+	}
+	return ascii.Lower(name)
 }
 
 // readAttrName reads an attribute name, which admits more characters than an
@@ -824,7 +818,7 @@ func (t *tokenizer) readAttrName(tag string) string {
 	reported := false
 	for t.pos < len(t.src) {
 		c := t.src[t.pos]
-		if isSpace(c) || c == '>' || c == '/' || c == '=' && t.pos > start {
+		if ascii.IsSpace(c) || c == '>' || c == '/' || c == '=' && t.pos > start {
 			break
 		}
 		if (c == '"' || c == '\'' || c == '<' || c == '=') && !reported {
@@ -834,25 +828,18 @@ func (t *tokenizer) readAttrName(tag string) string {
 		}
 		t.pos++
 	}
-	return strings.ToLower(t.src[start:t.pos])
+	// ASCII's folding in HTML and none in XHTML, as a tag name's: see readName.
+	return t.xmlName(t.src[start:t.pos])
 }
 
 func (t *tokenizer) skipSpace() {
-	for t.pos < len(t.src) && isSpace(t.src[t.pos]) {
+	for t.pos < len(t.src) && ascii.IsSpace(t.src[t.pos]) {
 		t.pos++
 	}
 }
 
-func isSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
-}
-
 func isNameStart(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-}
-
-func isNamePart(c byte) bool {
-	return isNameStart(c) || (c >= '0' && c <= '9') || c == '-' || c == '_'
 }
 
 // decodeRefs resolves character references in a run of text.

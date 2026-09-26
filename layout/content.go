@@ -5,6 +5,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -103,8 +104,8 @@ const maxContentLength = 1 << 20
 func resolveContent(raw string, el *html.Node, counters counterValues,
 	quotes quoteList, depth int) contentValue {
 
-	trimmed := strings.TrimSpace(raw)
-	switch strings.ToLower(trimmed) {
+	trimmed := ascii.TrimCSSSpace(raw)
+	switch ascii.Lower(trimmed) {
 	case "", "normal", "none":
 		return contentValue{none: true}
 	}
@@ -153,7 +154,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			}
 			text.WriteString(v.Token.Value)
 
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "attr"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "attr"):
 			name := attrArgument(v)
 			if name == "" {
 				return contentValue{unsupported: "attr() without an attribute name"}
@@ -168,10 +169,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			// the document language and the suite writes the same document twice
 			// to say so — content-attr-case-001 in HTML asks for the match and
 			// -002 in XHTML asks for its absence.
-			value, _ := el.Attr(name)
-			if el.XMLDocument() {
-				value, _ = el.AttrExact(name)
-			}
+			value, _ := el.AttrNamed(name, el.XMLDocument())
 			if !fits(len(value)) {
 				return tooLong
 			}
@@ -185,7 +183,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 		// style can be built by hand, and the initial value travels this path —
 		// and TestResolveContentRefusesAMalformedCounterCall is the fixture that
 		// keeps them from being a guard nobody has ever seen decide anything.
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "counter"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "counter"):
 			name, listStyle, _, ok := counterArguments(v)
 			if !ok {
 				return contentValue{unsupported: "counter() without a counter name"}
@@ -205,7 +203,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			}
 			text.WriteString(s)
 
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "counters"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "counters"):
 			name, listStyle, sep, ok := counterArguments(v)
 			if !ok || sep == nil {
 				return contentValue{unsupported: "counters() needs a name and a separator"}
@@ -232,7 +230,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 			}
 
 		case v.IsToken() && v.Token.Kind == css.URL,
-			v.IsFunction() && strings.EqualFold(v.Token.Value, "url"):
+			v.IsFunction() && ascii.EqualFold(v.Token.Value, "url"):
 			// A picture, which is a box of its own between whatever runs of
 			// text surround it. What is kept is the reference: the loader that
 			// fetches every other picture in the document fetches this one too,
@@ -247,7 +245,7 @@ func resolveContent(raw string, el *html.Node, counters counterValues,
 				}
 				ref = s
 			}
-			if ref = strings.TrimSpace(ref); ref == "" {
+			if ref = ascii.TrimSpace(ref); ref == "" {
 				// url("") names nothing, exactly as an <img> with an empty src
 				// does. There is no reference for a resolver to have refused,
 				// and nothing to report.
@@ -292,6 +290,47 @@ func attrArgument(fn css.ComponentValue) string {
 		}
 	}
 	return ""
+}
+
+// addGenerated puts what a pseudo-element generates into box.
+//
+// That is its box, except where its display is "contents". css-display-3
+// says the value makes an element generate no box while "its children and
+// pseudo-elements still generate boxes and text runs as normal", and a
+// pseudo-element is an element for the purpose: its content is what it would
+// have held, and it goes into the box around it with nothing of the
+// pseudo-element's own — no background, border or padding, no line of its
+// own decoration — exactly as appendContents does for an element's children.
+// The text keeps the pseudo-element's style, which is what it inherits. The
+// value used to be read as "inline", and the box it made drew all of those.
+//
+// A pseudo-element whose content is one picture is a replaced element, whose
+// content is not boxes, and the value is not honoured on it any more than on
+// an <img>: see contentsIsHonoured. It keeps its box, and says so.
+func (b *boxBuilder) addGenerated(box *Box, n *html.Node, name string, fontSize style.Unit) {
+	g := b.generated(n, name, fontSize)
+	if g == nil {
+		return
+	}
+	kids := []*Box{g}
+	if ascii.EqualFold(ascii.TrimCSSSpace(g.Style.Get("display")), "contents") {
+		if g.ContentImage == "" {
+			kids = g.Children
+		} else {
+			b.rec.ReportDetail(Finding{
+				Rule:   RuleUnsupportedValue,
+				Source: AtHTML(n.Offset),
+				Message: "\"display: contents\" is not implemented on a ::" + name +
+					" whose content is a picture; it was laid out as an inline box",
+				Path:     PathOf(n),
+				Property: "display",
+			})
+		}
+	}
+	for _, c := range kids {
+		c.Parent = box
+		box.Children = append(box.Children, c)
+	}
 }
 
 // generated builds the box a pseudo-element produces, or nil.
@@ -443,7 +482,7 @@ func (b *boxBuilder) generated(n *html.Node, name string, fontSize style.Unit) *
 			continue
 		}
 		text := collapseWhitespaceAfter(piece.text, cs.Get("white-space-collapse"), wst,
-			textBoundary{}, writingSystemAt(n))
+			textBoundary{}, b.writingSystemAt(n))
 		if text == "" {
 			continue
 		}

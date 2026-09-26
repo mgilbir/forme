@@ -1,9 +1,8 @@
 package style
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Properties the registry accepts and nothing acts on.
@@ -82,11 +81,15 @@ var readByConstruction = map[string]string{
 //
 // It is the value-sized version of the table above, and exists for the break
 // properties. Their "avoid" is honoured — layout/multicol.go keeps a column
-// from ending where it is asked not to — and their forced values are not
-// honoured anywhere: this engine does not break a document into pages (a
-// document that does not fit is scaled to the one page), and a multicol pour
-// does not end a column where a box asks for one. That is a fact about the
-// value and not about the box, so it is said where the value is declared.
+// from ending where it is asked not to — and so are the forced breaks a column
+// can make: "column", and css-break-4's "always" and "all", which in a
+// multi-column container are column breaks. Those are reported by layout, where
+// a box is known to be in a multicol container's flow or not; see
+// layout.reportForcedBreaks. The page and region breaks are not made anywhere:
+// this engine does not break a document into pages (a document that does not
+// fit is scaled to the one page) or flow it through regions. That is a fact
+// about the value and not about the box, so it is said where the value is
+// declared.
 var unimplementedValues = map[string]struct {
 	values map[string]bool
 	reason string
@@ -96,12 +99,12 @@ var unimplementedValues = map[string]struct {
 }
 
 var forcedBreaks = map[string]bool{
-	"always": true, "all": true, "page": true, "left": true, "right": true,
-	"recto": true, "verso": true, "column": true, "region": true,
+	"page": true, "left": true, "right": true, "recto": true, "verso": true,
+	"region": true,
 }
 
 const forcedBreakReason = "no break is made there: this engine does not break a " +
-	"document into pages, and does not end a column where a box asks for one"
+	"document into pages or regions"
 
 // unimplementedValueReason returns a declared value of a registered property,
 // and why it does nothing, if so. The value is only read for a property that
@@ -111,7 +114,7 @@ func unimplementedValueReason(name string, vals []css.ComponentValue) (value, re
 	if !listed {
 		return "", "", false
 	}
-	value = strings.ToLower(strings.TrimSpace(serialize(vals)))
+	value = ascii.Lower(ascii.TrimCSSSpace(serialize(vals)))
 	if !entry.values[value] {
 		return "", "", false
 	}

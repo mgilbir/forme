@@ -39,6 +39,16 @@ testdata/afm/
 testdata/brotli-source/
 testdata/agl/
 
+# The licences THIRD_PARTY_NOTICES quotes and no generator reads, fetched at a
+# pin by `make notice-sources` so that cmd/notices_test.go can hold every
+# quotation to its source.
+testdata/notices/
+
+# HarfBuzz's three ms-use files, fetched at a pin by `make ms-use-sources`.
+# NOTICE.md beside them is committed.
+testdata/ms-use/*.txt
+testdata/ms-use/.ok-*
+
 # Built by `make hbfuzz`.
 testdata/harfbuzz/.shapetext
 

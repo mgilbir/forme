@@ -3,8 +3,9 @@ package paragraph
 import (
 	"strings"
 	"sync"
-	"unicode"
 
+	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 )
 
@@ -110,10 +111,10 @@ func HyphenPoints(word string, lang Language, left, right int) []int {
 		// this as any other non-letter does: the word is spelled with something
 		// the dictionary was not written over, and a dictionary that has nothing
 		// to say says nothing rather than guessing.
-		if !unicode.IsLetter(r) {
+		if !charprop.Is(r, charprop.L) {
 			return nil
 		}
-		lower[i] = unicode.ToLower(r)
+		lower[i] = simpleLower(r)
 	}
 
 	t := src.table()
@@ -182,7 +183,7 @@ func withinMins(points []int, n, left, right int) []int {
 // breaking at all, and the alternative is a second table for a few hundred
 // words.
 func HyphenationOf(tag string) Language {
-	tag = strings.ToLower(strings.TrimSpace(tag))
+	tag = ascii.Lower(ascii.TrimSpace(tag))
 	if tag == "" {
 		return ""
 	}
@@ -287,7 +288,7 @@ func (s *hyphenSource) table() *hyphenPatterns {
 			exceptions: make(map[string][]int, 16),
 		}
 		for _, p := range strings.Split(s.patterns, "\n") {
-			if p = strings.TrimSpace(p); p == "" {
+			if p = ascii.TrimSpace(p); p == "" {
 				continue
 			}
 			letters, values := splitPattern(p)
@@ -297,7 +298,7 @@ func (s *hyphenSource) table() *hyphenPatterns {
 			}
 		}
 		for _, w := range strings.Split(s.exceptions, "\n") {
-			if w = strings.TrimSpace(w); w == "" {
+			if w = ascii.TrimSpace(w); w == "" {
 				continue
 			}
 			word, points := splitException(w)
@@ -339,7 +340,7 @@ func splitException(w string) (string, []int) {
 			points = append(points, n)
 			continue
 		}
-		word.WriteRune(unicode.ToLower(r))
+		word.WriteRune(simpleLower(r))
 		n++
 	}
 	return word.String(), points

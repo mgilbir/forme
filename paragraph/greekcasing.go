@@ -2,7 +2,8 @@ package paragraph
 
 import (
 	"strings"
-	"unicode"
+
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // Uppercasing Greek, which drops the accents.
@@ -196,10 +197,10 @@ func isDisjunctiveEta(runes []rune, i int) bool {
 	if runes[i] != 0x03AE && runes[i] != 0x0389 {
 		return false
 	}
-	if i > 0 && unicode.IsLetter(runes[i-1]) {
+	if i > 0 && charprop.Is(runes[i-1], charprop.L) {
 		return false
 	}
-	if i+1 < len(runes) && unicode.IsLetter(runes[i+1]) {
+	if i+1 < len(runes) && charprop.Is(runes[i+1], charprop.L) {
 		return false
 	}
 	return true

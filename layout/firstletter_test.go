@@ -178,3 +178,25 @@ func textsOf(boxes []*Box) []string {
 	}
 	return out
 }
+
+// TestBlankTextBeforeTheFirstLetterIsLookedPast. "<p> <span>x</span>" has its
+// letter in the span: text that draws nothing is not the first letter and does
+// not end the search for it. Nothing draws in a no-break space or an
+// ideographic space either, and firstLetterLen already reads past them inside
+// a text; a text node of nothing else is looked past the same way, or the
+// letter after it was never found.
+func TestBlankTextBeforeTheFirstLetterIsLookedPast(t *testing.T) {
+	for _, lead := range []string{" ", "\n\t", "\u00a0", "\u3000"} {
+		got := letterBoxes(t, `<div id="d">`+lead+`<span>hello</span></div>`,
+			`#d::first-letter { color: red }`)
+		var letter *Box
+		for _, b := range got {
+			if b.Text == "h" {
+				letter = b
+			}
+		}
+		if letter == nil || letter.Style.Get("color") != "red" {
+			t.Errorf("after %q: text boxes %q, and no red \"h\" among them", lead, textsOf(got))
+		}
+	}
+}

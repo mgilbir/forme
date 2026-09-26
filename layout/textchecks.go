@@ -3,12 +3,13 @@ package layout
 import (
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/paragraph"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -306,23 +307,20 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 // missingGlyphFate is what a face does with a character it has no glyph for,
 // as the end of a sentence about it.
 //
-// Three answers, because the three kinds of face encode differently (see
-// shape.Face.Encode). One of the fourteen standard faces is addressed by
-// WinAnsi codes, and a character with no code becomes the space. A simple
-// embedded face gives such a character no code at all, so it is left out of
-// what is drawn. Every other face is addressed by glyph index, and a character
-// it does not map is glyph 0, which is .notdef — the box a reader sees where a
-// font has nothing to draw. The finding said "set as a space" of all three,
-// which told the author of a Noto Sans document the opposite of what the page
-// shows (audit C144).
+// Two answers, because the kinds of face are addressed differently (see
+// shape.Face.Encode). One of the fourteen standard faces, or a face embedded as
+// a simple font, is addressed by WinAnsi codes, and a character with no code
+// becomes the space. Every other face is addressed by glyph index, and a
+// character it does not map is glyph 0, which is .notdef — the box a reader
+// sees where a font has nothing to draw. The finding said "set as a space" of
+// every face, which told the author of a Noto Sans document the opposite of
+// what the page shows (audit C144); and then said a simple face left the
+// character out, which was what its Encode did and not what it measured or
+// drew. The three agree now, on the space.
 func missingGlyphFate(face *shape.Face) string {
-	switch {
-	case face.IsStandard():
+	if face.IsStandard() || face.IsSimple() {
 		return "which is set as a space, so the character is missing from the page " +
 			"and from the text extracted out of it"
-	case face.IsSimple():
-		return "which is left out of what is drawn, so the character is missing " +
-			"from the page and from the text extracted out of it"
 	}
 	return "which is drawn as the face's missing-glyph box (.notdef) in place of " +
 		"the character"
@@ -370,7 +368,7 @@ func missingGlyphFate(face *shape.Face) string {
 //
 // Once per value per document, on the model of reportWordBreak.
 func (l *layouter) reportHyphens(b *Box, value string) {
-	if boxLanguage(b) == "" {
+	if l.boxLanguage(b) == "" {
 		return
 	}
 	if l.reportedHyphens == nil {
@@ -509,7 +507,7 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := strings.ToLower(strings.TrimSpace(b.Style.Get("font-variant-caps")))
+	value := ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("font-variant-caps")))
 	if capsAreSynthesised(use) {
 		// The face has none of them and this engine made the capitals itself,
 		// which is a page §6.6 asked for rather than a gap. It is still worth
@@ -640,10 +638,10 @@ func faceDeclares(face *shape.Face, tag string) bool {
 // scripts that have one case only.
 func hasCase(text string) (lower, upper bool) {
 	for _, r := range text {
-		if unicode.ToUpper(r) != r {
+		if paragraph.SimpleUpper(r) != r {
 			lower = true
 		}
-		if unicode.ToLower(r) != r {
+		if paragraph.SimpleLower(r) != r {
 			upper = true
 		}
 		if lower && upper {
@@ -725,7 +723,7 @@ func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := strings.ToLower(strings.TrimSpace(b.Style.Get("font-variant-numeric")))
+	value := ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("font-variant-numeric")))
 	l.reportOnce("font-variant-numeric:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
 		Finding{
 			Rule:     RuleUnsupportedValue,
@@ -848,7 +846,7 @@ func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
 	if len(missing) == 0 {
 		return
 	}
-	value := strings.ToLower(strings.TrimSpace(b.Style.Get("font-variant-east-asian")))
+	value := ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("font-variant-east-asian")))
 	l.reportOnce("font-variant-east-asian:"+value+":"+strings.Join(missing, ",")+":"+face.Name(),
 		Finding{
 			Rule:     RuleUnsupportedValue,
@@ -945,7 +943,7 @@ func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
 		})
 		return
 	}
-	if want == shape.PositionNormal || face == nil || strings.TrimSpace(text) == "" {
+	if want == shape.PositionNormal || face == nil || blank(text) {
 		return
 	}
 	tag := want.Features()[0]
@@ -968,6 +966,20 @@ func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
 	})
 }
 
+// blank reports whether text draws nothing: every character in it is one of
+// Unicode's White_Space, by the pinned tables. It is a question about what the
+// glyphs look like, not about syntax or collapsing, so the set is Unicode's and
+// not CSS's four — a no-break space or an ideographic space raised is still a
+// blank, and is set identically either way.
+func blank(text string) bool {
+	for _, r := range text {
+		if !charprop.WhiteSpace(r) {
+			return false
+		}
+	}
+	return true
+}
+
 // inertFontFeatures reports whether a font-feature-settings value asks for the
 // page that is already there.
 //
@@ -985,8 +997,10 @@ func unappliedFontFeatures(value string, face *shape.Face) string {
 	var turnedOff []string
 	for _, tag := range off {
 		// "kern" is inert on a face with no kerning whether it was asked for or
-		// turned off, because neither can change the page.
-		if strings.EqualFold(tag, "kern") && !kerns {
+		// turned off, because neither can change the page. Compared exactly:
+		// CSS Fonts 4 §6.12 makes an <opentype-tag> case-sensitive, so "KERN"
+		// is some other feature, and not one this can say anything about.
+		if tag == "kern" && !kerns {
 			continue
 		}
 		turnedOff = append(turnedOff, quoteValue(tag))
@@ -1073,7 +1087,7 @@ func (l *layouter) reportAutospace(b *Box, value string) {
 // overrule it. Returning "the author said nothing" as the empty string would
 // not do — "hyphenate-character: \"\"" asks for no mark at all.
 func hyphenCharacter(value string) (string, bool) {
-	if strings.TrimSpace(value) == "" || strings.EqualFold(strings.TrimSpace(value), "auto") {
+	if v := ascii.TrimCSSSpace(value); v == "" || ascii.EqualFold(v, "auto") {
 		return "", false
 	}
 	vals, errs := css.ParseComponentValues(value)
@@ -1159,21 +1173,21 @@ func boxElement(b *Box) *html.Node {
 // attributes and this engine gives its box no element either, so asking
 // languageAt about one asks about nothing; the answer is on the element that
 // holds the text, which is the first box above it that has one.
-func boxLanguage(b *Box) paragraph.Language {
-	return languageAt(boxElement(b))
+func (m *languageMemo) boxLanguage(b *Box) paragraph.Language {
+	return m.languageAt(boxElement(b))
 }
 
 // boxHyphenation is boxLanguage's neighbour for the one rule that is keyed on
 // the script as well as the language. See paragraph.HyphenationOf.
-func boxHyphenation(b *Box) paragraph.Language {
-	return hyphenationAt(boxElement(b))
+func (m *languageMemo) boxHyphenation(b *Box) paragraph.Language {
+	return m.hyphenationAt(boxElement(b))
 }
 
 // boxWritingSystem is boxLanguage's neighbour for the rules that ask what a text
 // is *typeset* as rather than what language it is in. See
 // paragraph.WritingSystemOf, and writingSystemAt for the walk.
-func boxWritingSystem(b *Box) paragraph.WritingSystem {
-	return writingSystemAt(boxElement(b))
+func (m *languageMemo) boxWritingSystem(b *Box) paragraph.WritingSystem {
+	return m.writingSystemAt(boxElement(b))
 }
 
 // reportSpacingTrim reports a text-spacing-trim value whose rule this engine

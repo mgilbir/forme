@@ -173,10 +173,13 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 					if lig.id == 0 && len(reps) > 1 {
 						lig = ligatureRef{comp: k, comps: lig.comps}
 					}
+					// A sequence of one is a replacement, and HarfBuzz does
+					// not count it as having multiplied anything.
 					product = append(product, Glyph{
 						GID: gid, Cluster: buf[at].Cluster, XAdvance: sh.f.advanceGID(gid),
 						lig: lig, class: buf[at].class, mask: buf[at].mask,
-						substituted: true,
+						substituted: true, multiplied: len(reps) > 1 || buf[at].multiplied,
+						umark: buf[at].umark,
 					})
 				}
 				out := sh.replace(buf, at, 1, product)
@@ -427,10 +430,20 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 	if joined {
 		class = classLigature
 	}
+	// A ligature is not multiplied, whatever its parts were: HarfBuzz forgets
+	// the one when it makes the other. It says what its first part's character
+	// said about marks — except that a ligature joining letters and beginning
+	// with a non-spacing mark is no longer one, which is HarfBuzz's too: it is
+	// drawn as a letter, and placed as a mark it would be hung off the glyph
+	// before it.
+	umark := buf[at].umark
+	if joined && umark.nonSpacing {
+		umark = unicodeMark{}
+	}
 	product = append(product, Glyph{
 		GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid),
 		lig: ligatureRef{id: id, comps: comps0}, class: class, mask: buf[at].mask,
-		substituted: true,
+		substituted: true, umark: umark,
 	})
 
 	// Walking the components in order, so that each kept glyph is given the
@@ -1025,6 +1038,15 @@ func (sh shaper) runRecords(base []byte, recAt, count int, positions []int, buf 
 		if delta == 0 {
 			continue
 		}
+		// The far edge a lookup may look to moves with the buffer. The pass
+		// moves its own once this rule is done; the records after this one
+		// are applied before that, and a glyph a decomposition pushed past the
+		// old edge is still in the text. Padauk's 'rlig' takes U+AA69 apart
+		// into two glyphs and then ligates the second with the U+1084 after
+		// it, which the old edge put out of reach: the U+1084 was drawn twice.
+		if sh.limit > 0 {
+			sh.limit += delta
+		}
 		// The end moves with the change, but never back past the position the
 		// lookup was applied at: nothing a lookup does at a position can reach
 		// behind it.
@@ -1122,6 +1144,11 @@ func coverageIndex(base []byte, off, gid int) (int, bool) {
 	}
 	return 0, false
 }
+
+// maxLigatureComponents bounds what a font may claim a ligature is made of. The
+// longest anybody writes is a handful; a count near the format's ceiling is an
+// allocation this would otherwise make on the strength of two untrusted bytes.
+const maxLigatureComponents = 64
 
 // componentsOf is how many parts of a ligature a glyph counts as: one for an
 // ordinary glyph, and its own count for a ligature being joined again.

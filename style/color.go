@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Colour, from CSS Color Module Level 4.
@@ -110,7 +110,7 @@ func ParseColor(vals []css.ComponentValue) (RGBA, bool) {
 	case css.Hash:
 		return parseHex(v.Token.Value)
 	case css.Ident:
-		name := strings.ToLower(v.Token.Value)
+		name := ascii.Lower(v.Token.Value)
 		if name == "transparent" {
 			return Transparent, true
 		}
@@ -168,7 +168,7 @@ func hexVal(c byte) uint8 {
 }
 
 func parseColorFunction(fn css.ComponentValue) (RGBA, bool) {
-	switch strings.ToLower(fn.Token.Value) {
+	switch ascii.Lower(fn.Token.Value) {
 	case "rgb", "rgba":
 		return parseRGBFunction(fn.Values)
 	case "hsl", "hsla":
@@ -373,7 +373,7 @@ func parseHue(arg []css.ComponentValue, allowNone bool) (float64, bool) {
 		return 0, false
 	}
 	t := arg[0].Token
-	if allowNone && t.Kind == css.Ident && strings.EqualFold(t.Value, "none") {
+	if allowNone && t.Kind == css.Ident && ascii.EqualFold(t.Value, "none") {
 		return 0, true
 	}
 	var deg float64
@@ -381,7 +381,7 @@ func parseHue(arg []css.ComponentValue, allowNone bool) (float64, bool) {
 	case css.Number:
 		deg = t.Number
 	case css.Dimension:
-		switch strings.ToLower(t.Unit) {
+		switch ascii.Lower(t.Unit) {
 		case "deg":
 			deg = t.Number
 		case "grad":
@@ -424,7 +424,7 @@ func numericArg(arg []css.ComponentValue, allowNone bool) (value float64, kind a
 	case css.Percentage:
 		return t.Number, argPercent, true
 	case css.Ident:
-		if allowNone && strings.EqualFold(t.Value, "none") {
+		if allowNone && ascii.EqualFold(t.Value, "none") {
 			return 0, argNone, true
 		}
 	}

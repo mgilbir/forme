@@ -27,9 +27,16 @@
 import hashlib
 import sys
 
-import uharfbuzz as hb
+from oracle import harfbuzz
+
+hb = harfbuzz()
 
 font_path, corpus_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
+# An optional BCP 47 tag the corpus is set in, recorded in the header so the Go
+# test sets it in the same one. "und-x-hbscdflt" is the one used: it names
+# 'DFLT' in place of the run's own script tag, which sets a complex script with
+# the default model.
+language = sys.argv[4] if len(sys.argv) > 4 else ""
 
 data = open(font_path, "rb").read()
 blob = hb.Blob(data)
@@ -44,6 +51,8 @@ for s in lines:
     buf = hb.Buffer()
     buf.add_str(s)
     buf.guess_segment_properties()
+    if language:
+        buf.language = language
     buf.flags = hb.BufferFlags.REMOVE_DEFAULT_IGNORABLES
     hb.shape(font, buf, None)
     fields = []
@@ -65,6 +74,8 @@ with open(out_path, "w", encoding="utf-8") as w:
     w.write(f"# font-sha256 {hashlib.sha256(data).hexdigest()}\n")
     w.write(f"# harfbuzz {hb.version_string()}\n")
     w.write(f"# uharfbuzz {hb.__version__}\n")
+    if language:
+        w.write(f"# language {language}\n")
     w.write(f"# cases {len(out)}\n")
     for line in out:
         w.write(line + "\n")

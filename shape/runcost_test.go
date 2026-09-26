@@ -4,7 +4,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/mgilbir/forme/internal/costtest"
 )
 
 // What a substitution costs, and why it is asked about at two lengths rather
@@ -81,18 +82,15 @@ func TestASyllableIsNotShapedWhereItLies(t *testing.T) {
 	const syllable = "क्ष"
 	f.ShapeGlyphs(strings.Repeat(syllable, 8))
 
-	took := func(n int) time.Duration {
+	at := func(n int) func() {
 		t.Helper()
 		s := strings.Repeat(syllable, n)
-		start := time.Now()
-		glyphs, _ := f.ShapeGlyphs(s)
-		d := time.Since(start)
 		// Three characters to a syllable and one glyph out of it: the fixture
 		// has to be ligating, or nothing is moved and nothing is measured.
-		if len(glyphs) != n {
+		if glyphs, _ := f.ShapeGlyphs(s); len(glyphs) != n {
 			t.Fatalf("%d syllables came to %d glyphs, want %d", n, len(glyphs), n)
 		}
-		return d
+		return func() { f.ShapeGlyphs(s) }
 	}
 
 	// Sixteen times the text. Measured on this machine, with the plant in and
@@ -101,14 +99,15 @@ func TestASyllableIsNotShapedWhereItLies(t *testing.T) {
 	// noise. Twice linear is the bound, which is a factor of two away from each
 	// of them.
 	//
-	// The smaller size is two thousand rather than a handful so that the
-	// measurement it is a ratio *of* is a tenth of a second and not a
-	// microsecond: a ratio against noise is noise.
+	// The smaller size is two thousand rather than a handful, which was so that
+	// one call was long enough to measure; costtest.Time now repeats the call
+	// until the measurement is, and the sizes the plant was measured at are
+	// kept.
 	const small, large = 2000, 32000
-	a, b := took(small), took(large)
-	if ratio := float64(b) / float64(a); ratio > 2*float64(large/small) {
+	c := costtest.Time(t, "shaping n Devanagari syllables", at(small), at(large))
+	if c.Ratio > 2*float64(large/small) {
 		t.Errorf("%d syllables took %v and %d took %v, which is %.1f times for "+
 			"%d times the text; a syllable shaped where it lies is four times "+
-			"that", small, a, large, b, ratio, large/small)
+			"that", small, c.Small, large, c.Large, c.Ratio, large/small)
 	}
 }

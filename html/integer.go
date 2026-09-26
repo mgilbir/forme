@@ -1,6 +1,10 @@
 package html
 
-import "math"
+import (
+	"math"
+
+	"github.com/mgilbir/forme/internal/ascii"
+)
 
 // HTML's two rules for reading a number out of an attribute's text, §2.3.4.1
 // and §2.3.4.2, which every attribute holding an integer is read by: a
@@ -31,7 +35,7 @@ const MaxInteger = math.MaxInt32
 // comes back as MaxInteger or its negation.
 func ParseInteger(s string) (int, bool) {
 	i := 0
-	for i < len(s) && isASCIIWhitespace(s[i]) {
+	for i < len(s) && ascii.IsSpace(s[i]) {
 		i++
 	}
 	negative := false
@@ -67,10 +71,4 @@ func ParseNonNegativeInteger(s string) (int, bool) {
 		return 0, false
 	}
 	return n, true
-}
-
-// isASCIIWhitespace is Infra's ASCII white space: tab, line feed, form feed,
-// carriage return and space.
-func isASCIIWhitespace(c byte) bool {
-	return c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == ' '
 }

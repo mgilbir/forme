@@ -30,6 +30,13 @@ func simpleLower(r rune) rune { return lookupSimpleCase(r, simpleLowercase[:]) }
 // simpleTitle is a character's simple titlecase mapping, or the character.
 func simpleTitle(r rune) rune { return lookupSimpleCase(r, simpleTitlecase[:]) }
 
+// SimpleUpper and SimpleLower are simpleUpper and simpleLower for the layout
+// package, whose small-caps and case checks ask whether a character has a form
+// of the other case to be replaced by — and have to get the same answer from
+// the same release as the text-transform that produced the text.
+func SimpleUpper(r rune) rune { return simpleUpper(r) }
+func SimpleLower(r rune) rune { return simpleLower(r) }
+
 // upperString and lowerString map every character of a string by its simple
 // mapping. They are the whole-string halves of fullCased, which is what
 // strings.ToUpper and strings.ToLower were.

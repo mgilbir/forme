@@ -1,9 +1,8 @@
 package layout
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -59,7 +58,7 @@ func uniformGradient(raw string) (style.RGBA, bool) {
 	if !ok {
 		return style.RGBA{}, false
 	}
-	switch strings.ToLower(fn.Token.Value) {
+	switch ascii.Lower(fn.Token.Value) {
 	case "linear-gradient", "repeating-linear-gradient":
 		// A repeating gradient of one colour is that colour too: every
 		// repetition paints the same thing.
@@ -165,10 +164,10 @@ func isGradientDirection(arg []css.ComponentValue) bool {
 		case css.Whitespace:
 			continue
 		case css.Ident:
-			words = append(words, strings.ToLower(v.Token.Value))
+			words = append(words, ascii.Lower(v.Token.Value))
 		case css.Dimension:
 			// An angle: "45deg", "0.25turn", "100grad", "1.5rad".
-			switch strings.ToLower(v.Token.Unit) {
+			switch ascii.Lower(v.Token.Unit) {
 			case "deg", "grad", "rad", "turn":
 				words = append(words, "<angle>")
 			default:
@@ -283,7 +282,7 @@ func (l *layouter) bandsOf(b *Box, raw string) (*bandedGradient, bool) {
 	// repeating-linear-gradient is not here: its bands repeat along the line,
 	// which is a tiling of stripes rather than a stack of them, and nothing in
 	// the suite writes one with hard stops.
-	if !strings.EqualFold(fn.Token.Value, "linear-gradient") {
+	if !ascii.EqualFold(fn.Token.Value, "linear-gradient") {
 		return nil, false
 	}
 
@@ -331,7 +330,7 @@ func gradientSide(arg []css.ComponentValue) (vertical, reverse, ok bool) {
 		if v.Token.Kind != css.Ident {
 			return false, false, false
 		}
-		words = append(words, strings.ToLower(v.Token.Value))
+		words = append(words, ascii.Lower(v.Token.Value))
 	}
 	if len(words) != 2 || words[0] != "to" {
 		return false, false, false

@@ -25,7 +25,9 @@
 import hashlib
 import sys
 
-import uharfbuzz as hb
+from oracle import harfbuzz
+
+hb = harfbuzz()
 
 TAGS = {
     "caps": {

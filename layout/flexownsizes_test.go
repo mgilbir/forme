@@ -134,6 +134,64 @@ func TestAnAutoHeightColumnHoldsItsItemsContent(t *testing.T) {
 			`<div style="flex: 1 1 0px; overflow: hidden">a</div></div>`, ``, "c"), [4]float64{0, 0, 100, 0})
 }
 
+// TestAColumnMeasuresContentWithoutTheDeclaredHeight: an item's content down
+// a column is found by laying it out, and that layout honoured a height the
+// item declared. Flexbox §9.2 step 3 E sizes an item "using its used flex
+// basis in place of its main size, treating a value of content as
+// max-content", and css-sizing-3's content size is the content's: a line of
+// text is 20px whatever the box's own height says. So a "content" basis — and
+// a percentage one where the column has no height, which §7.2.3 makes content
+// — is 20 beside "height: 60px", and not 60.
+func TestAColumnMeasuresContentWithoutTheDeclaredHeight(t *testing.T) {
+	column := `<div id="c" style="display: flex; flex-direction: column; width: 100px">`
+	for _, item := range []string{"flex-basis: 50%; height: 60px",
+		"flex-basis: content; height: 60px", "flex-basis: content; height: 60px; min-height: 0",
+		"flex-basis: max-content; height: 60px"} {
+		doc := column + `<div id="i" style="` + item + `">a</div></div><div id="after">after</div>`
+		wantRect(t, item, fcRect(t, doc, ``, "i"), [4]float64{0, 0, 100, 20})
+		wantRect(t, item+": the column", fcRect(t, doc, ``, "c"), [4]float64{0, 0, 100, 20})
+	}
+	// "auto" defers to the declared height, which is what it is for.
+	wantRect(t, "flex-basis: auto beside a height",
+		fcRect(t, column+`<div id="i" style="height: 60px">a</div></div>`, ``, "i"),
+		[4]float64{0, 0, 100, 60})
+	// Content taller than the declaration is the content, measured as such.
+	wantRect(t, "a content basis over two lines",
+		fcRect(t, column+`<div id="i" style="flex-basis: content; height: 10px">a<br>b</div></div>`,
+			``, "i"), [4]float64{0, 0, 100, 40})
+
+	// §4.5's automatic minimum is the smaller of the specified size
+	// suggestion (60) and the content size suggestion (20), and the second was
+	// the declared 60 as well: the item could not shrink below its own height
+	// in a column ten pixels tall. It shrinks to its content.
+	wantRect(t, "shrinking to the content under a declared height",
+		fcRect(t, `<div style="display: flex; flex-direction: column; height: 10px; width: 100px">`+
+			`<div id="i" style="height: 60px">a</div></div>`, ``, "i"), [4]float64{0, 0, 100, 20})
+
+	// A percentage inside the item is of an indefinite height while the
+	// content is measured, as it would be under "height: auto": the child is
+	// its own line, not half of the declared sixty.
+	wantRect(t, "a percentage child of a content basis",
+		fcRect(t, column+`<div id="i" style="flex-basis: content; height: 60px">`+
+			`<div style="height: 50%">a</div></div></div>`, ``, "i"), [4]float64{0, 0, 100, 20})
+
+	// A replaced item's content is its natural size, 40 by 20 here, and a
+	// declared height is set aside for it the same way.
+	img := `<img id="i" src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' ` +
+		`width='40' height='20'></svg>" style="flex-basis: content; height: 60px; align-self: start">`
+	if got := fcRect(t, column+img+`</div>`, ``, "i"); got[3] != 20 {
+		t.Errorf("a replaced item with a content basis is %gpx tall, want its natural 20", got[3])
+	}
+	// And a form control's content is its rows, which is what its "height:
+	// auto" is: two lines, not the declared hundred and not nothing. (Not a
+	// scroll container, whose automatic minimum is flexMainLimits' own case.)
+	ta := `<textarea id="i" rows="2" style="flex-basis: content; height: 100px; ` +
+		`padding: 0; border: 0; overflow: visible"></textarea>`
+	if got := fcRect(t, column+ta+`</div>`, ``, "i"); got[3] != 40 {
+		t.Errorf("a textarea with a content basis is %gpx tall, want its two rows, 40", got[3])
+	}
+}
+
 // TestFlexOneDistributesFromZeroInADefiniteColumn. The "0%" basis is 0% of a
 // main size that is known, which is zero, so "flex: 1" still divides a column
 // with a height into equal parts however much each part holds — the reason

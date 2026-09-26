@@ -460,32 +460,52 @@ func TestTheDocumentRecordsWhichLanguageItWasReadAs(t *testing.T) {
 	}
 }
 
-// TestAttrExactRefusesAQueryTheParseWouldHaveLowered is the lookup, held to what
-// it claims: the names in Attrs are lowercase whichever language the document is
-// in, because the tokenizer lowercases them, so what AttrExact does in practice
-// is refuse a query that is not already lowercase.
+// TestAnXHTMLNameIsStoredAsWritten. XML names are case-sensitive, so an XHTML
+// document that writes "Title" has an attribute named Title, which is not
+// title, and a <P> that is not a paragraph.
 //
-// That is the answer that never invents a match. An XHTML document that really
-// wrote "Title" has an attribute this engine has stored as "title" and cannot
-// tell from one written that way, and refusing both is the only reading that is
-// never wrong about which of the two it found.
-func TestAttrExactRefusesAQueryTheParseWouldHaveLowered(t *testing.T) {
+// This test used to assert the opposite — that the parse stored "title"
+// whichever language it read, and that AttrExact therefore refused "Title" —
+// and called that the answer that never invents a match. It invented one in
+// every question the engine asks with a lower-case name: <p LANG="tr"> was a
+// paragraph in Turkish, where XML gives it no language at all.
+func TestAnXHTMLNameIsStoredAsWritten(t *testing.T) {
 	doc, _, _ := Parse(xhtmlDoctype + `<html xmlns="http://www.w3.org/1999/xhtml">` +
-		`<p Title="yes">x</p></html>`)
+		`<p Title="yes" LANG="tr">x</p><P>y</P></html>`)
 	p := findElement(doc, "p")
 	if p == nil {
 		t.Fatal("no <p>")
 	}
-	if got, ok := p.AttrExact("title"); !ok || got != "yes" {
-		t.Errorf("AttrExact(\"title\") gave %q, %v; the parse stores the name "+
-			"lowercased whichever language it read", got, ok)
+	if got, ok := p.AttrExact("Title"); !ok || got != "yes" {
+		t.Errorf("AttrExact(\"Title\") gave %q, %v, want the attribute as written", got, ok)
 	}
-	if _, ok := p.AttrExact("Title"); ok {
-		t.Error("AttrExact(\"Title\") found something; nothing in Attrs is spelled that way")
+	if _, ok := p.AttrExact("title"); ok {
+		t.Error("AttrExact(\"title\") found something; the document wrote Title")
 	}
-	// Attr is the other reading and is unchanged.
-	if got, ok := p.Attr("Title"); !ok || got != "yes" {
-		t.Errorf("Attr(\"Title\") gave %q, %v, want the attribute", got, ok)
+	// Attr is the engine's lookup, by a lower-case name, and XML's answer to
+	// "title" and "lang" here is that there is none.
+	if _, ok := p.Attr("title"); ok {
+		t.Error("Attr(\"title\") found the attribute written Title")
+	}
+	if tag, ok := p.Language(); ok {
+		t.Errorf("the <p> has language %q; LANG is not lang in XML", tag)
+	}
+	// AttrNamed is an author's lookup, which XML matches exactly.
+	if got, ok := p.AttrNamed("Title", true); !ok || got != "yes" {
+		t.Errorf("AttrNamed(\"Title\") gave %q, %v", got, ok)
+	}
+	if findElement(doc, "P") == nil {
+		t.Error("no element named P: the name was folded")
+	}
+
+	// The same markup in HTML is folded, and is a paragraph in Turkish.
+	hdoc, _, _ := Parse(`<p Title="yes" LANG="tr">x</p>`)
+	hp := findElement(hdoc, "p")
+	if got, ok := hp.Attr("Title"); !ok || got != "yes" {
+		t.Errorf("HTML: Attr(\"Title\") gave %q, %v", got, ok)
+	}
+	if tag, _ := hp.Language(); tag != "tr" {
+		t.Errorf("HTML: the <p> has language %q, want tr", tag)
 	}
 }
 

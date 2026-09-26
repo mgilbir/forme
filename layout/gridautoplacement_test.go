@@ -3,6 +3,8 @@ package layout
 import (
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/internal/costtest"
 )
 
 // CSS Grid 2 §8.3 to §8.5, placed. Every expectation is worked out in the
@@ -233,11 +235,12 @@ func TestARowFilledByItsItemsCostsTheItems(t *testing.T) {
 		return items
 	}
 	small, large := setup(1000), setup(4000)
-	lo, hi, ratio := layoutScaling(func() { placeItems(copyGridItems(small), 1, true) },
+	c := costtest.Time(t, "placing a row of densely packed items",
+		func() { placeItems(copyGridItems(small), 1, true) },
 		func() { placeItems(copyGridItems(large), 1, true) })
-	if ratio > 8 {
+	if c.Ratio > 8 {
 		t.Errorf("four times the items took %.1f times as long (%v against %v)",
-			ratio, hi, lo)
+			c.Ratio, c.Large, c.Small)
 	}
 }
 

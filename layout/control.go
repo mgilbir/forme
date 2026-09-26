@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -142,9 +143,15 @@ const (
 //
 // A missing or unrecognised type is "text", which is what HTML says and is what
 // makes "<input>" a text field.
+//
+// The type is an enumerated attribute, whose keywords HTML matches ASCII
+// case-insensitively and nothing more: the value is not trimmed, so
+// type=" checkbox" is no keyword and is the text field its invalid value
+// default says, which is what every browser draws. Trimmed — and by Unicode's
+// white space, so a no-break space went too — it was a checkbox.
 func inputTypeOf(n *html.Node) string {
 	v, _ := n.Attr("type")
-	t := strings.ToLower(strings.TrimSpace(v))
+	t := ascii.Lower(v)
 	switch t {
 	case "text", "password", "search", "tel", "url", "email", "number",
 		"date", "month", "week", "time", "datetime-local",
@@ -160,7 +167,7 @@ func controlKindOf(n *html.Node) controlKind {
 	if n == nil || n.Type != html.ElementNode {
 		return controlNone
 	}
-	switch strings.ToLower(n.Name) {
+	switch ascii.Lower(n.Name) {
 	case "textarea":
 		return controlTextArea
 	case "select":
@@ -241,7 +248,7 @@ func (b *boxBuilder) positiveAttr(n *html.Node, name string, fallback, limit int
 	if v > limit {
 		asks := strconv.Itoa(v)
 		if v >= html.MaxInteger {
-			asks = "a number of " + strconv.Itoa(len(strings.TrimSpace(raw))) + " characters"
+			asks = "a number of " + strconv.Itoa(len(ascii.TrimSpace(raw))) + " characters"
 		}
 		b.rec.ReportDetail(Finding{
 			Rule:   RuleLimit,
@@ -371,7 +378,7 @@ func optionsOf(sel *html.Node) []*html.Node {
 	for len(pending) > 0 {
 		n := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
-		switch strings.ToLower(n.Name) {
+		switch ascii.Lower(n.Name) {
 		case "option":
 			// An option's own content is its label, not more options.
 			out = append(out, n)
@@ -422,7 +429,7 @@ func controlLabel(n *html.Node, kind controlKind) string {
 		return value
 
 	case controlButton:
-		if !strings.EqualFold(n.Name, "input") {
+		if !ascii.EqualFold(n.Name, "input") {
 			// A <button>'s label is its children, which are ordinary markup and
 			// are laid out as such.
 			return ""
@@ -489,9 +496,9 @@ func (b *boxBuilder) controlContent(box *Box, n *html.Node, cs style.ComputedSty
 		label = truncateRunes(label, maxLabelRunes)
 	}
 	text := collapseWhitespaceAfter(label, cs.Get("white-space-collapse"),
-		b.wordSpaceTransformFor(cs), textBoundary{}, writingSystemAt(n))
+		b.wordSpaceTransformFor(cs), textBoundary{}, b.writingSystemAt(n))
 	text, b.afterWord = transformText(text, transformOf(cs.Get("text-transform")), b.afterWord,
-		languageAt(n))
+		b.languageAt(n))
 	if text == "" {
 		return
 	}
@@ -525,7 +532,7 @@ func truncateRunes(s string, n int) string {
 // opens, so the chain cannot be built up from markup.
 func selectAncestor(n *html.Node) *html.Node {
 	for cur := n; cur != nil && cur.Type == html.ElementNode; cur = cur.Parent {
-		switch strings.ToLower(cur.Name) {
+		switch ascii.Lower(cur.Name) {
 		case "select":
 			return cur
 		case "optgroup", "option":
@@ -560,7 +567,7 @@ func (b *boxBuilder) controlSkipsChild(parent *Box, child *html.Node) bool {
 	if sel == nil {
 		return false
 	}
-	if strings.EqualFold(parent.Element.Name, "option") {
+	if ascii.EqualFold(parent.Element.Name, "option") {
 		// Inside an option, its label is ordinary markup.
 		return false
 	}
@@ -588,7 +595,7 @@ func isOptionLike(n *html.Node) bool {
 	if n == nil || n.Type != html.ElementNode {
 		return false
 	}
-	name := strings.ToLower(n.Name)
+	name := ascii.Lower(n.Name)
 	return name == "option" || name == "optgroup"
 }
 
@@ -673,7 +680,7 @@ func preservedInAControl(n *html.Node, value string) string {
 	if n == nil || controlKindOf(n.Parent) != controlTextArea {
 		return value
 	}
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case "preserve", "break-spaces":
 		// Already keeps every space. "break-spaces" keeps them *and* wraps on
 		// them, which is a value an author may reasonably write on a textarea

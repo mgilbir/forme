@@ -2,8 +2,9 @@ package paragraph
 
 import (
 	"sort"
-	"unicode"
 	"unicode/utf8"
+
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // Where a line may not begin — UAX #14's unconditional prohibitions.
@@ -349,7 +350,7 @@ func BindsToAtomicInline(r rune) bool {
 	// joiner. A combining grapheme joiner is precisely the character an author
 	// writes to say "these two are one thing", so the answer is the one its name
 	// asks for.
-	if unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) {
+	if charprop.Is(r, charprop.Mn|charprop.Me) {
 		return true
 	}
 	if r < bindingRanges[0].lo {

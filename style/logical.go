@@ -1,6 +1,10 @@
 package style
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mgilbir/forme/internal/ascii"
+)
 
 // CSS Logical Properties.
 //
@@ -67,7 +71,7 @@ const (
 // "rl-tb" are horizontal-tb and "tb" and "tb-rl" are vertical-rl.
 func physicalSide(side flowSide, writingMode string, rtl bool) string {
 	var start, end, lineStart, lineEnd string
-	switch strings.ToLower(strings.TrimSpace(writingMode)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(writingMode)) {
 	case "vertical-rl", "sideways-rl", "tb", "tb-rl":
 		start, end, lineStart, lineEnd = "right", "left", "top", "bottom"
 	case "vertical-lr":

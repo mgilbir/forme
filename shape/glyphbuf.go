@@ -1,10 +1,10 @@
 package shape
 
 import (
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/bidi"
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // The shaped-glyph model.
@@ -71,6 +71,17 @@ type Glyph struct {
 	// drawn for is still one once the font has had its say — see
 	// dropUnsubstitutedIgnorables.
 	substituted bool
+
+	// multiplied says the glyph is one of several a multiple substitution
+	// made from one, and was not ligated since: HarfBuzz's MULTIPLIED glyph
+	// property. A mark goes on the first of them and steps over the rest —
+	// see acceptsMarks.
+	multiplied bool
+
+	// umark is what the character this glyph came from says about marks, for
+	// the one reader that asks the character rather than the font: placing
+	// the marks of a face that places none of its own. See fallback.go.
+	umark unicodeMark
 }
 
 // ligatureRef says what a glyph has to do with a ligature.
@@ -430,9 +441,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// font's rules for it were read under — see categorize — and it decides
 	// everything below: how the characters are normalised, whether the ones
 	// nothing is drawn for are taken out now, and what is done with the glyphs.
-	langs := openTypeLanguages(ctx.features.Language)
-	l := f.layoutFor(script, langs)
-	chosen := f.chosenScriptTag(script, langs)
+	lang := openTypeLanguage(ctx.features.Language)
+	l := f.layoutFor(script, lang)
+	chosen := f.chosenScriptTag(script, lang)
 	model := categorize(script, chosen)
 	// Rule L4: a bracket in a right-to-left run is drawn as the bracket that
 	// mirrors it, and the substitution is on the character, before the font is
@@ -514,7 +525,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		}
 		buf = append(buf, Glyph{
 			GID: gid, Cluster: offsets[i], XAdvance: f.advanceGID(gid),
-			class: classOfRune(runes[i]),
+			class: classOfRune(runes[i]), umark: unicodeMarkOf(runes[i]),
 		})
 	}
 	if len(buf) == 0 {
@@ -523,7 +534,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.
 	sh := shaper{f: f, l: l, rtl: rtl, ligIDs: new(int),
-		zeroMarks: model.zeroMarks(), features: ctx.features, langs: langs,
+		zeroMarks: model.zeroMarks(), features: ctx.features, lang: lang,
 		ops: lookupBudget(len(buf))}
 	// What the run applies, and in which stages: see plan.go. It covers every
 	// entry point — the features a document turned off or asked for, and the
@@ -561,7 +572,10 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 			buf = sh.applyStage(buf, stage)
 		}
 	}
-	sh.position(buf)
+	if model == modelHebrew {
+		sh.gposScript = f.chosenPositioningTag(script, lang)
+	}
+	sh.position(buf, p, model)
 	// The pair that spans the boundary to the next run, which the pass above
 	// cannot see because the glyph on the far side of it is not in this buffer.
 	// See boundarykern.go.
@@ -645,10 +659,10 @@ func maskFractions(buf []Glyph, runes []rune, rtl bool) {
 			continue
 		}
 		start, end := i, i+1
-		for start > 0 && unicode.Is(unicode.Nd, runes[start-1]) {
+		for start > 0 && charprop.Is(runes[start-1], charprop.Nd) {
 			start--
 		}
-		for end < len(runes) && end < len(buf) && unicode.Is(unicode.Nd, runes[end]) {
+		for end < len(runes) && end < len(buf) && charprop.Is(runes[end], charprop.Nd) {
 			end++
 		}
 		if start == i || end == i+1 {
@@ -699,34 +713,38 @@ func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
 		missing int
 	)
 	var parts []rune
+	// drew records what was drawn, as Encode records it. For a simple face
+	// that is the glyph the character is drawn with, which is what its subset
+	// has to keep: the codes in buf are not glyph indices, and they were
+	// recorded as though they were — "A" is code 65, and the subset of Noto
+	// Sans kept glyph 65 and not the glyph an A is drawn with. A standard
+	// face has no program and no glyph indices, and its record is the codes it
+	// set, which is what tells one document's use of it from another's.
+	drew := func(r rune, code int) {
+		if f.simple {
+			f.used[f.prog.Cmap[r]] = true
+			return
+		}
+		f.used[code] = true
+	}
 	for i, r := range runes {
 		// What the face draws for it, which is its decomposition where the
 		// face has that and not the character — as Measure and Encode say.
 		var drawn bool
-		if parts, drawn = f.drawnAs(r, 0, parts[:0]); drawn && (len(parts) > 1 || parts[0] != r) {
+		if parts, drawn = f.drawnAs(r, 0, parts[:0]); drawn {
 			for _, p := range parts {
 				code, _ := f.GlyphID(p)
 				width, _ := f.Advance(p)
 				buf = append(buf, Glyph{GID: code, Cluster: offsets[i], XAdvance: width})
+				drew(p, code)
 			}
 			continue
 		}
-		code, ok := f.GlyphID(r)
-		if !ok {
-			missing++
-			// The same substitution Encode makes: an unmapped character is set
-			// as a space, which is what a reader shows for an undefined code.
-			if space, spaceOK := f.GlyphID(' '); spaceOK {
-				code = space
-			} else {
-				code = 0
-			}
-		}
-		width, _ := f.Advance(r)
-		if !ok {
-			width, _ = f.Advance(' ')
-		}
+		// The same substitution Measure and Encode make: see missingByCode.
+		missing++
+		code, width := f.missingByCode()
 		buf = append(buf, Glyph{GID: code, Cluster: offsets[i], XAdvance: width})
+		drew(' ', code)
 	}
 	if rtl {
 		// There is nothing here for the direction to interfere with — no marks,
@@ -734,9 +752,6 @@ func (f *Face) shapeByCode(s string, rtl bool) ([]Glyph, int) {
 		// order it is drawn, so that a caller need not ask which kind of face it
 		// was given.
 		reverseGlyphs(buf)
-	}
-	for _, g := range buf {
-		f.used[g.GID] = true
 	}
 	return buf, missing
 }

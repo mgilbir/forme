@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Media Queries 4, for a medium that is a sheet of paper.
@@ -129,7 +130,7 @@ func oneMediaQuery(query []css.ComponentValue, m Media) (bool, string) {
 // appear, or a feature in parentheses.
 func mediaTerm(part []css.ComponentValue, m Media, mayBeType bool) (bool, string) {
 	if len(part) == 1 && part[0].IsToken() && part[0].Token.Kind == css.Ident && mayBeType {
-		return mediaTypeMatches(strings.ToLower(part[0].Token.Value))
+		return mediaTypeMatches(ascii.Lower(part[0].Token.Value))
 	}
 	if len(part) == 1 && part[0].IsBlock() && part[0].Token.Kind == css.LeftParen {
 		return mediaFeature(part[0].Values, m)
@@ -173,7 +174,7 @@ func mediaTypeMatches(name string) (bool, string) {
 // comes back so that the drop can be reported rather than silent.
 func mediaFeature(vals []css.ComponentValue, m Media) (bool, string) {
 	parts := splitOnColon(vals)
-	name := strings.ToLower(strings.TrimSpace(serialize(parts[0])))
+	name := ascii.Lower(ascii.TrimCSSSpace(serialize(parts[0])))
 	if len(parts) == 1 {
 		// A feature written with no value is true when the feature is not zero,
 		// which for a length is a page that has one.
@@ -197,7 +198,7 @@ func mediaFeature(vals []css.ComponentValue, m Media) (bool, string) {
 	case "height":
 		against = m.Height
 	case "orientation":
-		want := strings.ToLower(strings.TrimSpace(serialize(parts[1])))
+		want := ascii.Lower(ascii.TrimCSSSpace(serialize(parts[1])))
 		switch want {
 		case "portrait":
 			return m.Height >= m.Width, ""
@@ -254,5 +255,5 @@ func splitOnColon(vals []css.ComponentValue) [][]css.ComponentValue {
 // isIdentValue reports whether one part of a query is a given keyword.
 func isIdentValue(part []css.ComponentValue, name string) bool {
 	return len(part) == 1 && part[0].IsToken() && part[0].Token.Kind == css.Ident &&
-		strings.EqualFold(part[0].Token.Value, name)
+		ascii.EqualFold(part[0].Token.Value, name)
 }

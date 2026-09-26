@@ -4,8 +4,8 @@
 # glyph index and advance of each glyph, and its offset where that is
 # not zero. Advances and offsets are in font units.
 # font-sha256 bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d
-# harfbuzz 14.3.0
-# uharfbuzz 0.56.0
+# harfbuzz 14.5.0
+# uharfbuzz 0.56.2
 # cases 12583
 36,639 36,639
 36,599 57,600

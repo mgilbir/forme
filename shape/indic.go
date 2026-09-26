@@ -2,7 +2,8 @@ package shape
 
 import (
 	"sort"
-	"unicode"
+
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // Indic reordering: setting text whose characters are not stored in the order
@@ -346,11 +347,11 @@ const maxIndicSyllable = 64
 // script table they came from. A font that declares nothing for the script falls
 // back to the default table, which is not a second-generation declaration and so
 // means the older rules — the same reading every other shaper takes.
-func (f *Face) indicOldSpec(cfg *indicConfig, script uint16, langs []string) bool {
+func (f *Face) indicOldSpec(cfg *indicConfig, script uint16, lang otLanguage) bool {
 	if !cfg.hasOldSpec {
 		return false
 	}
-	tag := f.chosenScriptTag(script, langs)
+	tag := f.chosenScriptTag(script, lang)
 	return len(tag) != 4 || tag[3] != '2'
 }
 
@@ -910,7 +911,7 @@ func (sh shaper) markInvalidVowels(buf []Glyph, runes []rune) ([]Glyph, []rune) 
 		// character implies is its class.
 		outBuf = append(outBuf, Glyph{
 			GID: gid, Cluster: buf[i].Cluster, XAdvance: sh.f.advanceGID(gid),
-			class: classOfRune(dottedCircle),
+			class: classOfRune(dottedCircle), umark: unicodeMarkOf(dottedCircle),
 		})
 		outRunes = append(outRunes, dottedCircle)
 	}
@@ -1109,7 +1110,7 @@ func indicWordStart(before, runes []rune, at int) bool {
 // outside it. A private-use character is most often an icon font's glyph set
 // among the text, and it is not a space.
 func endsWordForIndic(r rune) bool {
-	return unicode.In(r, unicode.N, unicode.P, unicode.S, unicode.Z, unicode.Cc)
+	return charprop.Is(r, charprop.N|charprop.P|charprop.S|charprop.Z|charprop.Cc)
 }
 
 // indicHooks keep the Indic record in step with a buffer a stage is reshaping.

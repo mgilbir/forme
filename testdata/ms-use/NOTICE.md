@@ -1,62 +1,63 @@
-# Vendored Universal Shaping Engine override data
+# The Universal Shaping Engine's data, from HarfBuzz
 
-These three files are vendored, unmodified, from HarfBuzz:
+This directory holds three files from HarfBuzz's `src/ms-use`, fetched by
+`make ms-use-sources` and not committed:
 
-  https://github.com/harfbuzz/harfbuzz/tree/main/src/ms-use
+| File | SHA-256 |
+|---|---|
+| `IndicPositionalCategory-Additional.txt` | `2baa1c1efe5a5f108c304b1e27d0d97864c806764eb2b0a1bd91db80ae26b5b8` |
+| `IndicShapingInvalidCluster.txt` | `02024d4289864665721e14ec99eb320ce187f289514b793449b4f6a8ddaf5944` |
+| `IndicSyllabicCategory-Additional.txt` | `b9472e3e72d5fba8cb3f2e0578e73012aaae786db25779de0f1a5a5ab69b84a6` |
 
-Two of them carry the Universal Shaping Engine's corrections to two Unicode
-properties — `Indic_Syllabic_Category` and `Indic_Positional_Category` — and
-their own headers say what they are: *"Override values … Not derivable"*,
-maintained since Unicode 7.0 by Andrew Glass, who edits the engine's
-specification at Microsoft.
+They are taken at HarfBuzz 14.5.0 —
+`https://raw.githubusercontent.com/harfbuzz/harfbuzz/14.5.0/src/ms-use/<file>` —
+which is the Makefile's `HARFBUZZ_VERSION` and `MSUSE_URL`, and the fetch
+refuses a file whose SHA-256 is not the one `MSUSE_FILES` lists (the same
+three as above). To check any of this: `make ms-use-sources`, then
+`sha256sum testdata/ms-use/*.txt`.
 
-The third, `IndicShapingInvalidCluster.txt`, is `Indic_Shaping_Invalid_Cluster`:
-the sequences an independent vowel may not be followed by, which every shaper
-draws with a dotted circle between them. It is a list published in the script
-development specifications and derivable from no character property, and
-`cmd/genvowel` reads it. It is here for the same reason as the other two — the
-generator that reads it is in this repository, and a generator whose input is
-not is a generator nobody can run. `make shapetables` could not, until it was.
+They used to be committed here, taken from HarfBuzz at a commit nobody
+recorded. Two of the three were not the files at 14.5.0: HarfBuzz had since
+dropped one override (U+11A3A ZANABAZAR SQUARE CLUSTER-INITIAL LETTER RA,
+`Consonant_With_Stacker`, which Unicode 17's own `IndicSyllabicCategory.txt`
+already gives it), added two header lines to each override file, and trimmed
+trailing spaces. Regenerated from the pinned files, `shape/usetable.go` and
+`shape/indicvowel.go` differ from the tables made from the old ones only in the
+line of their header that names the source.
 
-## Why they are here rather than derived
+## What they are
 
-`cmd/genuse` derives the engine's categories from five properties Unicode
-publishes, which is most of the answer and all of the answer that Unicode is in
-a position to give. The remainder is not derivable by anybody: it is the
-engine's own judgement about characters whose Unicode property is right for
-Unicode's purposes and wrong for laying out a syllable. Two of the 198 entries
-are about Javanese alone — U+A9BE PENGKAL is `Bottom_And_Right` in Unicode and
-`Right` to the engine, and U+A9BF CAKRA is `Right` in Unicode and `Bottom` to
-the engine — and a shaper that used Unicode's values would draw both on the
-wrong side of the letter.
+The two `-Additional` files are the Universal Shaping Engine's corrections to
+two Unicode properties, `Indic_Syllabic_Category` (134 entries) and
+`Indic_Positional_Category` (63). Each file's header begins "Override values
+For …" and "Not derivable", and records its updates, the last "for Unicode 18.0
+by Andrew Glass 2026-09-04".
 
-They are read by `cmd/genuse` when the table is regenerated, and by nothing at
-runtime.
+`IndicShapingInvalidCluster.txt` is `Indic_Shaping_Invalid_Cluster`: 103
+sequences of an independent vowel and a vowel sign that every shaper draws with
+a dotted circle between them. Its header dates it 2015-03-12 and 2019-11-08.
+
+## Why they are read rather than derived
+
+`cmd/genuse` derives the engine's categories from five properties of the
+Unicode database, and the overrides are what the engine decides differently.
+U+A9BE JAVANESE CONSONANT SIGN PENGKAL is `Bottom_And_Right` in Unicode 17's
+`IndicPositionalCategory.txt` and `Right` in the override, so it is `Blw` to a
+shaper that reads Unicode alone and `Pst` to the engine;
+`shape.TestTheEngineTakesItsOwnViewWhereUnicodeDiffers` holds the table to the
+second.
+
+They are read by `cmd/genuse` (the two overrides) and `cmd/genvowel` (the
+cluster list) when the tables are regenerated, and by
+`testdata/harfbuzz/usecategories.py`, which runs HarfBuzz's own
+`gen-use-table.py` over the same files to produce the oracle
+`shape/usecategories_test.go` compares against. Nothing reads them at run
+time.
 
 ## Licence
 
-HarfBuzz is distributed under the "Old MIT" licence, which permits
-redistribution with its notice. The files are unmodified and carry their own
-headers; HarfBuzz's licence follows.
-
-    Copyright © 2010,2011,2012  Google, Inc.
-    Copyright © 2012,2013  Mozilla Foundation
-    ... and the other copyright holders named in HarfBuzz's COPYING.
-
-    Permission is hereby granted, without written agreement and without
-    license or royalty fees, to use, copy, modify, and distribute this
-    software and its documentation for any purpose, provided that the
-    above copyright notice and the following two paragraphs appear in
-    all copies of this software.
-
-    IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE TO ANY PARTY FOR
-    DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES
-    ARISING OUT OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN
-    IF THE COPYRIGHT HOLDER HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH
-    DAMAGE.
-
-    THE COPYRIGHT HOLDER SPECIFICALLY DISCLAIMS ANY WARRANTIES, INCLUDING,
-    BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
-    FITNESS FOR A PARTICULAR PURPOSE. THE SOFTWARE PROVIDED HEREUNDER IS
-    ON AN "AS IS" BASIS, AND THE COPYRIGHT HOLDER HAS NO OBLIGATION TO
-    PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+HarfBuzz is under the "Old MIT" licence. None of the three files carries a
+notice of its own. HarfBuzz's COPYING at 14.5.0, whole, is quoted in
+`THIRD_PARTY_NOTICES` at the root of this repository, under the entry that
+lists the two tables made from these files, and `cmd/notices_test.go` holds
+the quotation to the pinned file.

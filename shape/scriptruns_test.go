@@ -4,7 +4,6 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mgilbir/forme/fonttest"
 )
@@ -437,10 +436,10 @@ func TestAStringChangingScriptOftenCostsWhatItsTextDoes(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, unit := range []string{"aα", "a α "} {
-		shape := func(n int) time.Duration {
+		shape := func(n int) func() {
 			text := strings.Repeat(unit, n)
 			f.ShapeGlyphs(text)
-			return best(func() { f.ShapeGlyphs(text) })
+			return func() { f.ShapeGlyphs(text) }
 		}
 		growth(t, "shaping "+unit+" n times, at 4n against n", shape, 500, 2000, 8)
 	}

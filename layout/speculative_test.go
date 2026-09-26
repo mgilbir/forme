@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -413,6 +414,15 @@ func nested(d int, open string, sibling func(k int) string) string {
 // the work; it is about four now, because a reused layout is copied and the
 // copy is as deep as what is below it — quadratic in the depth, which the box
 // depth cap bounds.
+//
+// Counted, not timed: the layouter counts every box it lays out and every
+// fragment the cache copies in place of one (layouter.work), which is the work
+// an exponential multiplies, and a count is not moved by whatever else the
+// machine is doing. The count stops where the bound on layout work stops the
+// layout, though, and so did the time: with the cache off the deeper nest
+// reaches the bound, the ratio reads about four (the bound against a smaller
+// nest that also grew), and what fails is the check below that nothing was
+// cut short. The two together are the guard.
 func TestNestingIsNotExponential(t *testing.T) {
 	none := func(int) string { return "" }
 	for _, shape := range []struct {
@@ -429,13 +439,17 @@ func TestNestingIsNotExponential(t *testing.T) {
 		h, _ := style.FromPx(100000)
 		small := Build(Input{HTML: nested(12, shape.open, shape.sibling(12))})
 		large := Build(Input{HTML: nested(24, shape.open, shape.sibling(24))})
-		var sf, lf *Fragment
-		lo, hi, ratio := layoutScaling(
-			func() { sf = Layout(small.Root, Size{W: w, H: h}, nil, nil) },
-			func() { lf = Layout(large.Root, Size{W: w, H: h}, nil, nil) })
+		work := func(b Built) (int, *Fragment) {
+			l := newLayouter(b.Root, Size{W: w, H: h}, nil, nil)
+			f := l.layout()
+			return l.work, f
+		}
+		lo, sf := work(small)
+		hi, lf := work(large)
 		if sf == nil || lf == nil {
 			t.Fatalf("%s: nothing was laid out", shape.name)
 		}
+		ratio := costtest.Count(t, shape.name, int64(lo), int64(hi))
 		// Laid out whole, too, and not cut short by the bound on layout work:
 		// an exponential that the bound stops is cheap, and is also a page
 		// with its content missing.
@@ -447,9 +461,9 @@ func TestNestingIsNotExponential(t *testing.T) {
 			}
 		}
 		if ratio > 8 {
-			t.Errorf("%s: twice the depth took %.1f times as long (%v against %v); "+
-				"with every layout asked twice at every level it is 4096", shape.name,
-				ratio, hi, lo)
+			t.Errorf("%s: twice the depth did %.1f times the layout work (%d units "+
+				"against %d); with every layout asked twice at every level it is 4096",
+				shape.name, ratio, hi, lo)
 		}
 	}
 }

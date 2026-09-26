@@ -35,6 +35,7 @@ func TestAFaceThatWillNotLoadIsRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	missingFallbackFaces.isolate(t)
 	before := len(missingFallbackFaces.list())
 	t.Setenv(notoEnv, dir)
 	faces := notoFaces()
@@ -72,6 +73,7 @@ func TestAFaceThatWillNotLoadIsRecorded(t *testing.T) {
 // wants the library and the list is read once at the end.
 func TestTheSameFaceIsRecordedOnce(t *testing.T) {
 	dir := t.TempDir()
+	missingFallbackFaces.isolate(t)
 	t.Setenv(notoEnv, dir)
 	notoFaces()
 	first := len(missingFallbackFaces.list())
@@ -79,5 +81,22 @@ func TestTheSameFaceIsRecordedOnce(t *testing.T) {
 	if got := len(missingFallbackFaces.list()); got != first {
 		t.Errorf("asking twice recorded %d names and then %d; a face is one "+
 			"complaint however many times it is asked for", first, got)
+	}
+}
+
+// TestATestsOwnDirectoryLeavesTheRecordAlone. What a test's own directory is
+// missing is not the library's, and the ratchet reads the record at the end of
+// the run: see missingFaces.isolate. Run under -count=2, the test above failed
+// on every run after the first, because the names it expected to see recorded
+// had been recorded by the run before.
+func TestATestsOwnDirectoryLeavesTheRecordAlone(t *testing.T) {
+	before := missingFallbackFaces.list()
+	for run := 0; run < 2; run++ {
+		t.Run("TestAFaceThatWillNotLoadIsRecorded", TestAFaceThatWillNotLoadIsRecorded)
+		t.Run("TestTheSameFaceIsRecordedOnce", TestTheSameFaceIsRecordedOnce)
+	}
+	if after := missingFallbackFaces.list(); strings.Join(after, "|") != strings.Join(before, "|") {
+		t.Errorf("the record was %q and is %q after the tests that load their own "+
+			"directories", before, after)
 	}
 }

@@ -3,10 +3,10 @@ package layout
 import (
 	"strings"
 	"testing"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/fonts/notosans"
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/shape"
 )
 
@@ -169,7 +169,7 @@ func visibleRunes(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		if unicode.IsSpace(r) || isBidiControl(r) || isDefaultIgnorable(r) {
+		if charprop.WhiteSpace(r) || isBidiControl(r) || isDefaultIgnorable(r) {
 			continue
 		}
 		b.WriteRune(r)

@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -75,13 +76,13 @@ func aspectRatioOf(raw string) (float64, bool) {
 // aspectRatioParts is aspectRatioOf and whether the value also says "auto",
 // which decides which box the ratio is of and whether a natural ratio wins.
 func aspectRatioParts(raw string) (ratio float64, auto, ok bool) {
-	value := strings.TrimSpace(strings.ToLower(raw))
+	value := ascii.TrimCSSSpace(ascii.Lower(raw))
 	if value == "" || value == "auto" {
 		return 0, value == "auto", false
 	}
 	// The keyword may sit either side of the ratio. Taking it out leaves the
 	// ratio to be read on its own.
-	fields := strings.Fields(strings.ReplaceAll(value, "/", " / "))
+	fields := ascii.CSSFields(strings.ReplaceAll(value, "/", " / "))
 	var parts []string
 	for _, f := range fields {
 		if f == "auto" {

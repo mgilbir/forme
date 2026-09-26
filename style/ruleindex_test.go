@@ -141,11 +141,10 @@ func TestTheIndexIsWorthHaving(t *testing.T) {
 
 // TestANameTheIndexCannotFoldIsNotIndexed.
 //
-// The matcher compares a type with strings.EqualFold, which is Unicode's
-// folding; the index folds ASCII. They agree on every name an element has and
-// could disagree on one no element has, and "disagrees only about names nobody
-// uses" is not an argument for an index that decides whether a rule is looked
-// at. Such a type is filed under nothing and walked for everything.
+// The matcher and the index both fold a type as ASCII does. A type with a byte
+// above ASCII is filed under nothing and walked for everything, which costs a
+// rule that selects only the rare element whose name holds the same bytes, and
+// decides nothing: the matcher does.
 func TestANameTheIndexCannotFoldIsNotIndexed(t *testing.T) {
 	if got := keysOf(selectorsOf(t, "p, div")); len(got) != 2 {
 		t.Errorf("keysOf(p, div) = %v, want two names", got)

@@ -44,7 +44,7 @@ func (sh shaper) shapeSyllabic(buf []Glyph, runes []rune, script uint16, p *plan
 	switch p.model {
 	case modelIndic:
 		cfg := indicConfigFor(script)
-		return sh.shapeIndic(buf, runes, before, sh.indicPlan(cfg, sh.f.indicOldSpec(cfg, script, sh.langs)), p)
+		return sh.shapeIndic(buf, runes, before, sh.indicPlan(cfg, sh.f.indicOldSpec(cfg, script, sh.lang)), p)
 	case modelKhmer:
 		return sh.shapeKhmer(buf, runes, p)
 	case modelMyanmar:
@@ -112,7 +112,7 @@ func (sh shaper) splitCharacters(buf []Glyph, runes []rune, of func(rune) ([]run
 		for k, gid := range gids {
 			outBuf = append(outBuf, Glyph{
 				GID: gid, Cluster: buf[i].Cluster, XAdvance: sh.f.advanceGID(gid),
-				class: classOfRune(parts[k]),
+				class: classOfRune(parts[k]), umark: unicodeMarkOf(parts[k]),
 			})
 			outRunes = append(outRunes, parts[k])
 		}

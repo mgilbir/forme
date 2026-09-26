@@ -80,13 +80,15 @@ func TestALangSysListBeyondTheBoundStopsBeingRead(t *testing.T) {
 	// A LangSys table: lookupOrder, requiredFeatureIndex, featureIndexCount.
 	script := append(head, 0, 0, 0, 1, 0, 0)
 
-	if _, ok := readLangSys(script, []string{tagAt(0)}); !ok {
+	// The LangSys every record names requires feature 1, which is how finding
+	// it is told from the empty one a script with no default falls back to.
+	if ls, _ := readLangSys(script, []string{tagAt(0)}); ls.required != 1 {
 		t.Fatalf("the first of %d language systems was not found; the fixture is "+
 			"not a Script table this reader walks", declared)
 	}
 	// One past the bound is not found, so the reader falls back to the default
-	// LangSys — which this table does not have, so the answer is "no".
-	if _, ok := readLangSys(script, []string{tagAt(declared - 1)}); ok {
+	// LangSys — which this table does not have, so the answer is the empty one.
+	if ls, _ := readLangSys(script, []string{tagAt(declared - 1)}); ls.required == 1 {
 		t.Errorf("the language system declared at position %d was found; past the "+
 			"bound of %d the list stops being read", declared-1, maxLangSys)
 	}

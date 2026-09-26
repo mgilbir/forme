@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // What this engine reads, and what it does about a document that is not it.
@@ -144,7 +146,7 @@ func (t *tokenizer) checkDeclaredEncoding() {
 	if len(head) > maxEncodingSniff {
 		head = head[:maxEncodingSniff]
 	}
-	lower := strings.ToLower(head)
+	lower := ascii.Lower(head)
 	checkedASCII, ascii := false, false
 	for at := 0; ; {
 		i := strings.Index(lower[at:], "<meta")
@@ -207,18 +209,21 @@ func charsetOf(tag string) (string, bool) {
 	if i < 0 {
 		return "", false
 	}
-	rest := strings.TrimSpace(tag[i+len("charset"):])
+	// The white space around the "=" and the label is HTML's ASCII white
+	// space, the five bytes, and nothing else: a no-break space before
+	// "utf-8" is part of what the label says, and makes it no label at all.
+	rest := ascii.TrimSpace(tag[i+len("charset"):])
 	if !strings.HasPrefix(rest, "=") {
 		return "", false
 	}
-	rest = strings.TrimSpace(rest[1:])
+	rest = ascii.TrimSpace(rest[1:])
 	// The value may be quoted, in either quote, and in the http-equiv spelling
 	// the quotes are around the whole of the content and not around the label.
 	if len(rest) > 0 && (rest[0] == '"' || rest[0] == '\'') {
 		rest = rest[1:]
 	}
-	label := strings.TrimFunc(rest, func(r rune) bool { return r == ' ' || r == '\t' })
-	if j := strings.IndexAny(label, " \t\"';>/"); j >= 0 {
+	label := ascii.TrimSpace(rest)
+	if j := strings.IndexAny(label, " \t\n\f\r\"';>/"); j >= 0 {
 		label = label[:j]
 	}
 	if label == "" {

@@ -1,8 +1,8 @@
 package paragraph
 
 import (
-	"strings"
-	"unicode"
+	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // hanging-punctuation, CSS Text §8.4: letting a bracket or a quote sit outside
@@ -73,7 +73,7 @@ func HangingPunctuationOf(value string) HangingPunctuation {
 	var out HangingPunctuation
 	var end string
 	seenFirst, seenLast := false, false
-	for _, word := range strings.Fields(strings.ToLower(value)) {
+	for _, word := range ascii.CSSFields(ascii.Lower(value)) {
 		switch word {
 		case "none":
 			// Valid alone and invalid beside anything else, and both answers are
@@ -129,14 +129,14 @@ func HangingPunctuationOf(value string) HangingPunctuation {
 // has no space in front of it at all.
 func HangsAtStart(r rune) bool {
 	return r == '\'' || r == '"' || r == 0x3000 ||
-		unicode.Is(unicode.Ps, r) || unicode.Is(unicode.Pi, r) || unicode.Is(unicode.Pf, r)
+		charprop.Is(r, charprop.Ps|charprop.Pi|charprop.Pf)
 }
 
 // HangsAtEnd reports whether a character is one §8.4 hangs past the end of a
 // line: "a closing bracket or quote".
 func HangsAtEnd(r rune) bool {
 	return r == '\'' || r == '"' ||
-		unicode.Is(unicode.Pe, r) || unicode.Is(unicode.Pi, r) || unicode.Is(unicode.Pf, r)
+		charprop.Is(r, charprop.Pe|charprop.Pi|charprop.Pf)
 }
 
 // LeadingHang is how many bytes at the start of a run §8.4 would hang into the

@@ -4,6 +4,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // The An+B microsyntax of CSS Syntax Level 3 §6, which is what :nth-child() and
@@ -93,10 +95,10 @@ func (p *anb) value() (AnB, bool) {
 	switch t.Kind {
 	case Ident:
 		switch {
-		case strings.EqualFold(t.Value, "odd"):
+		case ascii.EqualFold(t.Value, "odd"):
 			p.pos++
 			return AnB{2, 1}, true
-		case strings.EqualFold(t.Value, "even"):
+		case ascii.EqualFold(t.Value, "even"):
 			p.pos++
 			return AnB{2, 0}, true
 		}
@@ -166,7 +168,7 @@ func (p *anb) fromNUnit(unit string, a int) (AnB, bool) {
 // text from the "n" onwards: "n", "n-" or "n-<digits>".
 func (p *anb) afterN(rest string, a int) (AnB, bool) {
 	switch {
-	case strings.EqualFold(rest, "n"):
+	case ascii.EqualFold(rest, "n"):
 		// "3n" — B is whatever follows as separate tokens, or zero.
 		b, ok := p.trailingB()
 		if !ok {
@@ -174,7 +176,7 @@ func (p *anb) afterN(rest string, a int) (AnB, bool) {
 		}
 		return AnB{a, b}, true
 
-	case strings.EqualFold(rest, "n-"):
+	case ascii.EqualFold(rest, "n-"):
 		// "3n-" — the digits are a token of their own and carry no sign, so the
 		// "-" already read is the sign.
 		v, ok := p.signlessInteger()

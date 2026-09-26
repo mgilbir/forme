@@ -2,9 +2,9 @@ package layout
 
 import (
 	"strconv"
-	"strings"
-	"unicode"
 
+	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/paragraph"
 )
 
@@ -29,7 +29,7 @@ import (
 // It returns nothing where nothing asked: a subtree with no "hyphens: auto" in a
 // language this has patterns for costs one walk and no dictionary lookups.
 func (l *layouter) hyphenPointsIn(root *Box) map[*Box][]int {
-	g := hyphenGather{out: map[*Box][]int{}}
+	g := hyphenGather{out: map[*Box][]int{}, langs: &l.languageMemo}
 	g.walk(root)
 	g.flush()
 	if len(g.out) == 0 {
@@ -54,7 +54,7 @@ type hyphenLimits struct{ word, before, after int }
 // this cannot read leaves every limit at auto, which is the property's initial
 // value and the answer a browser gives an unreadable declaration.
 func limitsOf(value string) hyphenLimits {
-	fields := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
+	fields := ascii.CSSFields(ascii.Lower(value))
 	if len(fields) == 0 || len(fields) > 3 {
 		return hyphenLimits{}
 	}
@@ -80,6 +80,9 @@ func limitsOf(value string) hyphenLimits {
 
 // hyphenGather is one word being collected across boxes.
 type hyphenGather struct {
+	// langs is the layouter's, which is what the language of each box is
+	// asked of. See languageMemo.
+	langs *languageMemo
 	// word is the letters gathered so far.
 	word []rune
 	// from is where each of those letters came from: the box and the rune
@@ -155,7 +158,7 @@ func (g *hyphenGather) text(b *Box) {
 		g.flush()
 		return
 	}
-	if !hyphenatesLanguage(boxHyphenation(b)) {
+	if !hyphenatesLanguage(g.langs.boxHyphenation(b)) {
 		g.flush()
 		return
 	}
@@ -209,10 +212,10 @@ func (g *hyphenGather) text(b *Box) {
 // before it belongs to whatever it was written on, which is not a word this
 // gathered.
 func (g *hyphenGather) continuesTheWord(r rune) bool {
-	if unicode.IsLetter(r) {
+	if charprop.Is(r, charprop.L) {
 		return true
 	}
-	return len(g.word) > 0 && unicode.In(r, unicode.Mn, unicode.Mc, unicode.Me)
+	return len(g.word) > 0 && charprop.Is(r, charprop.M)
 }
 
 // flush asks the dictionary about the word gathered so far and records where it
@@ -236,7 +239,7 @@ func (g *hyphenGather) flush() {
 	}
 	// The language is the one the word's letters are in, and every box that
 	// contributed to it agreed — text() refuses a box that did not.
-	points := paragraph.HyphenPoints(string(word), boxHyphenation(from[0].box),
+	points := paragraph.HyphenPoints(string(word), g.langs.boxHyphenation(from[0].box),
 		limits.before, limits.after)
 	for _, p := range points {
 		// A point after the p-th letter of the word is a point after the letter

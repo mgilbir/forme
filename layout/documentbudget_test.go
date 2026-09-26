@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/costtest"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -29,83 +29,16 @@ import (
 // can amplify, and these are algorithms that were made linear where they stand
 // rather than bounded (see budget.go); charging them so that a test could
 // count them would be instrumenting the engine for its tests. So the timing is
-// built so that a busy machine cannot decide it; see requireLinear.
-
-// timings is how many times each side of a timed ratio is measured, and
-// timingWindow the least time one measurement of the shape at n is made to
-// take.
-const (
-	timings      = 15
-	timingWindow = 20 * time.Millisecond
-)
-
-// timeCalls is how long k calls of f take, from a collected heap, so that no
-// measurement pays for the garbage of the one before it.
-func timeCalls(k int, f func()) time.Duration {
-	runtime.GC()
-	start := time.Now()
-	for range k {
-		f()
-	}
-	return time.Since(start)
-}
-
-// repsFor is how many calls make one measurement: the least number whose four
-// times f takes timingWindow, found as testing.B finds its N, by growing it
-// towards what the last measurement predicts.
-func repsFor(f func()) int {
-	reps := 1
-	for reps < 1<<20 {
-		d := timeCalls(4*reps, f)
-		if d >= timingWindow {
-			break
-		}
-		next := int(1.2 * float64(reps) * float64(timingWindow) / float64(max(d, time.Microsecond)))
-		reps = min(max(next, reps+1), 100*reps)
-	}
-	return reps
-}
+// built so that a busy machine cannot decide it; see costtest.Time.
 
 // requireLinear fails when build(4n) takes more than eight times as long as
-// build(n), timed.
-//
-// A timing is spoiled by whatever else the machine is doing — the rest of the
-// suite runs beside this, and a CI runner is shared — and every way a busy
-// machine spoils one reads as a steeper curve, so each of these is closed:
-//
-//   - A window too short to measure: a millisecond is a scheduler's slice, and
-//     one lost slice in it doubles it. Calls are repeated until the shape at n
-//     takes timingWindow, as testing.B repeats them.
-//   - Windows of different lengths: a longer window is more likely to be
-//     spoiled, so the least of several short timings and the least of several
-//     long ones are not alike, and the long one is the 4n side. So it is 4·reps
-//     calls at n against reps calls at 4n, which are the same length when the
-//     work is linear.
-//   - Too few chances: each side is the least of fifteen timings, not three.
-//   - Load that comes and goes: the two sides are measured alternately, so a
-//     spell of it falls on both, and each from a collected heap.
-//
-// build is called once at each size before anything is measured, so that
-// every lazily built table is built and a fixture a test memoises is made.
+// build(n), timed by costtest.Time.
 func requireLinear(t *testing.T, what string, n int, build func(n int)) {
 	t.Helper()
-	small, large := func() { build(n) }, func() { build(4 * n) }
-	small()
-	large()
-	reps := repsFor(small)
-	a, b := time.Duration(1<<63-1), time.Duration(1<<63-1)
-	for range timings {
-		a = min(a, timeCalls(4*reps, small))
-		b = min(b, timeCalls(reps, large))
-	}
-	// Per call, 4n against n.
-	ratio := 4 * float64(b) / float64(a)
-	t.Logf("%s: four times the input took %.1f times as long (%d calls at n in %v, "+
-		"%d at 4n in %v)", what, ratio, 4*reps, a, reps, b)
-	if ratio > 8 {
-		t.Errorf("%s: %d calls at n took %v and %d at 4n took %v, so four times the "+
-			"input took %.1f times as long; linear work is about four, and quadratic "+
-			"is about sixteen", what, 4*reps, a, reps, b, ratio)
+	r := costtest.Time(t, what, func() { build(n) }, func() { build(4 * n) })
+	if r.Ratio > 8 {
+		t.Errorf("%s: four times the input took %v; linear work is about four, and "+
+			"quadratic is about sixteen", what, r)
 	}
 }
 
@@ -153,7 +86,7 @@ func TestNestedRubiesAreEachWalkedOnce(t *testing.T) {
 			})
 			built[n] = b
 		}
-		reportUnsupportedDisplays(b.Document, b.Styles, NewRecorder(nil))
+		reportUnsupportedDisplays(b.Document, b.Styles, nil, NewRecorder(nil))
 	})
 }
 

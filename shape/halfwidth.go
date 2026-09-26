@@ -19,11 +19,11 @@ import "github.com/mgilbir/forme/font"
 //
 // # Why this is read here and not turned on
 //
-// 'halt' is an optional positioning feature and defaultPositionFeatures is
-// deliberately without it, for the reason written there: reading lookups from
-// every feature a script *offers* turns the optional ones on for every
-// document, and 'palt' next to it narrows every full-width kana to its ink.
-// Nothing here changes that. The feature is not applied to any run; its
+// 'halt' is an optional positioning feature, which a plan applies only when a
+// caller asks for it by name, for the reason defaultfeatures_test.go gives:
+// reading lookups from every feature a script *offers* turns the optional ones
+// on for every document, and 'palt' next to it narrows every full-width kana to
+// its ink. Nothing here changes that. The feature is not applied to any run; its
 // adjustments are read into a table of their own so that a caller with a
 // character to trim can ask the font what the trimmed form is, one glyph at a
 // time, and get the font's answer rather than an assumption about which half
@@ -58,14 +58,10 @@ func (l *layout) readHalfWidth(gpos []byte, idx *featureIndex) {
 	}
 }
 
-// halfWidthSubtable is singlePosSubtable writing to the half-width table.
-//
-// It is a copy of that function's shape rather than a parameter on it, because
-// the two are not the same operation seen twice: one fills the adjustments that
-// are applied to every run, and this fills a table that is applied to nothing
-// and only answered from. Sharing the destination behind a flag would put the
-// optional feature one wrong argument away from the default set, which is the
-// mistake the note above exists to prevent.
+// halfWidthSubtable reads one single adjustment subtable of 'halt' into the
+// half-width table: one adjustment for every covered glyph (format 1) or one
+// per glyph (format 2). It fills a table that is applied to nothing and only
+// answered from.
 func (l *layout) halfWidthSubtable(sub []byte) {
 	if len(sub) < 6 {
 		return

@@ -1,6 +1,8 @@
 package paragraph
 
-import "strings"
+import (
+	"github.com/mgilbir/forme/internal/ascii"
+)
 
 // hyphens, CSS Text §6.1: whether a word may be broken where it says it may.
 //
@@ -60,7 +62,7 @@ func (h Hyphens) Soft() bool { return !h.None }
 // does not know. The caller, which knows the language, decides whether there is
 // anything to report. See HyphenatesLanguage, and WordBreakOf.
 func HyphensOf(value string) Hyphens {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case "none":
 		return Hyphens{None: true}
 	case "auto":

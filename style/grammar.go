@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // The value grammar: for every registered property, what its value may be.
@@ -142,7 +143,7 @@ func identOf(v css.ComponentValue) (string, bool) {
 	if !v.IsToken() || v.Token.Kind != css.Ident {
 		return "", false
 	}
-	return strings.ToLower(v.Token.Value), true
+	return ascii.Lower(v.Token.Value), true
 }
 
 // either is the first of several terms that takes a component.
@@ -226,8 +227,8 @@ func num(n numeric) term {
 				if !n.length || !n.inRange(t.Number) {
 					return invalid
 				}
-				if unresolvedUnits[strings.ToLower(t.Unit)] {
-					return unevaluated("the unit " + strings.ToLower(t.Unit))
+				if unresolvedUnits[ascii.Lower(t.Unit)] {
+					return unevaluated("the unit " + ascii.Lower(t.Unit))
 				}
 				return valid
 			case kindAngle:
@@ -264,7 +265,7 @@ const (
 // unitKind is what a dimension's unit measures, kindNone for a unit CSS does
 // not define.
 func unitKind(unit string) mathKind {
-	u := strings.ToLower(unit)
+	u := ascii.Lower(unit)
 	if unresolvedUnits[u] {
 		return kindLength
 	}
@@ -310,7 +311,7 @@ var otherFunctions = map[string]bool{
 
 // mathTerm judges a function in a numeric slot.
 func mathTerm(v css.ComponentValue, n numeric) verdict {
-	name := strings.ToLower(v.Token.Value)
+	name := ascii.Lower(v.Token.Value)
 	if otherFunctions[name] {
 		return unevaluated(name + "()")
 	}
@@ -355,7 +356,7 @@ func (n numeric) takes(k mathKind) bool {
 // one side, and a quotient a number on the right. An expression that does not
 // type-check is not a value, and the declaration holding it is invalid.
 func mathOf(fn css.ComponentValue) (kind mathKind, evaluated, ok bool) {
-	name := strings.ToLower(fn.Token.Value)
+	name := ascii.Lower(fn.Token.Value)
 	args := splitOnComma(fn.Values)
 	sum := func(vals []css.ComponentValue) (mathKind, bool, bool) { return mathSum(vals) }
 	all := func(want int) ([]mathKind, bool) {
@@ -564,7 +565,7 @@ func mathValue(vals []css.ComponentValue) (mathKind, bool, bool) {
 	case v.IsBlock() && v.Token.Kind == css.LeftParen:
 		return mathSum(v.Values)
 	case v.IsFunction():
-		name := strings.ToLower(v.Token.Value)
+		name := ascii.Lower(v.Token.Value)
 		if !mathFunctions[name] {
 			return kindNone, false, false
 		}
@@ -587,7 +588,7 @@ func mathValue(vals []css.ComponentValue) (mathKind, bool, bool) {
 		_, _, supported := pxPerUnit(t.Unit, LengthContext{})
 		return k, k == kindLength && supported, true
 	case css.Ident:
-		switch strings.ToLower(t.Value) {
+		switch ascii.Lower(t.Value) {
 		case "e", "pi", "infinity", "-infinity", "nan":
 			return kindNumber, false, true
 		}
@@ -642,7 +643,7 @@ func colour(v css.ComponentValue) verdict {
 	if !v.IsFunction() {
 		return invalid
 	}
-	name := strings.ToLower(v.Token.Value)
+	name := ascii.Lower(v.Token.Value)
 	switch {
 	case unevaluatedColourFunctions[name]:
 		return unevaluated(name + "()")
@@ -692,8 +693,8 @@ var systemColours = map[string]bool{
 
 func holdsMathOrFrom(vals []css.ComponentValue) bool {
 	for _, v := range vals {
-		if v.IsFunction() && (mathFunctions[strings.ToLower(v.Token.Value)] ||
-			otherFunctions[strings.ToLower(v.Token.Value)]) {
+		if v.IsFunction() && (mathFunctions[ascii.Lower(v.Token.Value)] ||
+			otherFunctions[ascii.Lower(v.Token.Value)]) {
 			return true
 		}
 		if name, ok := identOf(v); ok && name == "from" {
@@ -716,8 +717,8 @@ func url(v css.ComponentValue) verdict {
 	if v.IsToken() && v.Token.Kind == css.URL {
 		return valid
 	}
-	if v.IsFunction() && (strings.EqualFold(v.Token.Value, "url") ||
-		strings.EqualFold(v.Token.Value, "src")) {
+	if v.IsFunction() && (ascii.EqualFold(v.Token.Value, "url") ||
+		ascii.EqualFold(v.Token.Value, "src")) {
 		return valid
 	}
 	return invalid
@@ -730,7 +731,7 @@ func image(v css.ComponentValue) verdict {
 		return valid
 	}
 	if v.IsFunction() {
-		switch strings.ToLower(v.Token.Value) {
+		switch ascii.Lower(v.Token.Value) {
 		case "image", "image-set", "-webkit-image-set", "cross-fade", "element",
 			"linear-gradient", "radial-gradient", "conic-gradient",
 			"repeating-linear-gradient", "repeating-radial-gradient",

@@ -26,14 +26,23 @@ func coverageFormat2(n int) []byte {
 
 // wideCoverageFont is a font whose GPOS holds one lookup whose coverage states
 // records naming the whole glyph space.
+//
+// The lookup is a pair adjustment, because a reader still expands that at
+// load: the flat reading of a face's kerning, which the pair across a run
+// boundary asks (see kernLookup), lists the glyphs that can begin a pair. It
+// was a single adjustment, which is read at load no longer — the positioning
+// pass searches a lookup's coverage where it meets a glyph — so that fixture
+// now costs nothing to load and says nothing about the bound.
 func wideCoverageFont(records int) []byte {
-	sub := make([]byte, 6)
+	sub := make([]byte, 12)
 	binary.BigEndian.PutUint16(sub[0:], 1)      // posFormat 1
-	binary.BigEndian.PutUint16(sub[2:], 12)     // coverage offset
-	binary.BigEndian.PutUint16(sub[4:], 0x0004) // XAdvance only
-	// The value record: an advance of one unit, so that the adjustment is
-	// something and the reader has to visit every glyph it applies to.
-	sub = append(sub, 0, 1, 0, 0, 0, 0)
+	binary.BigEndian.PutUint16(sub[4:], 0x0004) // valueFormat1: XAdvance
+	binary.BigEndian.PutUint16(sub[8:], 1)      // one pair set
+	binary.BigEndian.PutUint16(sub[10:], 12)    // at 12
+	// The pair set: one pair, with 'a', of one unit, so that the pair is
+	// something and the reader has to visit every glyph that begins it.
+	sub = append(sub, 0, 1, 0, 1, 0, 1)
+	binary.BigEndian.PutUint16(sub[2:], uint16(len(sub)))
 	sub = append(sub, coverageFormat2(records)...)
 
 	return fonttest.SFNT(fonttest.SFNTOptions{
@@ -41,7 +50,7 @@ func wideCoverageFont(records int) []byte {
 		Glyphs: []fonttest.Glyph{{Rune: 'a', Advance: 500, HasShape: true}},
 		Extra: map[string][]byte{
 			"GPOS": fonttest.GPOSLookups(
-				[]fonttest.Lookup{{Type: 1, Subtables: [][]byte{sub}}},
+				[]fonttest.Lookup{{Type: 2, Subtables: [][]byte{sub}}},
 				map[string][]int{"kern": {0}}),
 		},
 	})
@@ -69,7 +78,7 @@ func TestCoverageExpansionIsBoundedForTheWholeTable(t *testing.T) {
 		t.Fatalf("loading: %v", err)
 	}
 	// The tables are read per script, so this is the read a document causes.
-	l := readPositioning(f.layoutTables, nil, nil)
+	l := readPositioning(f.layoutTables, nil, noRequiredFeature, nil)
 	budget := coverageBudget(f.layoutTables["GPOS"], f.layoutTables["GDEF"],
 		f.layoutTables["kern"])
 	if l.covWork > 0 {
@@ -99,7 +108,7 @@ func TestARealFaceDoesNotSpendItsCoverageAllowance(t *testing.T) {
 		}
 		// Every feature of every script, which is more coverage than any one
 		// document asks this face to read.
-		pos := readPositioning(f.layoutTables, nil, nil)
+		pos := readPositioning(f.layoutTables, nil, noRequiredFeature, nil)
 		sub := readLayout(f.layoutTables, nil, pos, nil)
 		for _, l := range []struct {
 			what string

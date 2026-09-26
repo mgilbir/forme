@@ -523,9 +523,10 @@ func TestShorthandWithAWideKeyword(t *testing.T) {
 	}
 }
 
-// TestUnsupportedPropertyIsReported is the guardrail of §6.3, and the cheapest
-// one in the design. An engine implementing a subset *will* meet declarations it
-// does not act on, and a page where one was dropped is plausible and wrong.
+// TestUnsupportedPropertyIsReported is the guardrail against a declaration this
+// engine does not act on, and the cheapest one there is. An engine implementing
+// a subset *will* meet such declarations, and a page where one was dropped is
+// plausible and wrong.
 func TestUnsupportedPropertyIsReported(t *testing.T) {
 	doc := parseDoc(t, "<p id=\"target\">x</p>")
 	got := Apply(doc, []Sheet{author(t, "p { text-shadow: 1px 1px red; font-family: kept }")})

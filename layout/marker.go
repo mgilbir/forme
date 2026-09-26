@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mgilbir/forme/bidi"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -38,6 +40,20 @@ type Marker struct {
 	// ImageRect is where the picture goes, relative to the fragment's border
 	// box, at the image's own intrinsic size. §12.6.2 gives no way to scale it.
 	ImageRect Rect
+
+	// pieces is Text as it is drawn, where that is not one left-to-right run:
+	// the stretches of one direction, in the order they go from left to
+	// right. See markerPieces. Text stays the marker in logical order, which
+	// is what a reader copying it out of the page wants.
+	pieces []markerPiece
+}
+
+// markerPiece is one stretch of an outside marker's text that runs one way.
+type markerPiece struct {
+	text string
+	// x is where it starts, from the marker's At.
+	x   style.Unit
+	rtl bool
 }
 
 // markerFor works out the marker an outside list item generates, or nil.
@@ -60,7 +76,8 @@ func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 	}
 
 	size := b.FontSize
-	width := l.br.Measure(face, text, size)
+	rtl := isRTL(b)
+	pieces, width := l.markerPieces(face, text, size, rtl)
 	lineHeight := l.lineHeight(b)
 	// The marker sits on the item's *first formatted line*, the same line its x
 	// is measured against — so where there is one, its baseline is the marker's.
@@ -106,7 +123,6 @@ func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 	// bullets on the left has them at the far end of the line from the words
 	// they number. start is the distance the float pushes the line in from that
 	// side, and the two sides are mirror images of each other.
-	rtl := isRTL(b)
 	start := l.firstLineStart(frag, origin, first, found, rtl)
 	gap := markerGap(size)
 	// before is where a thing w wide goes so that it ends a gap short of the
@@ -123,8 +139,9 @@ func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 		// "outside" puts the marker in the margin, clear of the content box,
 		// with a gap of half an em between it and the text — which is what
 		// keeps a bullet from touching the word after it.
-		At:    Point{X: before(width), Y: baseline},
-		Color: markerColour(b),
+		At:     Point{X: before(width), Y: baseline},
+		Color:  markerColour(b),
+		pieces: pieces,
 	}
 	if img := b.MarkerImage; img != nil {
 		// The picture goes where the text would have gone, at its own size,
@@ -143,10 +160,65 @@ func (l *layouter) markerFor(b *Box, frag *Fragment, origin flow) *Marker {
 	return m
 }
 
+// markerPieces is an outside marker's text in the order it is drawn, and the
+// width of all of it.
+//
+// css-lists-3 gives ::marker "unicode-bidi: isolate" in the user agent's
+// sheet, and its direction is the list item's, which it inherits: so the
+// marker's text is a paragraph of its own, resolved by UAX #9 with the item's
+// direction as its base. In a right-to-left item "12." is a European number
+// and a common separator, and rule W4 does not join them — the stop is
+// resolved to the paragraph's direction and goes on the far side of the
+// number, which is to its left. Drawn as one run in logical order, every
+// numbered item in an Arabic or Hebrew list read "12." where the reader looks
+// for ".12".
+//
+// The stretches are cut where the resolved level changes and put in visual
+// order by rule L2, each carrying its own direction for the backend, which
+// sets a right-to-left one with its brackets mirrored (L4). A marker that is
+// one left-to-right run is returned as no pieces at all, and drawn exactly as
+// it always was.
+func (l *layouter) markerPieces(face *shape.Face, text string, size style.Unit, rtl bool) ([]markerPiece, style.Unit) {
+	if text == "" || (!rtl && !bidi.NeedsAlgorithm(text)) {
+		return nil, l.br.Measure(face, text, size)
+	}
+	dir := bidi.LeftToRight
+	if rtl {
+		dir = bidi.RightToLeft
+	}
+	runes := []rune(text)
+	levels := bidi.Resolve(runes, dir).Levels()
+	type stretch struct{ from, to, level int }
+	var stretches []stretch
+	for i, lv := range levels {
+		if n := len(stretches); n > 0 && stretches[n-1].level == lv {
+			stretches[n-1].to = i + 1
+			continue
+		}
+		stretches = append(stretches, stretch{from: i, to: i + 1, level: lv})
+	}
+	order := make([]int, len(stretches))
+	for i, s := range stretches {
+		order[i] = s.level
+	}
+	var pieces []markerPiece
+	var x style.Unit
+	for _, k := range bidi.VisualOrder(order) {
+		s := stretches[k]
+		t := string(runes[s.from:s.to])
+		pieces = append(pieces, markerPiece{text: t, x: x, rtl: s.level%2 == 1})
+		x = x.Add(l.br.Measure(face, t, size))
+	}
+	if len(pieces) == 1 && !pieces[0].rtl {
+		return nil, l.br.Measure(face, text, size)
+	}
+	return pieces, x
+}
+
 // markerInside reports "list-style-position: inside".
 func markerInside(b *Box) bool {
 	return b.ListItem &&
-		strings.EqualFold(strings.TrimSpace(b.Style.Get("list-style-position")), "inside")
+		ascii.EqualFold(ascii.TrimCSSSpace(b.Style.Get("list-style-position")), "inside")
 }
 
 // markerGap is the space between a marker and the text it belongs to.
@@ -327,14 +399,28 @@ func (l *layouter) markerItem(b *Box, para *bidiBuilder) (inlineItem, bool) {
 		Leads: true, Above: above, Below: below,
 	}
 	if para != nil {
+		// In an isolate of its own, with the item's direction: the user
+		// agent's "::marker { unicode-bidi: isolate }" of css-lists-3, which
+		// markerPieces reads the same way for an outside marker. Without it the
+		// marker's characters were resolved with the text after them, and in a
+		// right-to-left item whose text begins with a number the stop between
+		// the two — a common separator between two European numbers, which
+		// rule W4 makes a number — joined "1." to "2024" as one left-to-right
+		// number, with the marker on its left, at the end of the line.
+		open := []rune{runeLRI}
+		if isRTL(b) {
+			open = []rune{runeRLI}
+		}
+		para.Enter(open)
 		item.BidiPara, item.BidiStart, item.BidiEnd = para.Add(text)
+		para.Leave(open, []rune{runePDI})
 	}
 	return item, true
 }
 
 // markerText renders the marker for a list-style-type and a position.
 func markerText(listStyle string, index int) string {
-	switch strings.ToLower(strings.TrimSpace(listStyle)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(listStyle)) {
 	case "none":
 		return ""
 	case "circle":
@@ -350,7 +436,7 @@ func markerText(listStyle string, index int) string {
 	case "upper-alpha", "upper-latin":
 		return alphabetic(index, 'A') + "."
 	case "lower-roman":
-		return strings.ToLower(roman(index)) + "."
+		return ascii.Lower(roman(index)) + "."
 	case "upper-roman":
 		return roman(index) + "."
 	case "lower-greek":

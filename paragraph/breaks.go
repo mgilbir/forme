@@ -2,9 +2,9 @@ package paragraph
 
 import (
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/style"
 )
@@ -37,7 +37,7 @@ import (
 // it was written to make. Without it a tab at 7.9ch of an 8ch stop advances a
 // tenth of a character and the text after it is a tenth of a character from the
 // text before it — which looks like no tab at all rather than like a wrong one,
-// and is the shape of silent difference §6 is about.
+// and is the shape of silent difference a finding exists to name.
 //
 // A floor of zero is *absent* rather than "no distance is short enough": the
 // comparison is strict, so a zero floor can never fire, and a caller that could
@@ -724,7 +724,7 @@ func SplitAtBreaksAfter(text string, ws WhiteSpace, wb WordBreak, lb LineBreak, 
 			// testdata/fuzz/FuzzSplitAtBreaks. Swallowing the separator outright
 			// satisfies the reftest and loses a character.
 			carried := ""
-			if unicode.Is(unicode.Cc, r) {
+			if charprop.Is(r, charprop.Cc) {
 				cur.WriteRune(r)
 			} else {
 				carried = string(r)
@@ -1069,7 +1069,7 @@ type Trailing struct {
 // ID needs no separate test. Punctuation, spaces and symbols are not, which is
 // the half the value's tests are about.
 func isLetterUnit(r rune) bool {
-	return unicode.IsLetter(r) || unicode.IsNumber(r)
+	return charprop.Is(r, charprop.L|charprop.N)
 }
 
 // IsLetterUnit is isLetterUnit for the layout package, which asks the same
@@ -1166,7 +1166,7 @@ func spaceFollows(r rune) bool {
 	case IsMandatoryBreak(r):
 		return true
 	}
-	return unicode.Is(unicode.Zs, r) && inLineBreakRanges(r, noBreakBeforeRanges[:])
+	return charprop.Is(r, charprop.Zs) && inLineBreakRanges(r, noBreakBeforeRanges[:])
 }
 
 // IsIdeographic reports whether a rune breaks on both sides, which is what makes

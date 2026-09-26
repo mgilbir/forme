@@ -19,6 +19,8 @@ import (
 	_ "image/png"
 
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -183,6 +185,10 @@ func (r *ReplacedContent) Paints() bool {
 
 // replacedLoader turns the references in a box tree into loaded content.
 type replacedLoader struct {
+	// languageMemo is the writing system an alt text is collapsed in. See
+	// languageMemo.
+	languageMemo
+
 	res ResourceResolver
 	rec *Recorder
 
@@ -267,19 +273,19 @@ func resolveReplaced(root *Box, res ResourceResolver, rec *Recorder) {
 }
 
 func (l *replacedLoader) walk(b *Box) {
-	if b.Element != nil && strings.EqualFold(b.Element.Name, "img") {
+	if b.Element != nil && ascii.EqualFold(b.Element.Name, "img") {
 		l.image(b)
 	}
-	if b.Element != nil && strings.EqualFold(b.Element.Name, "object") {
+	if b.Element != nil && ascii.EqualFold(b.Element.Name, "object") {
 		l.object(b)
 	}
-	if b.Element != nil && strings.EqualFold(b.Element.Name, "iframe") {
+	if b.Element != nil && ascii.EqualFold(b.Element.Name, "iframe") {
 		l.iframe(b)
 	}
-	if b.Element != nil && strings.EqualFold(b.Element.Name, "canvas") {
+	if b.Element != nil && ascii.EqualFold(b.Element.Name, "canvas") {
 		l.canvas(b)
 	}
-	if b.Element != nil && strings.EqualFold(b.Element.Name, "video") {
+	if b.Element != nil && ascii.EqualFold(b.Element.Name, "video") {
 		l.video(b)
 	}
 	if b.Element != nil && b.Element.Foreign != "" {
@@ -335,7 +341,7 @@ func (l *replacedLoader) attachBackground(b *Box, ref string, content *ReplacedC
 // image loads one <img>, or explains why it did not.
 func (l *replacedLoader) image(b *Box) {
 	el := b.Element
-	if v, ok := el.Attr("srcset"); ok && strings.TrimSpace(v) != "" {
+	if v, ok := el.Attr("srcset"); ok && ascii.TrimSpace(v) != "" {
 		// A srcset offers several files and rules for choosing between them —
 		// by pixel density, by rendered width, by what a <picture> above it
 		// says. This engine takes "src" and says so, because the failure
@@ -352,7 +358,7 @@ func (l *replacedLoader) image(b *Box) {
 		})
 	}
 	src, _ := el.Attr("src")
-	src = strings.TrimSpace(src)
+	src = ascii.TrimSpace(src)
 	if src == "" {
 		// An <img> with no src is not a broken image, it is an element that
 		// names nothing. HTML says it represents nothing at all, and there is
@@ -414,7 +420,7 @@ func (l *replacedLoader) image(b *Box) {
 // was.
 func (l *replacedLoader) object(b *Box) {
 	data, ok := b.Element.Attr("data")
-	data = strings.TrimSpace(data)
+	data = ascii.TrimSpace(data)
 	if !ok || data == "" {
 		return
 	}
@@ -559,7 +565,7 @@ func (l *replacedLoader) video(b *Box) {
 	// §10.3.2's default dimensions rather than to a box of no size.
 	b.Replaced = &ReplacedContent{}
 	named := false
-	if src, ok := b.Element.Attr("src"); ok && strings.TrimSpace(src) != "" {
+	if src, ok := b.Element.Attr("src"); ok && ascii.TrimSpace(src) != "" {
 		named = true
 	}
 	// The <source> children are read from the *element* and not from the box,
@@ -567,8 +573,8 @@ func (l *replacedLoader) video(b *Box) {
 	// and the box builder leaves it out rather than this pass throwing it away.
 	// See layout.replacedFallback.
 	for _, c := range b.Element.Children {
-		if c.Type == html.ElementNode && strings.EqualFold(c.Name, "source") {
-			if src, ok := c.Attr("src"); ok && strings.TrimSpace(src) != "" {
+		if c.Type == html.ElementNode && ascii.EqualFold(c.Name, "source") {
+			if src, ok := c.Attr("src"); ok && ascii.TrimSpace(src) != "" {
 				named = true
 			}
 		}
@@ -579,8 +585,8 @@ func (l *replacedLoader) video(b *Box) {
 	// decoded it once per element — the one path where naming a file again
 	// needed no trick to cost a decode again (audit C19). A poster that failed
 	// is reported for the first element that names it, as a background is.
-	if poster, ok := b.Element.Attr("poster"); ok && strings.TrimSpace(poster) != "" {
-		content, why := l.memoized(strings.TrimSpace(poster), "video poster", svgAsImage)
+	if poster, ok := b.Element.Attr("poster"); ok && ascii.TrimSpace(poster) != "" {
+		content, why := l.memoized(ascii.TrimSpace(poster), "video poster", svgAsImage)
 		switch {
 		case content != nil:
 			b.Replaced = content
@@ -673,10 +679,10 @@ func (l *replacedLoader) markerImage(b *Box) {
 		return
 	}
 	ref, ok := urlValue(b.Style.Get("list-style-image"))
-	if !ok || strings.TrimSpace(ref) == "" {
+	if !ok || ascii.TrimSpace(ref) == "" {
 		return
 	}
-	ref = strings.TrimSpace(ref)
+	ref = ascii.TrimSpace(ref)
 	if content, _ := l.memoized(ref, "list marker image", svgAsImage); content != nil {
 		b.MarkerImage = content
 	}
@@ -751,13 +757,13 @@ func (l *replacedLoader) iframe(b *Box) {
 		})
 		return
 	}
-	if !hasSrc || strings.TrimSpace(src) == "" {
+	if !hasSrc || ascii.TrimSpace(src) == "" {
 		return
 	}
 	l.rec.ReportDetail(Finding{
 		Rule:   RuleResourceBlocked,
 		Source: AtHTML(b.Element.Offset),
-		Message: "the document at " + quoteValue(strings.TrimSpace(src)) +
+		Message: "the document at " + quoteValue(ascii.TrimSpace(src)) +
 			" was not loaded into this iframe: this engine creates no nested " +
 			"browsing context, so the frame was laid out at its own size and left empty",
 		Path: PathOf(b.Element),
@@ -887,7 +893,7 @@ func (l *replacedLoader) decode(src, what string, data []byte, sum [sha256.Size]
 		isSVG = isXMLMIMEType(mime)
 	}
 	if isSVG {
-		if c := svgContent(data, as); c != nil {
+		if c := svgContent(data, as, svgXMLNames); c != nil {
 			return c, nil
 		}
 		return nil, &loadFailure{
@@ -1045,7 +1051,7 @@ func decodeDataURI(src, what string, bad Rule) ([]byte, string, *loadFailure) {
 			message: "a data: " + what + " has no comma separating its type from its content",
 		}
 	}
-	meta, payload := strings.Trim(rest[:comma], " \t\n\f\r"), rest[comma+1:]
+	meta, payload := ascii.TrimSpace(rest[:comma]), rest[comma+1:]
 	if len(payload) > maxDataURIBytes {
 		return nil, "", &loadFailure{
 			rule: bad,
@@ -1075,7 +1081,7 @@ func decodeDataURI(src, what string, bad Rule) ([]byte, string, *loadFailure) {
 // that suffix is taken off the type.
 func cutBase64Meta(meta string) (string, bool) {
 	const word = "base64"
-	if len(meta) < len(word) || !strings.EqualFold(meta[len(meta)-len(word):], word) {
+	if len(meta) < len(word) || !ascii.EqualFold(meta[len(meta)-len(word):], word) {
 		return meta, false
 	}
 	head := strings.TrimRight(meta[:len(meta)-len(word)], " ")
@@ -1127,7 +1133,7 @@ func dataURIEssence(meta string) string {
 	if i := strings.IndexByte(meta, ';'); i >= 0 {
 		meta = meta[:i]
 	}
-	meta = strings.ToLower(strings.Trim(meta, " \t\n\f\r"))
+	meta = ascii.Lower(ascii.TrimSpace(meta))
 	if meta == "" || !strings.Contains(meta, "/") {
 		return "text/plain"
 	}
@@ -1165,8 +1171,8 @@ func (l *replacedLoader) altOnly(b *Box) {
 		return
 	}
 	text := collapseWhitespaceAfter(alt, b.Style.Get("white-space-collapse"),
-		wordSpaceTransformValue(b.Style), textBoundary{}, writingSystemAt(b.Element))
-	if strings.TrimSpace(text) == "" {
+		wordSpaceTransformValue(b.Style), textBoundary{}, l.writingSystemAt(b.Element))
+	if paragraph.IsDocumentWhiteSpace(text) {
 		// alt="" is a deliberate statement that the image carries no
 		// information, and generating a box for it would put a space on the
 		// line the author asked to be empty.
@@ -1306,17 +1312,14 @@ func isXMLSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
 }
 
-// hasFoldPrefix reports whether b begins with an ASCII prefix, ignoring case.
+// hasFoldPrefix reports whether b begins with an ASCII prefix, ignoring case:
+// ascii.HasPrefixFold for bytes, which this is asked of without a copy.
 func hasFoldPrefix(b []byte, prefix string) bool {
 	if len(b) < len(prefix) {
 		return false
 	}
 	for i := 0; i < len(prefix); i++ {
-		c := b[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		if c != prefix[i] {
+		if ascii.LowerByte(b[i]) != ascii.LowerByte(prefix[i]) {
 			return false
 		}
 	}
@@ -1335,7 +1338,7 @@ func hasFoldPrefix(b []byte, prefix string) bool {
 // case is the *rules*, not the plumbing — one answer to "what may an SVG be" for
 // both, rather than a second one here that would drift.
 func (l *replacedLoader) foreign(b *Box) {
-	name := strings.ToLower(b.Element.Name)
+	name := ascii.Lower(b.Element.Name)
 	if name != "svg" {
 		l.rec.ReportDetail(Finding{
 			Rule:     RuleUnsupportedElement,
@@ -1350,7 +1353,11 @@ func (l *replacedLoader) foreign(b *Box) {
 	// The element and its content together are the document, which is what the
 	// reader expects: the intrinsic size is on the root's own attributes.
 	doc := "<svg " + attrSource(b.Element) + ">" + b.Element.Foreign + "</svg>"
-	if c := svgContent([]byte(doc), svgAsImage); c != nil {
+	names := svgHTMLNames
+	if b.Element.XMLDocument() {
+		names = svgXMLNames
+	}
+	if c := svgContent([]byte(doc), svgAsImage, names); c != nil {
 		b.Replaced = c
 		return
 	}
@@ -1359,7 +1366,7 @@ func (l *replacedLoader) foreign(b *Box) {
 	// the element asked for, because the size is on the element and not in the
 	// picture. Only when the root says nothing either does it fall back to the
 	// 300 by 150 of CSS 2.1 §10.3.2.
-	if size := svgIntrinsicSize([]byte(doc), svgAsImage); size != nil {
+	if size := svgIntrinsicSize([]byte(doc), svgAsImage, names); size != nil {
 		b.Replaced = size
 	} else {
 		b.Replaced = &ReplacedContent{}
@@ -1388,7 +1395,7 @@ func attrSource(n *html.Node) string {
 		if a.Name == "" || strings.ContainsAny(a.Name, `"'<>`) {
 			continue
 		}
-		if strings.EqualFold(a.Name, "style") || strings.EqualFold(a.Name, "hidden") {
+		if ascii.EqualFold(a.Name, "style") || ascii.EqualFold(a.Name, "hidden") {
 			continue
 		}
 		b.WriteString(a.Name)

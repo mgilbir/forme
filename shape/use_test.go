@@ -63,17 +63,21 @@ func TestUseCategoriesAreWhatTheScriptsNeed(t *testing.T) {
 	}
 }
 
-// TestTheEngineTakesItsOwnViewWhereUnicodeDiffers pins the two entries that are
-// not derivable from anything, and that a shaper cannot do without.
+// TestTheEngineTakesItsOwnViewWhereUnicodeDiffers pins an entry that is not
+// derivable from anything, and that a shaper cannot do without.
 //
-// Unicode gives U+A9BE PENGKAL the position Bottom_And_Right and U+A9BF CAKRA
-// the position Right, because that is where the marks are written. The engine
-// overrides both — see testdata/ms-use/NOTICE.md — because that is not where
-// they are *drawn*, and a shaper reading Unicode's values would put each on the
-// wrong side of the letter.
+// Unicode 17 gives U+A9BE PENGKAL the position Bottom_And_Right, which is where
+// the mark is written. The engine overrides it to Right — see
+// testdata/ms-use/NOTICE.md — because that is where it is *drawn*, and a
+// shaper reading Unicode's value would put it on the wrong side of the letter.
+//
+// U+A9BF CAKRA is here beside it as the control. The override makes it Bottom,
+// and Unicode 17 says Bottom_And_Left, which the engine reads as Blw as well:
+// this comment used to say Unicode gave it Right, which an earlier release did,
+// and that the override was what saved it. Both answers are Blw now.
 //
 // Verified to fail: with the override files left out of cmd/genuse's inputs,
-// PENGKAL comes out Blw and CAKRA comes out Pst.
+// PENGKAL comes out Blw; CAKRA comes out Blw either way.
 func TestTheEngineTakesItsOwnViewWhereUnicodeDiffers(t *testing.T) {
 	for _, tc := range []struct {
 		r        rune
@@ -83,7 +87,7 @@ func TestTheEngineTakesItsOwnViewWhereUnicodeDiffers(t *testing.T) {
 		unicodes string
 	}{
 		{0xA9BE, useM, usePosPst, "JAVANESE CONSONANT SIGN PENGKAL", "Bottom_And_Right, which would be Blw"},
-		{0xA9BF, useM, usePosBlw, "JAVANESE CONSONANT SIGN CAKRA", "Right, which would be Pst"},
+		{0xA9BF, useM, usePosBlw, "JAVANESE CONSONANT SIGN CAKRA", "Bottom_And_Left, which is Blw too"},
 	} {
 		cat, pos := useCategoryOf(tc.r)
 		if cat != tc.cat || pos != tc.pos {

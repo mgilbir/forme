@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -299,10 +300,7 @@ func (d *documentFonts) FaceForFamily(family, text string, bold, italic bool) (*
 // back false, because a family whose every face excludes the text has nothing to
 // offer and the next family in the document's list should be asked.
 func (d *documentFonts) faceFor(family, text string, bold, italic bool) (*shape.Face, bool) {
-	key := strings.ToLower(strings.TrimSpace(family))
-	key = strings.Trim(key, `"'`)
-	key = strings.TrimSpace(key)
-	candidates := d.byFamily[key]
+	candidates := d.byFamily[familyKey(family)]
 	if len(candidates) == 0 {
 		// A family the document did not define is the caller's, and the
 		// caller's set is asked the question it can answer. A plain FontSet
@@ -439,7 +437,7 @@ func loadFontFaces(pending []pendingFontFace, res ResourceResolver, base FontSet
 		}
 		df := &documentFace{rule: rule, face: face, ref: ref}
 		set.faces = append(set.faces, df)
-		key := strings.ToLower(rule.family)
+		key := familyKey(rule.family)
 		set.byFamily[key] = append(set.byFamily[key], df)
 	}
 	return wrapDocumentFonts(set)
@@ -514,7 +512,7 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 	}
 
 	for _, d := range decls {
-		switch strings.ToLower(d.Name) {
+		switch ascii.Lower(d.Name) {
 		case "font-family":
 			out.family = descriptorFamily(d.Value)
 		case "src":
@@ -547,7 +545,7 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 				Rule:     RuleUnsupportedProperty,
 				Source:   Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
 				Message:  "the @font-face descriptor " + quoteValue(d.Name) + " is not applied",
-				Property: strings.ToLower(d.Name),
+				Property: ascii.Lower(d.Name),
 			})
 		}
 	}
@@ -653,7 +651,7 @@ func parseSrcEntry(vals []css.ComponentValue) (fontSource, bool) {
 			}
 			out = fontSource{ref: v.Token.Value}
 			have = true
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "url"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "url"):
 			if have {
 				return fontSource{}, false
 			}
@@ -663,7 +661,7 @@ func parseSrcEntry(vals []css.ComponentValue) (fontSource, bool) {
 			}
 			out = fontSource{ref: ref}
 			have = true
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "local"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "local"):
 			if have {
 				return fontSource{}, false
 			}
@@ -671,23 +669,23 @@ func parseSrcEntry(vals []css.ComponentValue) (fontSource, bool) {
 			if !ok {
 				// local() with a bare unquoted name is legal and common:
 				// local(Ahem). The name is the concatenation of the idents.
-				name = strings.TrimSpace(descriptorFamily(v.Values))
+				name = ascii.TrimCSSSpace(descriptorFamily(v.Values))
 				if name == "" {
 					return fontSource{}, false
 				}
 			}
 			out = fontSource{local: true, ref: name}
 			have = true
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "format"):
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "format"):
 			if !have {
 				return fontSource{}, false
 			}
 			f, ok := singleString(v.Values)
 			if !ok {
-				f = strings.TrimSpace(descriptorFamily(v.Values))
+				f = ascii.TrimCSSSpace(descriptorFamily(v.Values))
 			}
-			out.format = strings.ToLower(strings.TrimSpace(f))
-		case v.IsFunction() && strings.EqualFold(v.Token.Value, "tech"):
+			out.format = ascii.Lower(ascii.TrimCSSSpace(f))
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "tech"):
 			// A capability list — colour tables, variations, palettes. It
 			// narrows when an entry may be used and never widens it, so an
 			// engine that ignores it can only try a font it might have skipped,
@@ -948,7 +946,7 @@ func descriptorFamily(vals []css.ComponentValue) string {
 			return ""
 		}
 	}
-	return strings.TrimSpace(strings.Join(parts, " "))
+	return ascii.TrimCSSSpace(strings.Join(parts, " "))
 }
 
 // parseWeightDescriptor reads the font-weight descriptor as a range.
@@ -962,7 +960,7 @@ func parseWeightDescriptor(vals []css.ComponentValue) (low, high float64, ok boo
 		case css.Whitespace:
 			continue
 		case css.Ident:
-			switch strings.ToLower(v.Token.Value) {
+			switch ascii.Lower(v.Token.Value) {
 			case "normal":
 				nums = append(nums, 400)
 			case "bold":
@@ -1015,9 +1013,9 @@ func parseStyleDescriptor(vals []css.ComponentValue) (italic bool, ok bool) {
 			if kw != "" {
 				return false, false
 			}
-			kw = strings.ToLower(v.Token.Value)
+			kw = ascii.Lower(v.Token.Value)
 		case css.Dimension:
-			if !strings.EqualFold(v.Token.Unit, "deg") {
+			if !ascii.EqualFold(v.Token.Unit, "deg") {
 				return false, false
 			}
 			angles = append(angles, v.Token.Number)
@@ -1066,7 +1064,7 @@ type unicodeSpan struct{ lo, hi rune }
 func parseUnicodeRange(vals []css.ComponentValue) ([]unicodeSpan, bool) {
 	var out []unicodeSpan
 	for _, item := range splitOnComma(vals) {
-		text := strings.TrimSpace(rawText(item))
+		text := ascii.TrimCSSSpace(rawText(item))
 		if text == "" {
 			return nil, false
 		}

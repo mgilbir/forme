@@ -1,8 +1,7 @@
 package layout
 
 import (
-	"strings"
-
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -46,7 +45,7 @@ const (
 )
 
 func parseBorderStyle(value string) borderStyle {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case "hidden":
 		return borderHidden
 	case "solid":

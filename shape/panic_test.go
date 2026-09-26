@@ -475,6 +475,8 @@ func useFace(face *Face) {
 	_, _ = face.ShapeGlyphsAcrossFaces(text, before, after, off)
 	_, _ = face.ShapeGlyphsMerged(text, before, after, before, after, false, off)
 	_, _ = face.ShapeGlyphsInContextOrAcross(text, before, after, true, off)
+	_ = face.ContextCanChange(text, off)
+	_ = face.FormsFollowNeighbours(text, off)
 
 	whole := face.ShapeGroup(text, before, after, true, off)
 	_, _ = GroupContext(before, after, before, after)

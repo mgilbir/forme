@@ -26,8 +26,8 @@ func TestBundledFontGivesEachScriptItsOwnRules(t *testing.T) {
 		t.Fatalf("the fixture assumption is gone: the face declares no %q substitutions at all", tag)
 	}
 
-	latin := f.layoutFor(runScript("abc"), nil).single[tag]
-	cyrillic := f.layoutFor(runScript("абв"), nil).single[tag]
+	latin := f.layoutFor(runScript("abc"), otLanguage{}).single[tag]
+	cyrillic := f.layoutFor(runScript("абв"), otLanguage{}).single[tag]
 	if sameSubstitutions(latin, cyrillic) {
 		t.Errorf("Latin and Cyrillic runs get the same %q substitutions (%d of them); "+
 			"the script list was not consulted", tag, len(latin))
@@ -47,7 +47,7 @@ func TestBundledFontGivesEachScriptItsOwnRules(t *testing.T) {
 
 	// And a language system narrows it further. Romanian is one of the seven
 	// Noto Sans declares under 'latn'.
-	romanian := f.layoutFor(runScript("abc"), openTypeLanguages("ro")).single[tag]
+	romanian := f.layoutFor(runScript("abc"), openTypeLanguage("ro")).single[tag]
 	if sameSubstitutions(romanian, latin) {
 		t.Errorf("Romanian gets the same %d %q substitutions as the default language system",
 			len(romanian), tag)

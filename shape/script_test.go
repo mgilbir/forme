@@ -130,31 +130,42 @@ func TestLatinIsTheLastResort(t *testing.T) {
 	}
 }
 
-// TestScriptWithNoLanguageSystemIsSkipped covers a script that names neither a
-// default language system nor the one asked for. There is nothing to take from
-// it, so the next candidate — the default script — decides, rather than the run
-// being shaped with no rules at all.
-func TestScriptWithNoLanguageSystemIsSkipped(t *testing.T) {
+// TestScriptWithNoLanguageSystemSelectsNothing covers a script that names
+// neither a default language system nor the one asked for. It is still the
+// script chosen — HarfBuzz chooses a script by its tag alone — and it selects
+// nothing, so the run is set with none of the font's rules rather than with the
+// default script's. It used to be passed over for 'DFLT'; Noto Sans Anatolian
+// Hieroglyphs declares 'latn' this way, and its Latin was set with mark
+// attachment HarfBuzz does not apply.
+func TestScriptWithNoLanguageSystemSelectsNothing(t *testing.T) {
 	f := scriptFace(t, map[string]fonttest.Script{
 		"grek": {Required: fonttest.NoFeature, NoDefault: true},
 		"DFLT": {Required: fonttest.NoFeature, Features: []int{1}},
 	})
-	if got := lastGID(t, f, "α*"); got != scZ {
-		t.Errorf("* shaped to glyph %d, want %d: 'grek' selects nothing, so 'DFLT' decides", got, scZ)
+	star, ok := f.GlyphID('*')
+	if !ok {
+		t.Fatal("the fixture has no glyph for *")
+	}
+	if got := lastGID(t, f, "α*"); got != star {
+		t.Errorf("* shaped to glyph %d, want its own %d: 'grek' is chosen and selects nothing",
+			got, star)
 	}
 }
 
-// TestNoScriptListTakesEveryFeature is the fallback that keeps a font which
-// says nothing about scripts working exactly as it did. Every feature applies,
-// in the order the font lists them, whatever the run is written in.
-func TestNoScriptListTakesEveryFeature(t *testing.T) {
+// TestNoScriptListSelectsNothing: a table that declares no scripts selects
+// nothing for a run, as HarfBuzz selects nothing from it — the letters are set
+// in their own glyphs. This package used to take every feature instead; see
+// readLayoutFor for what that cost.
+func TestNoScriptListSelectsNothing(t *testing.T) {
 	// An empty map is an empty ScriptList — a well-formed table that declares
 	// no scripts — which is different from not building one.
 	f := scriptFace(t, map[string]fonttest.Script{})
 
 	for _, s := range []string{"x", "α*"} {
-		if got := lastGID(t, f, s); got != scY {
-			t.Errorf("%q: x shaped to glyph %d, want %d — with no script list every feature applies, first one winning", s, got, scY)
+		r := []rune(s)
+		own, _ := f.GlyphID(r[len(r)-1])
+		if got := lastGID(t, f, s); got != own {
+			t.Errorf("%q: shaped to glyph %d, want its own %d — with no script list nothing applies", s, got, own)
 		}
 	}
 }
@@ -273,8 +284,6 @@ func TestScriptSelectionSurvivesMalformedScriptList(t *testing.T) {
 		l := &layout{
 			ligatures: map[int][]ligature{},
 			single:    map[string]map[int]int{},
-			singlePos: map[int]singleAdjust{}, markGlyphs: map[int]bool{},
-			cursive: map[int]cursiveAnchors{},
 		}
 		sel, _ := scriptFeatures(truncated, []string{"latn"}, nil)
 		if len(truncated) >= 10 {

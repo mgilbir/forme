@@ -1,9 +1,10 @@
 package paragraph
 
 import (
-	"strings"
-	"unicode"
 	"unicode/utf8"
+
+	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // text-autospace, CSS Text 4: the space a typesetter puts between an ideograph
@@ -51,7 +52,7 @@ func (a Autospace) Any() bool { return a.IdeographAlpha || a.IdeographNumeric }
 // wrote a space; only "insert" is implemented, which is the value that adds
 // spacing where there was none, and "replace" is reported.
 func AutospaceOf(value string) (Autospace, string) {
-	value = strings.ToLower(strings.TrimSpace(value))
+	value = ascii.Lower(ascii.TrimCSSSpace(value))
 	if value == "" || value == "normal" {
 		return Autospace{IdeographAlpha: true, IdeographNumeric: true}, ""
 	}
@@ -60,7 +61,7 @@ func AutospaceOf(value string) (Autospace, string) {
 	}
 	var out Autospace
 	unhandled := ""
-	for _, word := range strings.Fields(value) {
+	for _, word := range ascii.CSSFields(value) {
 		switch word {
 		case "ideograph-alpha":
 			out.IdeographAlpha = true
@@ -118,7 +119,7 @@ func AutospaceOf(value string) (Autospace, string) {
 func IsAutospaceIdeograph(r rune) bool {
 	switch {
 	case r >= 0x3041 && r <= 0x30FF:
-		return !unicode.IsPunct(r)
+		return !charprop.Is(r, charprop.P)
 	case r >= 0x31C0 && r <= 0x31FF:
 		return true
 	}
@@ -146,7 +147,7 @@ func IsAutospaceIdeograph(r rune) bool {
 // The specification's third exception, a character set upright in vertical
 // text, is a fact about the box rather than the character and is layout's.
 func IsAutospaceLetter(r rune) bool {
-	return unicode.IsLetter(r) && !IsAutospaceIdeograph(r) && !wideOrFullwidth(r)
+	return charprop.Is(r, charprop.L) && !IsAutospaceIdeograph(r) && !wideOrFullwidth(r)
 }
 
 // IsAutospaceNumeral reports whether a character is one of §8.1's
@@ -156,7 +157,7 @@ func IsAutospaceLetter(r rune) bool {
 // "第１章" is one word to a reader — and putting an eighth of an em on each side
 // of it would break it apart.
 func IsAutospaceNumeral(r rune) bool {
-	return unicode.Is(unicode.Nd, r) && !inRanges(r, eastAsianFullwidthRanges[:])
+	return charprop.Is(r, charprop.Nd) && !inRanges(r, eastAsianFullwidthRanges[:])
 }
 
 // wideOrFullwidth reports whether a character's East Asian Width is W or F:
@@ -175,8 +176,7 @@ func wideOrFullwidth(r rune) bool {
 // ACUTE>永" — whose reference puts the spacing exactly where the unmarked text
 // would have it.
 func AutospaceBase(r rune) bool {
-	return !unicode.Is(unicode.Mn, r) && !unicode.Is(unicode.Me, r) &&
-		!unicode.Is(unicode.Mc, r) && !IsDefaultIgnorable(r)
+	return !charprop.Is(r, charprop.M) && !IsDefaultIgnorable(r)
 }
 
 // LastAutospaceBase and FirstAutospaceBase are the characters a boundary is

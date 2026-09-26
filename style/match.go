@@ -12,10 +12,10 @@ package style
 
 import (
 	"strings"
-	"unicode"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // maxMatchSteps bounds the work one selector may spend on one element.
@@ -23,11 +23,12 @@ import (
 // A chain of combinators is no longer the way to reach it — see matchResult,
 // which is what keeps "a b c d e" against a deep tree a sum rather than a
 // product. What is left is a selector whose *compounds* are expensive: a
-// ":not()" or ":is()" is a whole selector matched afresh on every element the
-// chain around it visits, so arguments nested inside arguments multiply, and a
-// few hundred bytes of selector against a few kilobytes of markup is still the
-// cheapest denial of service either input offers. Real selectors settle in tens
-// of steps.
+// ":not()" or ":is()" is a whole selector matched on every element the chain
+// around it visits. Its answer for an element is remembered, so arguments nested
+// inside arguments add rather than multiply — see matchesList — but each still
+// costs a walk of the tree the first time it is asked of an element, and a
+// selector can ask that of every element under a deep tree. Real selectors
+// settle in tens of steps.
 //
 // It is the early exit and not the whole bound. A bound per match is a bound
 // per (selector, element) pair, and a document has as many pairs as it has
@@ -113,8 +114,10 @@ type Matcher struct {
 	series map[seriesKey]*series
 
 	// nested remembers which elements match which nested rule's parent — see
-	// nesting.
+	// nesting — and lists which match which argument list of :is(), :where()
+	// and :not() — see matchesList.
 	nested map[nestingKey]bool
+	lists  map[listKey]bool
 
 	// steps is the work spent on the match in hand and over says that match ran
 	// out; tripped remembers that some match did, for the caller.
@@ -142,6 +145,11 @@ type Matcher struct {
 	// attribute values below are folded. It is read once here because the
 	// alternative is a walk to the document node inside the matching loop.
 	xml bool
+
+	// langs is each element's language, which :lang() asks. Asked per match,
+	// it was a walk to the root reading every ancestor's attributes, for every
+	// element every :lang() rule was tried on. See html.Languages.
+	langs html.Languages
 }
 
 // NewMatcher prepares to match selectors against a document.
@@ -154,6 +162,7 @@ func NewMatcher(doc *html.Node) *Matcher {
 		typed:  map[*html.Node]bool{},
 		series: map[seriesKey]*series{},
 		nested: map[nestingKey]bool{},
+		lists:  map[listKey]bool{},
 		xml:    doc.XMLDocument(),
 	}
 }
@@ -291,9 +300,26 @@ func (m *Matcher) spent() bool {
 // The order is cheapest-first and deliberately so: a type mismatch rejects most
 // elements for most selectors, and the pseudo-classes — which may walk siblings
 // or recurse into another selector list — are asked last.
+//
+// The type is compared ASCII case-insensitively, which is what HTML specifies
+// for its elements' names and what the attribute values in htmlFoldedAttrs
+// already get. It was strings.EqualFold, which is Unicode's simple case
+// folding from the toolchain's release: U+212A KELVIN SIGN and U+017F LONG S
+// fold to "k" and "s", so "\212Abd" selected <kbd> and "\17Fpan" <span> —
+// a match between names that are not the same name. An element name from
+// the HTML reader is ASCII, so ASCII's folding is also the only one that can
+// tell two of them apart.
+//
+// In an XHTML document it is not folded at all. XML names are case-sensitive,
+// and the reader keeps them as written, so "P" selects an element named P and
+// not a paragraph — which is what a browser opening the file as XML answers.
+// The rule index files a type under its fold either way, so it still offers
+// every rule that can match; this is what decides.
 func (m *Matcher) compound(c css.Compound, n *html.Node) bool {
-	if c.Type != "" && !strings.EqualFold(c.Type, n.Name) {
-		return false
+	if c.Type != "" {
+		if m.xml && c.Type != n.Name || !m.xml && !ascii.EqualFold(c.Type, n.Name) {
+			return false
+		}
 	}
 	for _, id := range c.IDs {
 		// Two different identifiers in one compound match nothing, which falls
@@ -324,12 +350,21 @@ func (m *Matcher) compound(c css.Compound, n *html.Node) bool {
 //
 // The attribute is a whitespace-separated set, so this is a membership test and
 // not a substring one: class="subtitle" must not match ".title".
+//
+// The white space is HTML's and not Unicode's. HTML says the class attribute is
+// "a set of space-separated tokens" split on *ASCII* white space — tab, line
+// feed, form feed, carriage return and space — so class="a\u00a0b" is one class
+// whose name holds a no-break space, and .a selects nothing. strings.Fields
+// splits on unicode.IsSpace, which takes the no-break space and every other
+// space separator with it, so it found two classes where the document has one
+// and applied a rule the author did not write. The same set decides "~=",
+// which HTML defines the same way.
 func hasClass(n *html.Node, want string) bool {
 	v, ok := n.Attr("class")
 	if !ok {
 		return false
 	}
-	for _, got := range asciiFields(v) {
+	for _, got := range ascii.Fields(v) {
 		if got == want {
 			return true
 		}
@@ -337,28 +372,18 @@ func hasClass(n *html.Node, want string) bool {
 	return false
 }
 
-// asciiFields splits on HTML's white space and not on Unicode's.
+// matchAttr matches one attribute selector.
 //
-// The two are not the same set, and the difference is a class name. HTML says
-// the class attribute is "a set of space-separated tokens" split on *ASCII*
-// white space — tab, line feed, form feed, carriage return and space — so
-// class="a\u00a0b" is one class whose name holds a no-break space, and .a
-// selects nothing. strings.Fields splits on unicode.IsSpace, which takes the
-// no-break space and every other space separator with it, so it found two
-// classes where the document has one and applied a rule the author did not
-// write. The same set decides "~=", which HTML defines the same way.
-func asciiFields(s string) []string {
-	return strings.FieldsFunc(s, func(r rune) bool {
-		switch r {
-		case '\t', '\n', '\f', '\r', ' ':
-			return true
-		}
-		return false
-	})
-}
-
+// The name is matched as the document's language matches it (see
+// html.Node.AttrNamed): folded on an HTML element in an HTML document, and
+// exactly everywhere else, so in XHTML "[LANG]" selects an attribute written
+// LANG and not one written lang, and "svg[viewBox]" selects an inline <svg>
+// in HTML. The value is folded for the attributes HTML lists, and only on an
+// HTML element in an HTML document, which is the list's scope; the name is
+// looked up folded, because it is the attribute's and not the author's
+// spelling of it that the list is about.
 func (m *Matcher) matchAttr(a css.Attr, n *html.Node) bool {
-	v, ok := n.Attr(a.Name)
+	v, ok := n.AttrNamed(a.Name, m.xml)
 	if !ok {
 		return false
 	}
@@ -367,8 +392,8 @@ func (m *Matcher) matchAttr(a css.Attr, n *html.Node) bool {
 	}
 
 	got, want := v, a.Value
-	if a.Insensitive || (!a.Sensitive && !m.xml && htmlFoldedAttrs[a.Name]) {
-		got, want = asciiLower(got), asciiLower(want)
+	if a.Insensitive || (!a.Sensitive && n.NamesFoldCase(m.xml) && htmlFoldedAttrs[ascii.Lower(a.Name)]) {
+		got, want = ascii.Lower(got), ascii.Lower(want)
 	}
 
 	switch a.Op {
@@ -401,7 +426,7 @@ func (m *Matcher) matchAttr(a css.Attr, n *html.Node) bool {
 }
 
 func slices(value, want string) bool {
-	for _, f := range asciiFields(value) {
+	for _, f := range ascii.Fields(value) {
 		if f == want {
 			return true
 		}
@@ -452,16 +477,16 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 		return p.AnB.Matches(m.typePosition(n, true))
 
 	case css.PseudoNot:
-		return !m.matchesAny(p.Args, n)
+		return !m.matchesList(p.Args, n)
 
 	case css.PseudoIs, css.PseudoWhere:
-		return m.matchesAny(p.Args, n)
+		return m.matchesList(p.Args, n)
 
 	case css.PseudoNesting:
 		return m.nesting(p.Nest, n)
 
 	case css.PseudoLang:
-		return matchLang(n, p.Langs)
+		return m.matchLang(n, p.Langs)
 
 	case css.PseudoAnyLink:
 		// :link and :any-link are the same thing once :visited cannot be true,
@@ -492,7 +517,7 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 // link" — the same set this selects, and a second reading of "is a link" is a
 // second answer waiting to differ from this one.
 func isLink(n *html.Node) bool {
-	if !strings.EqualFold(n.Name, "a") && !strings.EqualFold(n.Name, "area") {
+	if !ascii.EqualFold(n.Name, "a") && !ascii.EqualFold(n.Name, "area") {
 		return false
 	}
 	return n.HasAttr("href")
@@ -538,6 +563,53 @@ func (m *Matcher) nesting(nest *css.Nesting, n *html.Node) bool {
 	got := m.matchesAny(nest.Matchable(), n)
 	if !m.over {
 		m.nested[key] = got
+	}
+	return got
+}
+
+// listKey is one question about an argument list: does this element match it.
+// The list is keyed by where it is held, which is the selector it was parsed
+// in, and by its length, so that no two lists share a key.
+type listKey struct {
+	first *css.Selector
+	n     int
+	el    *html.Node
+}
+
+// matchesList matches the argument list of :is(), :where() or :not() with n as
+// its subject, and remembers the answer.
+//
+// It is nesting's memo for the pseudo-classes that were not "&", and it is
+// needed for the same reason. An argument is a whole selector, matched against
+// every element the selector around it visits — and when the argument holds a
+// descendant combinator, that is every ancestor of every element the selector
+// around *it* visits, and so on in. ":is(:is(:is(.nowhere .x) .x) .x) p" on a
+// paragraph under d nested div.x asked the innermost list about an ancestor
+// once per way of choosing one ancestor at each level: d⁴ steps for a selector
+// of four compounds, and the per-match budget was the only thing that ended it.
+// Asked once per element, each level costs a walk of the ancestors of each
+// element it is asked about, whatever is nested in it, and the levels add.
+//
+// It is safe to remember for nesting's reason: whether an element matches a
+// selector list as its subject depends on the element and the tree, and neither
+// changes while a document is matched. The one answer not kept is one the budget
+// cut short, which is a "no" that may be wrong. A remembered answer is a step,
+// so the work a rule's matching does is still counted against its budget for
+// the document, and a match that spends its own budget on lookups still trips.
+func (m *Matcher) matchesList(sels []css.Selector, n *html.Node) bool {
+	if len(sels) == 0 {
+		return false
+	}
+	key := listKey{first: &sels[0], n: len(sels), el: n}
+	if got, ok := m.lists[key]; ok {
+		if m.spent() {
+			return false
+		}
+		return got
+	}
+	got := m.matchesAny(sels, n)
+	if !m.over {
+		m.lists[key] = got
 	}
 	return got
 }
@@ -621,10 +693,10 @@ func (m *Matcher) seriesOf(parent *html.Node, of []css.Selector) *series {
 // typePosition is an element's one-based position among its siblings of the
 // same name, counting from the end when last is set, or 0 when it has no parent.
 //
-// "The same name" is what the old walk compared with strings.EqualFold, and
-// typeKey is that comparison as a key, so the positions are the ones that walk
-// found. Every child of the parent is placed the first time any of them is
-// asked about.
+// "The same name" is what compound compares with ascii.EqualFold, and
+// ascii.Lower is that comparison as a key, so the positions are the ones a walk
+// comparing names would find. Every child of the parent is placed the first
+// time any of them is asked about.
 func (m *Matcher) typePosition(n *html.Node, last bool) int {
 	parent := n.Parent
 	if parent == nil {
@@ -635,7 +707,7 @@ func (m *Matcher) typePosition(n *html.Node, last bool) int {
 		seen := make(map[string]int32, 4)
 		keys := make([]string, len(kids))
 		for i, k := range kids {
-			keys[i] = typeKey(k.Name)
+			keys[i] = ascii.Lower(k.Name)
 			seen[keys[i]]++
 			m.ofType[k] = [2]int32{seen[keys[i]], 0}
 		}
@@ -657,35 +729,6 @@ func (m *Matcher) typePosition(n *html.Node, last bool) int {
 	return int(at[0])
 }
 
-// typeKey is an element name as strings.EqualFold compares names: two names
-// have the same key exactly when EqualFold says they are equal.
-//
-// EqualFold is Unicode's simple case folding, rune by rune, and the key is each
-// rune's whole folding orbit named by one member of it: the ASCII lower-case
-// letter where the orbit has one, so the common case is plain lower-casing, and
-// the smallest rune of it otherwise. It is not strings.ToLower, which differs
-// from EqualFold on runes like U+212A KELVIN SIGN and U+017F LONG S: those fold
-// to "k" and "s" and do not lower-case to them.
-func typeKey(name string) string {
-	if k := asciiLowerName(name); k != "" || name == "" {
-		return k
-	}
-	var b strings.Builder
-	for _, r := range name {
-		least := r
-		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
-			if f < least {
-				least = f
-			}
-		}
-		if least >= 'A' && least <= 'Z' {
-			least += 'a' - 'A'
-		}
-		b.WriteRune(least)
-	}
-	return b.String()
-}
-
 func (m *Matcher) matchesAny(sels []css.Selector, n *html.Node) bool {
 	for _, s := range sels {
 		if m.complexFrom(s, n) {
@@ -696,8 +739,9 @@ func (m *Matcher) matchesAny(sels []css.Selector, n *html.Node) bool {
 }
 
 // matchLang implements :lang(), which reads the nearest lang attribute at or
-// above the element — html.Node.Language, the same walk the casing and
-// hyphenation readers use — and compares it with each language range by
+// above the element — html.Node.Language, the same rule the casing and
+// hyphenation readers use, answered once per element for the document by
+// m.langs — and compares it with each language range by
 // RFC 4647 §3.3.2's extended filtering, as Selectors 4 §7.2 says to.
 //
 // It was the dash-match of attribute selectors with "*" matching anything.
@@ -707,8 +751,8 @@ func (m *Matcher) matchesAny(sels []css.Selector, n *html.Node) bool {
 // §7.2 says it does not; and :lang("") matched nothing, where it matches
 // exactly those elements. Filtering is also what lets :lang(de-DE) select
 // "de-Latn-DE" and :lang("*-CH") select "fr-CH", which dash-match cannot.
-func matchLang(n *html.Node, langs []string) bool {
-	value, ok := n.Language()
+func (m *Matcher) matchLang(n *html.Node, langs []string) bool {
+	value, ok := m.langs.Of(n)
 	// Not tagged: lang="" says so outright, and an element with no lang at or
 	// above it has no tag either — nothing this engine reads (it does not
 	// read HTTP headers or a Content-Language pragma) gives it one.
@@ -743,8 +787,8 @@ func matchLang(n *html.Node, langs []string) bool {
 // done — a tag and a range written in the same form, which is how documents
 // and stylesheets write them, compare correctly without it.
 func extendedFilter(tag, rng string) bool {
-	t := strings.Split(strings.ToLower(tag), "-")
-	r := strings.Split(strings.ToLower(rng), "-")
+	t := strings.Split(ascii.Lower(tag), "-")
+	r := strings.Split(ascii.Lower(rng), "-")
 	if !wellFormedSubtags(t, false) || !wellFormedSubtags(r, true) {
 		return false
 	}
@@ -898,25 +942,4 @@ var htmlFoldedAttrs = map[string]bool{
 	"rel": true, "rev": true, "rules": true, "scope": true, "scrolling": true,
 	"selected": true, "shape": true, "target": true, "text": true,
 	"type": true, "valign": true, "valuetype": true, "vlink": true,
-}
-
-// asciiLower folds A-Z and nothing else.
-//
-// strings.ToLower is Unicode's mapping, and CSS asks for ASCII's: U+212A KELVIN
-// SIGN lowercases to "k" under Unicode, so "[type=block\u212A i]" would have
-// matched an attribute written "block" — a match on two strings that are not
-// the same string, from a selector nobody could have meant.
-func asciiLower(s string) string {
-	for i := 0; i < len(s); i++ {
-		if c := s[i]; c >= 'A' && c <= 'Z' {
-			b := []byte(s)
-			for ; i < len(b); i++ {
-				if c := b[i]; c >= 'A' && c <= 'Z' {
-					b[i] = c + 'a' - 'A'
-				}
-			}
-			return string(b)
-		}
-	}
-	return s
 }

@@ -163,3 +163,70 @@ func TestASpanHoldingABlockIsOneFlexItem(t *testing.T) {
 		}
 	}
 }
+
+// TestAScrollContainerThatStatesASizeCanShrinkToNothing is §4.5's clause read
+// whole: "for scroll containers the automatic minimum size is zero, as usual".
+// It does not say "unless the item states a size". The minimum returned the
+// stated size here, so "width: 100px; overflow: hidden" could not shrink below
+// 100px in a row with 50px to spare. The size is the flex base size, where the
+// item starts; the shrink factor is what lets it leave it.
+//
+// The other half is the rule that stays: an item that is not a scroll
+// container has a content-based minimum, and §4.5's specified size suggestion
+// caps it — min(specified, content) — both ways round.
+func TestAScrollContainerThatStatesASizeCanShrinkToNothing(t *testing.T) {
+	word := strings.Repeat("W", 60) // 360px of Courier at 10px
+	row := func(content, item string) string {
+		return `<div id="f" style="display: flex; width: 300px; font-family: Courier; ` +
+			`font-size: 10px"><div id="a" style="flex: 0 1 auto; ` + item + `">` + content +
+			`</div><div style="flex: 0 0 250px"></div></div>`
+	}
+	for _, tc := range []struct {
+		name, content, item string
+		want                float64
+	}{
+		// Scroll containers, which may shrink to the 50px left over.
+		{"a stated width", word, "width: 100px; overflow: hidden", 50},
+		{"a stated width on a short word", "WW", "width: 100px; overflow: auto", 50},
+		{"a keyword width", word, "width: max-content; overflow: scroll", 50},
+		{"a stated width with only overflow-y hidden", word, "width: 100px; overflow-y: hidden", 50},
+		// Not scroll containers: the specified size suggestion is the minimum
+		// where it is the smaller, and the content where that is.
+		{"a stated width below the content", word, "width: 100px", 100},
+		{"a stated width that clips", word, "width: 100px; overflow: clip", 100},
+		{"a stated width above the content", "WWWWWWWWWWWWWWW", "width: 200px", 90},
+		{"a keyword width", word, "width: min-content", 360},
+	} {
+		got, ok := gridRect(t, row(tc.content, tc.item), noDefaults, "a")
+		if !ok {
+			t.Errorf("%s (%s): the item generated no fragment", tc.name, tc.item)
+			continue
+		}
+		if got.W.Px() != tc.want {
+			t.Errorf("%s (%s): the item is %.0f wide, want %.0f", tc.name, tc.item,
+				got.W.Px(), tc.want)
+		}
+	}
+
+	// Down a column the main size is a height, and the same holds: a 400px
+	// scroll container in a 300px column beside a 250px item is 50px tall; the
+	// same item without overflow keeps its content, the 200px its child needs.
+	column := func(item string) string {
+		return `<div style="display: flex; flex-direction: column; height: 300px">` +
+			`<div id="a" style="flex: 0 1 auto; height: 400px; ` + item + `">` +
+			`<div style="height: 200px"></div></div><div style="flex: 0 0 250px"></div></div>`
+	}
+	for _, tc := range []struct {
+		item string
+		want float64
+	}{{"overflow: hidden", 50}, {"overflow: visible", 200}} {
+		got, ok := gridRect(t, column(tc.item), noDefaults, "a")
+		if !ok {
+			t.Errorf("column, %s: the item generated no fragment", tc.item)
+			continue
+		}
+		if got.H.Px() != tc.want {
+			t.Errorf("column, %s: the item is %.0f tall, want %.0f", tc.item, got.H.Px(), tc.want)
+		}
+	}
+}

@@ -66,8 +66,8 @@ The same code, minus the imaginary backend, is `layout.Example` in
 	forme/css          CSS syntax: tokens, component values, selectors
 	forme/html         the parser, and the document tree it builds
 	forme/shape        the shaping engine: what glyph goes where
-	forme/font         the font formats underneath it: sfnt, CFF, Type 1, the
-	                   WOFF and WOFF 2 wrappers, glyph names
+	forme/font         the font formats underneath it: sfnt, CFF, the WOFF and
+	                   WOFF 2 wrappers, glyph names
 	forme/brotli       Brotli decompression, RFC 7932, which WOFF 2 needs
 	forme/bidi         the Unicode bidirectional algorithm, UAX #9
 	forme/segment      grapheme cluster boundaries, UAX #29
@@ -120,9 +120,9 @@ knowledge. Cursive joining for Arabic and its relatives, and the mark ordering o
 UTR #53. OpenType layout: GSUB 1–6 and GPOS 1–8, mark attachment, cursive
 attachment, contextual and chained-contextual rules, mark filtering sets.
 
-**Fonts.** sfnt and CFF, Type 1, and the WOFF and WOFF 2 wrappers a web font
-arrives in; variable fonts instanced at a named or arbitrary point in their
-design space, subsetting, and the metrics a layout engine has to ask for —
+**Fonts.** sfnt and CFF, and the WOFF and WOFF 2 wrappers a web font arrives
+in; variable fonts instanced at a named or arbitrary point in their design
+space, subsetting, and the metrics a layout engine has to ask for —
 including what the fourteen standard PDF faces state, which is not the same
 question.
 
@@ -163,7 +163,7 @@ that removes invisible characters it leaves a mark positioned across one of them
 It is listed with its reason in `shape/harfbuzz_test.go` and pinned in the
 corpus, so a difference that stops being deliberate fails the test.
 
-Beyond the suites: 33 fuzz targets, thirty-three of them scheduled weekly, a
+Beyond the suites: 32 fuzz targets, thirty-two of them scheduled weekly, a
 differential fuzzer against HarfBuzz that generates text rather than listing it,
 and a CoreText harness for the questions two implementations cannot settle
 between them.
@@ -176,7 +176,8 @@ between them.
 	make test-grapheme # and its grapheme boundary cases
 	make test-normalization # and its normalisation forms
 	make test-css      # the CSS Syntax suite
-	make hbfuzz        # differential fuzzing; needs python and uharfbuzz
+	make hbenv         # the pinned HarfBuzz oracle, installed by digest into .hbenv
+	make hbfuzz        # differential fuzzing; needs that oracle (PYTHON=.hbenv/bin/python)
 	make test-difffuzz # that fuzzer's classifier, which needs only python
 	make wpt-breakdown # where the reftests that are not clean actually are
 
@@ -212,8 +213,10 @@ HTML standard's entities file — by a variable in the
 `Makefile`, which each table records. `make casing`, `make dictionaries` and the
 rest fetch their inputs at the pin and regenerate through `cmd/maketables`, and
 `cmd/regenerate_test.go` regenerates every table from its pinned inputs and fails
-on any difference. No generator may import Go's `unicode` package, which answers
-from the release the toolchain shipped rather than the one the tables name.
+on any difference. Nothing in the tree may ask Go's `unicode` package a question
+about a character — it answers from the release the toolchain shipped rather than
+the one the tables name — and `internal/charprop` answers the general category and
+the properties the engine asks from the pinned release instead.
 
 ## Licence
 
@@ -221,3 +224,10 @@ The code is under the licence in `LICENSE`. The fonts under `fonts/notosans/` an
 `testdata/harfbuzz/fonts/` are Google's Noto builds under the SIL Open Font
 License 1.1, with their notices beside them; they are test data and shipping this
 module does not embed them in anything.
+
+Much of what `cmd/gen*` generates is generated from other people's data — the
+Unicode database, ICU's word lists, BudouX, the hyphenation patterns, Adobe's
+metrics and glyph list, Brotli, the HTML and CSS standards, HarfBuzz.
+`THIRD_PARTY_NOTICES` lists every generated table and kept file that is somebody
+else's work, where and at which pin it was taken, its licence, and the notice
+the licence asks a copy to carry, each quoted from its source.

@@ -1,8 +1,8 @@
 package paragraph
 
 import (
-	"strings"
-	"unicode"
+	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // text-spacing-trim, CSS Text 4 §8.2, and the one clause of it this engine does.
@@ -53,7 +53,7 @@ type SpacingTrim struct {
 // whole, so it answers as the initial value does and reports nothing: the
 // element is set as though nobody had written a declaration.
 func SpacingTrimOf(value string) (SpacingTrim, string) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case "space-all":
 		return SpacingTrim{}, ""
 	case "space-first":
@@ -80,7 +80,7 @@ func SpacingTrimOf(value string) (SpacingTrim, string) {
 // quote is not bracket punctuation in the sense §8.2's classes divide, and this
 // engine trims only what it has a document to check it against.
 func TrimsAsClosingPunctuation(r rune) bool {
-	return unicode.Is(unicode.Pe, r)
+	return charprop.Is(r, charprop.Pe)
 }
 
 // TrailingClosingPunctuation is how many bytes at the end of a run §8.2 would

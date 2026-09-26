@@ -1,15 +1,15 @@
 package layout
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
-// Block layout: the fifth of §3's stages, turning boxes into fragments with a
-// resolved position and size in absolute page coordinates.
+// Block layout: the stage after the box tree and before the display list,
+// turning boxes into fragments with a resolved position and size in absolute
+// page coordinates.
 //
 // What is here is the block formatting context of CSS 2.1 §9.4.1 and §10 — the
 // widths, the box model, margin collapsing, and where the out-of-flow boxes of
@@ -219,6 +219,7 @@ func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
 	l := newLayouter(root, avail, set, rec)
 	frag := l.layout()
 	l.reportFontLimits()
+	l.reportForcedBreaks(root)
 	return frag
 }
 
@@ -369,6 +370,10 @@ func (l *layouter) layout() *Fragment {
 }
 
 type layouter struct {
+	// languageMemo answers the language questions each text box asks. See
+	// languageMemo.
+	languageMemo
+
 	// reportedAspect keeps each aspect-ratio narrowing to one finding per
 	// document. See reportAspectRatio.
 	reportedAspect map[string]bool
@@ -825,14 +830,22 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 	// exactly what CSS 2.1 §10.3.4 and §10.6.5 say to do — the margin rules for
 	// a block-level replaced element are the same ones as for any other block,
 	// applied to a width that came from somewhere else.
+	// A caller measuring the box's content asks for the height it would have
+	// were its own "height" auto; see forcedGeometry.contentHeight.
+	contentOnly := forced != nil && forced.contentHeight && !forced.hasHeight
 	var replaced *Size
 	if b.Replaced != nil {
-		s := l.replacedSize(b, containing, at.cbHeight, at.cbDefinite)
+		s := l.replacedSizeOf(b, containing, at.cbHeight, at.cbDefinite, contentOnly)
 		replaced = &s
 	}
 
 	width := l.resolveWidth(b, margin, border, padding, containing, &margin, replaced)
 	declaredHeight, hasHeight := l.explicitHeight(b, containing, at.cbHeight, at.cbDefinite)
+	if contentOnly {
+		// What "height: auto" is for this box, which for a form control is its
+		// rows and for everything else is no height at all.
+		declaredHeight, hasHeight = l.controlIntrinsicHeight(b)
+	}
 	if replaced == nil {
 		if _, hasRatio := aspectRatioOf(b.Style.Get("aspect-ratio")); hasRatio {
 			switch {
@@ -1083,9 +1096,44 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 		contentHeight, hoistTop, hoistBottom, placedAnything =
 			l.clampedChildren(b, frag, lineLength, topOpen, bottomOpen, inner)
 	}
+	// The most the columns may be where the box's height is automatic: a
+	// max-height constrains the column height as a height does (css-multicol-1
+	// §8.2), and the content the columns then do not hold overflows into more
+	// of them. Where the box has a height, its columns are that height as the
+	// box is drawn, min-height and max-height applied: childHeight.
+	columnLimit := style.MaxUnit
+	if !hasHeight && wantsColumns {
+		if v := l.clampHeight(b, contentHeight, containing, at.cbHeight, at.cbDefinite); v < contentHeight {
+			columnLimit = v
+		}
+	}
+	if wantsColumns && !inColumns && cols.n <= 1 && !starved {
+		// One column, which is not poured unless something divides it: a forced
+		// break, which begins a second column, or a height its content does not
+		// fit in. Both are §8.2's overflow columns, made by the same pour, and
+		// the content was laid out at the one column's width, which is the
+		// box's, so nothing need be laid out again: what can be poured is
+		// poured, and what cannot is reported and left as it was. A pour that
+		// is refused changes nothing before it says so.
+		overflows := len(l.forcedColumnBreaks(frag)) > 0
+		if hasHeight {
+			overflows = overflows || contentHeight > childHeight
+		} else {
+			overflows = overflows || contentHeight > columnLimit
+		}
+		if overflows {
+			if why := l.canColumn(b); why != "" {
+				l.reportColumns(b, cols.n, "its content needs overflow columns, which "+
+					"are not made because "+why)
+			} else if height, ok := l.pourIntoColumns(b, frag, cols, contentHeight,
+				childHeight, hasHeight, columnLimit); ok {
+				contentHeight, poured = height, true
+			}
+		}
+	}
 	if inColumns && !starved {
 		if height, ok := l.pourIntoColumns(b, frag, cols, contentHeight,
-			declaredHeight, hasHeight); ok {
+			childHeight, hasHeight, columnLimit); ok {
 			contentHeight, poured = height, true
 		} else {
 			// The content could not be divided where the columns needed it.
@@ -2345,7 +2393,7 @@ func (l *layouter) isAuto(b *Box, property string) bool {
 
 // parseLength reads one of a box's computed values, memoized.
 func (l *layouter) parseLength(b *Box, property string) (style.Length, bool) {
-	raw := strings.TrimSpace(b.Style.Get(property))
+	raw := ascii.TrimCSSSpace(b.Style.Get(property))
 	if raw == "" {
 		return style.Length{}, false
 	}
@@ -2395,11 +2443,11 @@ func (l *layouter) lengthOfValues(b *Box, vals []css.ComponentValue) (style.Leng
 			continue
 		}
 		switch {
-		case strings.EqualFold(v.Token.Unit, "ch"):
+		case ascii.EqualFold(v.Token.Unit, "ch"):
 			m.zeroAdvance, m.zeroKnown = l.zeroAdvance(b)
-		case strings.EqualFold(v.Token.Unit, "ex"):
+		case ascii.EqualFold(v.Token.Unit, "ex"):
 			m.xHeight, m.xHeightKnown = l.xHeightOf(b)
-		case strings.EqualFold(v.Token.Unit, "ic"):
+		case ascii.EqualFold(v.Token.Unit, "ic"):
 			m.icAdvance, m.icKnown = l.icAdvance(b)
 		}
 	}
@@ -2652,7 +2700,7 @@ func (l *layouter) outlineWidth(b *Box) style.Unit {
 	if w == 0 {
 		return 0
 	}
-	if strings.EqualFold(strings.TrimSpace(b.Style.Get("outline-color")), "invert") {
+	if ascii.EqualFold(ascii.TrimCSSSpace(b.Style.Get("outline-color")), "invert") {
 		l.rec.ReportDetail(Finding{
 			Rule:   RuleUnsupportedValue,
 			Source: AtHTML(offsetOf(b)),
@@ -2724,7 +2772,7 @@ func (l *layouter) paddingOf(b *Box, containing style.Unit) Edges {
 }
 
 func noBorder(styleValue string) bool {
-	switch strings.ToLower(strings.TrimSpace(styleValue)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(styleValue)) {
 	case "", "none", "hidden":
 		return true
 	}
@@ -2735,7 +2783,7 @@ func noBorder(styleValue string) bool {
 // leaves to the engine beyond requiring thin <= medium <= thick. These are the
 // values every browser uses.
 func keywordBorderWidth(value string) style.Unit {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case "thin":
 		return mustPx(1)
 	case "thick":

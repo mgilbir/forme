@@ -14,6 +14,13 @@ import (
 // here depends on it matching the package default in limits.go.
 const generousCmapWork = 1 << 18
 
+// parseCmapSubtableUnder is parseCmapSubtable under a budget of its own, which
+// is how these tests and the fuzz target ask about one subtable. It lived beside
+// the parser, which nothing but the tests called it from.
+func parseCmapSubtableUnder(b []byte, maxWork int) (map[rune]int, bool) {
+	return parseCmapSubtable(b, NewBudget(maxWork))
+}
+
 func TestCmapFormat4Budget(t *testing.T) {
 	// Build a format-4 subtable with many segments each spanning 1..0xFFFE.
 	const segs = 400
@@ -296,9 +303,9 @@ func TestCmapFormat6PastBMP(t *testing.T) {
 
 // TestCmapMappingNothingIsNil ensures a subtable that is perfectly well formed
 // but maps no character comes back as nil rather than as an empty map. Found by
-// FuzzCmapSubtable. The distinction is load-bearing: trueTypeGID treats a
-// non-nil cmap as authoritative, so an empty one answers ".notdef" for every
-// code — a font-wide false PDF/A finding from sixteen bytes of input.
+// FuzzCmapSubtable. The distinction is load-bearing: a non-nil cmap is the
+// font's answer, so an empty one would answer ".notdef" for every code — a
+// font-wide claim about what it lacks, from sixteen bytes of input.
 func TestCmapMappingNothingIsNil(t *testing.T) {
 	cases := map[string][]byte{
 		// A 16-byte format-12 header declaring no groups at all.

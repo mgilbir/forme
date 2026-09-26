@@ -3,9 +3,9 @@ package shape_test
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mgilbir/forme/fonts/notosans"
+	"github.com/mgilbir/forme/internal/costtest"
 )
 
 // TestAttachingALongMarkRunIsNotQuadratic is the cost of mark attachment on the
@@ -42,35 +42,23 @@ func TestAttachingALongMarkRunIsNotQuadratic(t *testing.T) {
 	// which runs ten times slower and would need a bound ten times looser than
 	// the fault itself. A ratio is the same on any machine: four times the input
 	// is four times the work when this is linear and sixteen when it is not.
-	//
-	// Measured as the best of three, because the clock is noisy upward only.
-	shapeOf := func(marks int) time.Duration {
+	// See costtest.Time for how a busy machine is kept from deciding it.
+	shapeOf := func(marks int) func() {
 		text := "a" + strings.Repeat("\u0301", marks)
-		best := time.Duration(1 << 62)
-		for i := 0; i < 3; i++ {
-			start := time.Now()
-			glyphs, _ := face.ShapeGlyphs(text)
-			if el := time.Since(start); el < best {
-				best = el
-			}
-			if len(glyphs) < marks/2 {
-				t.Fatalf("shaping %d marks gave %d glyphs; the fixture is not "+
-					"reaching mark attachment", marks, len(glyphs))
-			}
+		if glyphs, _ := face.ShapeGlyphs(text); len(glyphs) < marks/2 {
+			t.Fatalf("shaping %d marks gave %d glyphs; the fixture is not "+
+				"reaching mark attachment", marks, len(glyphs))
 		}
-		return best
+		return func() { face.ShapeGlyphs(text) }
 	}
 
 	const small, large = 8000, 32000
-	lo, hi := shapeOf(small), shapeOf(large)
-	if lo <= 0 {
-		t.Fatalf("%d marks measured as %v; there is nothing to compare", small, lo)
-	}
+	c := costtest.Time(t, "shaping a letter and n marks", shapeOf(small), shapeOf(large))
 	// Four times the input. Linear is 4, quadratic is 16, and 8 is between them
 	// with room on both sides rather than against either.
-	if ratio := float64(hi) / float64(lo); ratio > 8 {
+	if c.Ratio > 8 {
 		t.Errorf("shaping %d marks took %v and %d took %v, a factor of %.1f for four "+
 			"times the input; attaching a mark must not read the marks before it",
-			small, lo, large, hi, ratio)
+			small, c.Small, large, c.Large, c.Ratio)
 	}
 }

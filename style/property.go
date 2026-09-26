@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // The property registry, and the values a property can hold.
@@ -439,7 +440,7 @@ var properties = map[string]property{
 	// difference.
 	"row-gap":     {false, "normal"},
 	"column-fill": {false, "balance"},
-	// §6.3's column-span, which is read to be refused: an element spanning the
+	// css-multicol-1 §6.1's column-span, which is read to be refused: an element spanning the
 	// columns divides the container into two of them with the element between,
 	// and that is a second container rather than a column. It has to be
 	// registered to be read at all — an unregistered property is dropped by the
@@ -566,7 +567,8 @@ func Undeclared(name, parent string) string {
 // It returns three things rather than two, and the third is the point:
 // unsupported names the parts of the value this engine understood and cannot
 // produce — a background image, a font variant. Dropping those silently is the
-// failure §6.3 is written about, and only the expander knows what it saw.
+// failure the unsupported-value findings are for, and only the expander knows
+// what it saw.
 type expander func(vals []css.ComponentValue) (longhands map[string][]css.ComponentValue, unsupported []string, ok bool)
 
 // shorthand is an expander together with the longhands it controls.
@@ -809,7 +811,7 @@ func wideKeyword(vals []css.ComponentValue) string {
 	if !v.IsToken() || v.Token.Kind != css.Ident {
 		return ""
 	}
-	switch kw := strings.ToLower(v.Token.Value); kw {
+	switch kw := ascii.Lower(v.Token.Value); kw {
 	case kwInherit, kwInitial, kwUnset, kwRevert, kwRevertLayer:
 		return kw
 	}
@@ -826,7 +828,7 @@ func wideKeyword(vals []css.ComponentValue) string {
 func serialize(vals []css.ComponentValue) string {
 	var b strings.Builder
 	writeValues(&b, vals)
-	return strings.TrimSpace(b.String())
+	return ascii.TrimCSSSpace(b.String())
 }
 
 func writeValues(b *strings.Builder, vals []css.ComponentValue) {

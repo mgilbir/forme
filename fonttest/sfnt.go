@@ -23,6 +23,12 @@ type Glyph struct {
 	Rune     rune
 	Advance  int
 	HasShape bool
+	// Ink, where it is not zero, is the box a shaped glyph's outline fills —
+	// xMin, yMin, xMax, yMax in font units — and its left side bearing is
+	// xMin. A glyph with a shape and no Ink is the square simpleSquare draws,
+	// with a side bearing of zero. It is for a fixture that places marks by
+	// their ink, which is what a shaper does for a face that positions none.
+	Ink [4]int
 }
 
 // SFNTOptions configures a synthetic font. The zero value is a usable
@@ -83,7 +89,10 @@ func SFNT(opts SFNTOptions) []byte {
 	loca = append(loca, 0) // .notdef starts at 0
 	loca = append(loca, 0) // and is empty, so glyph 1 starts at 0 too
 	for _, g := range opts.Glyphs {
-		if g.HasShape {
+		switch {
+		case g.HasShape && g.Ink != [4]int{}:
+			glyf = append(glyf, rectangle(g.Ink)...)
+		case g.HasShape:
 			glyf = append(glyf, simpleSquare(opts.UnitsPerEm)...)
 		}
 		loca = append(loca, uint32(len(glyf)))
@@ -119,6 +128,9 @@ func SFNT(opts SFNTOptions) []byte {
 	binary.BigEndian.PutUint16(hmtx[0:], 0) // .notdef advance
 	for i, g := range opts.Glyphs {
 		binary.BigEndian.PutUint16(hmtx[4*(i+1):], uint16(g.Advance))
+		if g.HasShape && g.Ink != [4]int{} {
+			putI16(hmtx[4*(i+1)+2:], int16(g.Ink[0]))
+		}
 	}
 
 	maxp := make([]byte, 32)
@@ -300,6 +312,32 @@ func simpleSquare(em int) []byte {
 		g = append(g, b...)
 	}
 	for _, v := range ys {
+		b := make([]byte, 2)
+		putI16(b, v)
+		g = append(g, b...)
+	}
+	for len(g)%4 != 0 { // glyf entries are long-aligned
+		g = append(g, 0)
+	}
+	return g
+}
+
+// rectangle is one closed contour filling a box, with the header stating the
+// box: the four corners, counter-clockwise from the bottom left.
+func rectangle(box [4]int) []byte {
+	x0, y0, x1, y1 := int16(box[0]), int16(box[1]), int16(box[2]), int16(box[3])
+	g := make([]byte, 10, 64)
+	putI16(g[0:], 1) // numberOfContours
+	putI16(g[2:], x0)
+	putI16(g[4:], y0)
+	putI16(g[6:], x1)
+	putI16(g[8:], y1)
+	g = append(g, 0, 3) // endPtsOfContours[0] = 3 (four points)
+	g = append(g, 0, 0) // instructionLength
+	g = append(g, 0x01, 0x01, 0x01, 0x01)
+	xs := []int16{x0, x1 - x0, 0, x0 - x1}
+	ys := []int16{y0, 0, y1 - y0, 0}
+	for _, v := range append(xs, ys...) {
 		b := make([]byte, 2)
 		putI16(b, v)
 		g = append(g, b...)

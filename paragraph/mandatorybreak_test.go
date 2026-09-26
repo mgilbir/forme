@@ -2,7 +2,8 @@ package paragraph
 
 import (
 	"testing"
-	"unicode"
+
+	"github.com/mgilbir/forme/internal/charprop"
 )
 
 // UAX #14's mandatory breaks, CSS Text §5.1.
@@ -129,7 +130,7 @@ func TestAMandatoryBreakKeepsItsCharacter(t *testing.T) {
 					// A separator rides on the break; a control character does
 					// not, because it is set and the break is not.
 					want := ""
-					if !unicode.Is(unicode.Cc, tc.r) {
+					if !charprop.Is(tc.r, charprop.Cc) {
 						want = string(tc.r)
 					}
 					if p.Text != want {

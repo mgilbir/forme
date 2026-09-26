@@ -1,9 +1,8 @@
 package style
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Lengths: turning the text a declaration carries into a number layout can use.
@@ -157,7 +156,7 @@ func ParseLength(vals []css.ComponentValue, ctx LengthContext) (l Length, unsupp
 	}
 	v := parts[0][0]
 	if !v.IsToken() {
-		if v.IsFunction() && strings.EqualFold(v.Token.Value, "calc") {
+		if v.IsFunction() && ascii.EqualFold(v.Token.Value, "calc") {
 			// A calc() is arithmetic over lengths, and everything in it but the
 			// percentages can be settled here — the font-relative units against
 			// the context the caller supplied, the operators against each other.
@@ -176,7 +175,7 @@ func ParseLength(vals []css.ComponentValue, ctx LengthContext) (l Length, unsupp
 
 	switch t.Kind {
 	case css.Ident:
-		if strings.EqualFold(t.Value, "auto") {
+		if ascii.EqualFold(t.Value, "auto") {
 			return Auto, false, true
 		}
 		return Length{}, false, false
@@ -198,7 +197,7 @@ func ParseLength(vals []css.ComponentValue, ctx LengthContext) (l Length, unsupp
 		if !supported {
 			// Either a real unit this engine does not resolve, or not a unit at
 			// all — pxPerUnit knows which, and only the first is "unsupported".
-			return Length{}, unresolvedUnits[strings.ToLower(t.Unit)], false
+			return Length{}, unresolvedUnits[ascii.Lower(t.Unit)], false
 		}
 		if !known {
 			// A unit this engine resolves, in a context that does not yet have
@@ -224,7 +223,7 @@ func ParseLength(vals []css.ComponentValue, ctx LengthContext) (l Length, unsupp
 // not supply what it refers to — a viewport unit before the page is decided.
 // supported is false when the unit needs something not threaded here at all.
 func pxPerUnit(unit string, ctx LengthContext) (px float64, known, supported bool) {
-	switch strings.ToLower(unit) {
+	switch ascii.Lower(unit) {
 	case "px":
 		return 1, true, true
 	case "pt":
@@ -318,7 +317,7 @@ func pxPerUnit(unit string, ctx LengthContext) (px float64, known, supported boo
 		return Max(ctx.ViewportWidth, ctx.ViewportHeight).Px() / 100, true, true
 	}
 
-	if unresolvedUnits[strings.ToLower(unit)] {
+	if unresolvedUnits[ascii.Lower(unit)] {
 		return 0, false, false
 	}
 	// Not a unit at all. "1foo" is a typo, not a limit of this engine, and
@@ -397,7 +396,7 @@ func ResolveFontSizeIn(vals []css.ComponentValue, ctx LengthContext) (u Unit, un
 	if len(parts) == 1 && len(parts[0]) == 1 && parts[0][0].IsToken() {
 		t := parts[0][0].Token
 		if t.Kind == css.Ident {
-			name := strings.ToLower(t.Value)
+			name := ascii.Lower(t.Value)
 			if px, isAbsolute := absoluteFontSizes[name]; isAbsolute {
 				v, fits := FromPx(px)
 				return v, false, fits

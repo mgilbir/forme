@@ -3,7 +3,6 @@ package font
 import (
 	"encoding/binary"
 	"math"
-	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/fonttest"
@@ -141,114 +140,5 @@ func TestALocaEntryOutsideGlyfIsNotUsed(t *testing.T) {
 		if len(fp.GlyphPresent) > 1 && fp.GlyphPresent[1] {
 			t.Errorf("%s: glyph 1 is reported present", tc.name)
 		}
-	}
-}
-
-// TestParseType1DoesNotReadTheDictionaryHeaderAsAGlyph is a fixture bent around
-// a reader, straightened.
-//
-// Every real Type 1 font opens its charstring dictionary with "/CharStrings 228
-// dict dup begin". A name followed by a number was read as a charstring entry,
-// so "CharStrings" was registered as a glyph and the next 228 bytes — every
-// glyph after it — were swallowed as its outline. The fixture in fonttest said
-// so in as many words and left the count out to avoid it, which means this
-// parser had never met a real Type 1 font.
-func TestParseType1DoesNotReadTheDictionaryHeaderAsAGlyph(t *testing.T) {
-	want := []string{"A", "B", "C", "D", "E"}
-	fp := parseType1(fonttest.Type1Program(want))
-	if fp == nil {
-		t.Fatal("a Type 1 program was not read at all")
-	}
-	for _, n := range want {
-		if !fp.GlyphNames[n] {
-			t.Errorf("the glyph %q was not read; the dictionary header swallowed it", n)
-		}
-	}
-	for name := range fp.GlyphNames {
-		if name == "CharStrings" || name == "Private" {
-			t.Errorf("%q was registered as a glyph; it is the dictionary, not an outline", name)
-		}
-	}
-	if len(fp.GlyphNames) != len(want) {
-		t.Errorf("the program declares %d glyphs, want %d: %v",
-			len(fp.GlyphNames), len(want), fp.GlyphNames)
-	}
-}
-
-// TestParseType1RefusesALengthThatCannotBeALength is the overflow.
-//
-// A charstring's length is digits in a PostScript file and the file writes as
-// many as it likes. Nineteen of them wrapped the accumulator: the length came
-// out negative, which is less than everything left in the file and so passed
-// the check that the bytes are there, and the slice that followed panicked.
-func TestParseType1RefusesALengthThatCannotBeALength(t *testing.T) {
-	for _, tc := range []struct{ name, length string }{
-		{"nineteen digits", "9999999999999999999"},
-		{"twenty-five digits", "1234567890123456789012345"},
-		{"the width of the type", "9223372036854775808"},
-		{"one past a four-byte offset", "2147483648"},
-	} {
-		// The program is built by hand, because the fixture writes honest
-		// lengths and this is about a file that does not.
-		src := "dup /Private 8 dict dup begin\n/lenIV 0 def\n" +
-			"2 index /CharStrings 2 dict dup begin\n" +
-			"/A 1 RD \x8b ND\n" +
-			"/B " + tc.length + " RD \x8b ND\n" +
-			"end\nend\nmark currentfile closefile\n"
-		fp := parseType1(type1Wrap(src))
-		if fp == nil {
-			continue // refused outright is a fine answer
-		}
-		if fp.GlyphNames["B"] {
-			t.Errorf("%s: the glyph after an unreadable length was read anyway", tc.name)
-		}
-		if !fp.GlyphNames["A"] {
-			t.Errorf("%s: the glyph before it was lost too", tc.name)
-		}
-	}
-}
-
-// type1Wrap eexec-encrypts a private section and puts the clear header in front
-// of it, which is what a Type 1 program is.
-func type1Wrap(priv string) []byte {
-	plain := append([]byte("pad!"), priv...)
-	var r uint16 = 55665
-	const c1, c2 = 52845, 22719
-	enc := make([]byte, 0, len(plain))
-	for _, p := range plain {
-		c := p ^ byte(r>>8)
-		r = (uint16(c)+r)*c1 + c2
-		enc = append(enc, c)
-	}
-	header := "%!PS-AdobeFont-1.0\n/FontMatrix [0.001 0 0 0.001 0 0] readonly def\ncurrentfile eexec\n"
-	return append([]byte(header), enc...)
-}
-
-// TestParseLeadingIntStopsBeforeItWraps pins the helper both of those go
-// through, since a bound that is only ever seen through a caller is a bound
-// nobody can read.
-func TestParseLeadingIntStopsBeforeItWraps(t *testing.T) {
-	for _, tc := range []struct {
-		in   string
-		want int
-		ok   bool
-	}{
-		{"0", 0, true},
-		{"228", 228, true},
-		{"2147483647", math.MaxInt32, true},
-		{"2147483648", 0, false},
-		{"9999999999999999999", 0, false},
-		{"12x", 12, true},
-		{"x12", 0, false},
-		{"", 0, false},
-	} {
-		got, ok := parseLeadingInt(tc.in)
-		if got != tc.want || ok != tc.ok {
-			t.Errorf("parseLeadingInt(%q) = %d, %v; want %d, %v", tc.in, got, ok, tc.want, tc.ok)
-		}
-	}
-	// And the message the caller would give, so a reader knows what tripped.
-	if _, ok := parseLeadingInt(strings.Repeat("9", 30)); ok {
-		t.Error("thirty digits were accepted as a length")
 	}
 }

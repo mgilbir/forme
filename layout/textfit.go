@@ -3,6 +3,7 @@ package layout
 import (
 	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
@@ -123,13 +124,13 @@ func (f textFit) clamp(want float64) float64 {
 // block's own factor would be a page the author did not ask for. So it is
 // reported and nothing is scaled.
 func textFitOf(b *Box) (textFit, string) {
-	raw := strings.ToLower(strings.TrimSpace(b.Style.Get("text-fit")))
+	raw := ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("text-fit")))
 	if raw == "" || raw == "none" {
 		return textFit{}, ""
 	}
 	var out textFit
 	unhandled := ""
-	for _, word := range strings.Fields(raw) {
+	for _, word := range ascii.CSSFields(raw) {
 		switch word {
 		case "none":
 			out.mode = fitNone

@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Resolving the references a document makes to things outside itself.
@@ -457,7 +459,7 @@ func schemeOf(ref string) (string, bool) {
 			if i == 0 {
 				return "", false
 			}
-			return strings.ToLower(ref[:i]), true
+			return ascii.Lower(ref[:i]), true
 		}
 		return "", false
 	}

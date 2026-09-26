@@ -2,9 +2,9 @@ package paragraph
 
 import (
 	"math"
-	"unicode"
 	"unicode/utf8"
 
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/segment"
 )
 
@@ -262,7 +262,7 @@ func newUnitIndex(text string, bounds []int) *unitIndex {
 			switch {
 			case IsDefaultIgnorable(r):
 				continue
-			case unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r):
+			case charprop.Is(r, charprop.Mn|charprop.Me):
 				if kind == empty {
 					kind = markOnly
 				}

@@ -164,10 +164,7 @@ func TestTheBoundaryPairIsFoundThroughTheNeighboursGlyph(t *testing.T) {
 	}
 	// Stated on the ligature and on nothing else. An implementation pairing the
 	// characters would look for "n" before "f" and find nothing.
-	l := f.layoutFor(runScript("nfi"), nil)
-	l.kern = append(l.kern, kernLookup{
-		pairs: map[[2]int]pairAdjust{{left, lig[0].GID}: {firstAdvance: -100}},
-	})
+	plantPair(f.layoutFor(runScript("nfi"), otLanguage{}), left, lig[0].GID, -100, 0)
 
 	whole := wholeAdvance(f, "nfi")
 	if apart := wholeAdvance(f, "n") + wholeAdvance(f, "fi"); whole == apart {
@@ -209,10 +206,7 @@ func TestTheNeighboursShareOfThePairGoesToTheNeighboursRun(t *testing.T) {
 	// run's script rather than the face's own, which is where a font's pairs
 	// arrive once the script has selected among its features.
 	const units = -100
-	l := f.layoutFor(runScript(left+right), nil)
-	l.kern = append(l.kern, kernLookup{
-		pairs: map[[2]int]pairAdjust{{lg, rg}: {secondAdvance: units}},
-	})
+	plantPair(f.layoutFor(runScript(left+right), otLanguage{}), lg, rg, 0, units)
 
 	whole := wholeAdvance(f, left+right)
 	if apart := wholeAdvance(f, left) + wholeAdvance(f, right); whole == apart {
@@ -267,4 +261,25 @@ func TestTheBoundaryWindowCountsCharacters(t *testing.T) {
 			t.Errorf("lastRunes(%q, %d) = %q, want %q", cjk, n, got, want)
 		}
 	}
+}
+
+// plantPair writes a pair into a layout the way a font states one: as a pair
+// lookup under 'kern', which the positioning pass applies, and in the flat
+// reading the boundary pair asks. The layout's plans are dropped, since a plan
+// built before the pair was planted does not name its lookup.
+func plantPair(l *layout, left, right, first, second int) {
+	sub := fonttest.PairPosBothSides([]fonttest.KernPair{
+		{Left: left, Right: right, Adjust: first, SecondAdjust: second}})
+	l.gpos = append(append([]rawLookup(nil), l.gpos...), rawLookup{kind: 2, markSet: -1, subs: [][]byte{sub}})
+	features := map[string][]int{}
+	for tag, lookups := range l.gposFeatures {
+		features[tag] = lookups
+	}
+	features["kern"] = append(append([]int(nil), features["kern"]...), len(l.gpos)-1)
+	l.gposFeatures = features
+	l.kern = append(append([]kernLookup(nil), l.kern...), kernLookup{
+		pairs: map[[2]int]pairAdjust{{left, right}: {
+			firstAdvance: int16(first), secondAdvance: int16(second), takesSecond: true}},
+	})
+	l.plans = &planCache{}
 }

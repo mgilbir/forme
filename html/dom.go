@@ -39,7 +39,11 @@
 // recorded as written and left for the caller's resolver to decide about.
 package html
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mgilbir/forme/internal/ascii"
+)
 
 // NodeType says what a node is. There are only three, because a renderer needs
 // only three: the document, its elements, and the text in them.
@@ -61,8 +65,12 @@ const (
 
 // Attribute is one attribute of an element.
 type Attribute struct {
-	// Name is lowercased, because HTML attribute names are case-insensitive and
-	// leaving the case as written would mean every consumer folding it again.
+	// Name is lowercased in an HTML document, because HTML attribute names are
+	// case-insensitive and leaving the case as written would mean every
+	// consumer folding it again. On an <svg> or a <math> the tree builder then
+	// gives SVG and MathML names their own case back ("viewBox"); see
+	// AdjustSVGAttributeName. In an XHTML document it is as written, because
+	// XML names are case-sensitive.
 	Name string
 	// Value has its character references resolved.
 	Value string
@@ -72,8 +80,9 @@ type Attribute struct {
 type Node struct {
 	Type NodeType
 
-	// Name is the element's tag name, lowercased. It is empty for the other two
-	// kinds.
+	// Name is the element's tag name: lowercased in an HTML document and as
+	// written in an XHTML one, whose names are XML's and case-sensitive. It is
+	// empty for the other two kinds.
 	Name string
 
 	// Attrs is in source order, with duplicates already refused, and holds at
@@ -93,14 +102,21 @@ type Node struct {
 	// XML says the source was XHTML rather than HTML. It is set on the document
 	// node and nowhere else — see XMLDocument, which is how anything else asks.
 	//
-	// One thing in this package depends on it and one thing outside does. Here
-	// it is that a <style> element holds ordinary character data, so "&gt;" in a
-	// stylesheet is a ">"; outside, it is that an attribute name is
-	// case-sensitive in XML and is not in HTML, which is what attr() in a
-	// content property has to know. See looksLikeXML for how it is decided,
+	// Here it decides that a <style> element holds ordinary character data, so
+	// "&gt;" in a stylesheet is a ">", and that names are kept as written.
+	// Outside, it is that a name an author writes in a stylesheet — a type
+	// selector, an attribute selector, attr() in a content property — is
+	// matched case-sensitively, as XML matches it; see AttrNamed. See looksLikeXML for how it is decided,
 	// which is a guess about the source rather than a content type nobody gave
 	// this engine.
 	XML bool
+
+	// PragmaLanguage is HTML's pragma-set default language: the language a
+	// <meta http-equiv="content-language"> gave the document, or empty when
+	// none did. It is set on the document node and nowhere else, and it is the
+	// language of every node that has no lang of its own above it. See
+	// Language, and parser.pragma for how it is read.
+	PragmaLanguage string
 
 	// Offset is the byte offset in the source at which the node begins, so a
 	// finding from layout can point back at the markup that caused it. That is
@@ -123,11 +139,16 @@ type Node struct {
 
 // Attr returns the value of an attribute and whether it was present. The name
 // is matched lowercased, as HTML matches it.
+//
+// It is for the engine's own questions, which ask for lower-case names —
+// "lang", "href", "colspan" — and for those it is right in every document: in
+// XHTML an attribute written "LANG" is stored so, and "lang" does not find it,
+// which is XML's answer. A name an author wrote is AttrNamed's question.
 func (n *Node) Attr(name string) (string, bool) {
 	if n == nil {
 		return "", false
 	}
-	name = strings.ToLower(name)
+	name = ascii.Lower(name)
 	for _, a := range n.Attrs {
 		if a.Name == name {
 			return a.Value, true
@@ -144,12 +165,8 @@ func (n *Node) Attr(name string) (string, bool) {
 // selects nothing at all in XHTML. content-attr-case-001 and -002 are the same
 // document in the two languages and assert exactly that pair.
 //
-// The names in Attrs are lowercase either way — the tokenizer lowercases them —
-// so what this does in practice is refuse a query that is not already lowercase.
-// That is the right answer for the same reason: an XHTML document that really
-// wrote "Title" has an attribute this engine has stored as "title" and cannot
-// tell from one written that way, and refusing both is the answer that never
-// invents a match.
+// The names in Attrs are stored as the document's language gives them — see
+// Attribute.Name — so an XHTML "Title" is found by "Title" and by nothing else.
 func (n *Node) AttrExact(name string) (string, bool) {
 	if n == nil {
 		return "", false
@@ -162,8 +179,33 @@ func (n *Node) AttrExact(name string) (string, bool) {
 	return "", false
 }
 
-// Language is the language in force at a node: the value of the nearest lang
-// attribute at or above it, and whether there was one.
+// AttrNamed looks an attribute up by a name an author wrote, in an attribute
+// selector or in attr(), and matches it as the document's language does. xml
+// says the document is XHTML, which a caller asking often has already read
+// once (see XMLDocument).
+//
+// HTML matches such a name ASCII case-insensitively on an HTML element in an
+// HTML document, and on nothing else. Every element of an XHTML document has
+// XML's case-sensitive names, and so does an <svg> or a <math> in an HTML
+// document once the tree builder has given its attributes their own case back:
+// "svg[viewBox]" selects it and "svg[viewbox]" does not, which is what a browser
+// answers.
+func (n *Node) AttrNamed(name string, xml bool) (string, bool) {
+	if !n.NamesFoldCase(xml) {
+		return n.AttrExact(name)
+	}
+	return n.Attr(name)
+}
+
+// NamesFoldCase reports whether the names an author writes are matched against
+// this element ASCII case-insensitively: whether it is an HTML element in an
+// HTML document. xml says the document is XHTML. See AttrNamed.
+func (n *Node) NamesFoldCase(xml bool) bool {
+	return !xml && n != nil && !foreignElements[n.Name]
+}
+
+// Language is the language in force at a node: the value of the nearest lang or
+// xml:lang attribute at or above it that counts, and whether there was one.
 //
 // It is here rather than in each caller because it had five copies — the casing
 // tailoring, the hyphenation patterns, the orthography, the writing system, and
@@ -171,21 +213,37 @@ func (n *Node) AttrExact(name string) (string, bool) {
 // five. They ask different questions *of* the tag; they must not ask different
 // tags.
 //
-// **xml:lang is the same attribute.** HTML §3.2.6 says so: an element with an
-// xml:lang in the XML namespace and no lang in no namespace takes its language
-// from the xml:lang, and the precedence is per element rather than per document
-// — a lang on a child beats an xml:lang on its parent because it is nearer, and
-// loses to an xml:lang on the child itself only by being absent. Reading lang
-// alone made "<div xml:lang='tr'>" a document with no language at all, which in
-// XHTML — where xml:lang is the natural spelling and half the older test suite
-// is written — turned the Turkish casing tailoring off and typeset the wrong
-// letters.
+// **xml:lang is the same attribute, and it comes first.** HTML §3.2.6.2
+// gives the order in which an element's own attributes are asked: a lang in
+// the XML namespace first, and only then a lang in no namespace. So an element
+// carrying both takes its language from xml:lang, and lang is not read at all.
+// The two are meant to agree — the section makes it a conformance error when
+// they do not — and when they do not, it is xml:lang the user agent follows.
+// Reading lang alone made "<div xml:lang='tr'>" a document with no language at
+// all, which in XHTML — where xml:lang is the natural spelling and half the
+// older test suite is written — turned the Turkish casing tailoring off and
+// typeset the wrong letters. When it was first read, it was asked after lang,
+// which is the section's order reversed.
 //
-// Only in a document that is XML. The HTML parser stores "xml:lang" as a
-// literal attribute name with no namespace, and a browser reading an HTML
-// document ignores it for exactly that reason; honouring it there would be a
-// language this engine invents. XMLDocument is asked only once, and only when
-// an xml:lang was found with no lang above it.
+// The precedence is per element rather than per document: a lang on a child
+// beats an xml:lang on its parent because it is nearer.
+//
+// **Which attribute is in the XML namespace depends on the document.** In
+// XHTML the prefix "xml" is bound to that namespace by definition, so an
+// "xml:lang" is the attribute wherever it is written. In an HTML document the
+// parser stores it as a literal name in no namespace, which the section says
+// "has no effect on language processing" — except on the roots of SVG and
+// MathML, whose start tags the tree builder puts through "adjust foreign
+// attributes", which moves an xml:lang into the XML namespace. Honouring it on
+// an HTML element there would be a language this engine invents; ignoring it on
+// an <svg> would be one it loses.
+//
+// **lang in no namespace is an HTML and SVG attribute**, and the section reads
+// it only on those. A <math> has no lang to read, so its language is its
+// xml:lang or its parent's; and in an XHTML document an element whose name still
+// carries a prefix is in a namespace this engine does not know (see
+// parser.resolveName, which drops a prefix only when it names one it does), so
+// it is neither.
 //
 // **An empty value is an answer.** HTML §3.2.6.2: lang="" says the language is
 // unknown, and it stops the walk as surely as a tag does — it is how an author
@@ -195,19 +253,125 @@ func (n *Node) AttrExact(name string) (string, bool) {
 // hyphenation patterns and :lang(tr) all applied to it. It is returned as the
 // empty string with ok true: every reader here maps the empty tag to its own
 // "no language" answer.
+//
+// It walks every ancestor's attributes, which is right for one question and
+// wrong for a question asked of every node in a tree: see Languages.
+//
+// **Below every lang, the document's pragma.** §3.2.6.2's last step: a node
+// with no lang or xml:lang anywhere above it takes the pragma-set default
+// language, which a <meta http-equiv="content-language"> sets (see
+// PragmaLanguage). A document that said its language that way — the spelling
+// of a great many pages generated before lang was widespread — was a document
+// in no language at all.
 func (n *Node) Language() (string, bool) {
 	for cur := n; cur != nil; cur = cur.Parent {
-		if cur.Type != ElementNode {
-			continue
-		}
-		if v, ok := cur.Attr("lang"); ok {
+		if v, ok := cur.ownLanguage(cur.XMLDocument); ok {
 			return v, true
 		}
-		if v, ok := cur.Attr("xml:lang"); ok && cur.XMLDocument() {
-			return v, true
+		if cur.Type == DocumentNode && cur.PragmaLanguage != "" {
+			return cur.PragmaLanguage, true
 		}
 	}
 	return "", false
+}
+
+// ownLanguage is the language a node itself declares, if it declares one: the
+// one rule Language and Languages both walk, so that the two cannot come to
+// answer differently. See Language for the rule. xml is asked only when the
+// answer depends on it — an xml:lang on an element that is not a foreign root,
+// or a lang on an element whose name carries a prefix — which leaves the
+// ordinary document, with lang alone, never asking.
+func (n *Node) ownLanguage(xml func() bool) (string, bool) {
+	if n.Type != ElementNode {
+		return "", false
+	}
+	if v, ok := n.Attr("xml:lang"); ok && (foreignElements[n.Name] || xml()) {
+		return v, true
+	}
+	if n.Name == "math" {
+		return "", false
+	}
+	if v, ok := n.Attr("lang"); ok {
+		if strings.IndexByte(n.Name, ':') >= 0 && xml() {
+			return "", false
+		}
+		return v, true
+	}
+	return "", false
+}
+
+// Languages answers Language for the nodes of a tree that is not changing, each
+// node's answer worked out once.
+//
+// Language is a walk to the root reading two attributes of every element on the
+// way, and the layout asks it of every text node — its casing, its hyphenation,
+// its writing system, several times each — while :lang() asks it of every
+// element a rule is tried on. A paragraph of nested spans, each holding a word,
+// cost the square of its depth times the attributes on each span: sixty spans
+// with twenty attributes each took 6 ms to lay out, and 240 took 68.
+//
+// A node's language is its own declaration or else its parent's answer, so the
+// memo is keyed by the node and filled on the way back down a walk that stops
+// at the first node already answered. Every node is walked past once however
+// many times it is asked about. Whether an xml:lang counts depends on the
+// document the node is in, and that is carried down the same way, from the
+// document node to every answer below it. The answers are the tree's, which is
+// why the memo belongs to one pass over one unchanging tree and is not kept on
+// the nodes: the tree's fields are exported, and a caller may change them
+// between passes.
+//
+// The zero value is ready to use. It is not safe for concurrent use.
+type Languages struct {
+	answers map[*Node]languageAnswer
+}
+
+type languageAnswer struct {
+	tag      string
+	declared bool
+	// xml is whether the tree the node is in was read as XHTML, carried so
+	// that a walk stopping at this node knows it without going on to the root.
+	xml bool
+}
+
+// Of is n.Language(), memoized.
+func (l *Languages) Of(n *Node) (string, bool) {
+	if n == nil {
+		return "", false
+	}
+	if l.answers == nil {
+		l.answers = map[*Node]languageAnswer{}
+	}
+	if a, ok := l.answers[n]; ok {
+		return a.tag, a.declared
+	}
+	// Up to the first node answered, or past the root.
+	var path []*Node
+	var above languageAnswer
+	for cur := n; cur != nil; cur = cur.Parent {
+		if a, ok := l.answers[cur]; ok {
+			above = a
+			break
+		}
+		path = append(path, cur)
+	}
+	xml := func() bool { return above.xml }
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i].Type == DocumentNode {
+			// What XMLDocument answers for everything below: the nearest
+			// document node above decides, and nothing above one does. The
+			// same holds for the pragma-set default language, which is the
+			// answer below the document for anything no lang overrides.
+			above.xml = path[i].XML
+			if path[i].PragmaLanguage != "" {
+				above = languageAnswer{tag: path[i].PragmaLanguage, declared: true, xml: above.xml}
+			}
+		}
+		if v, ok := path[i].ownLanguage(xml); ok {
+			above = languageAnswer{tag: v, declared: true, xml: above.xml}
+		}
+		l.answers[path[i]] = above
+	}
+	return above.tag, above.declared
 }
 
 // XMLDocument reports whether the node is in a document parsed as XHTML.
@@ -282,7 +446,7 @@ func (n *Node) Walk(fn func(*Node) bool) {
 
 // Element finds the first element with the given name, in document order.
 func (n *Node) Element(name string) *Node {
-	name = strings.ToLower(name)
+	name = ascii.Lower(name)
 	var found *Node
 	n.Walk(func(c *Node) bool {
 		if found != nil {

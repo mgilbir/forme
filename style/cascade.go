@@ -9,6 +9,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // The cascade: deciding which declaration wins when several apply, and what an
@@ -744,10 +745,12 @@ func (s *Styler) remember(sheet Sheet, mark preparation, out []preparedRule,
 // prepareMedia evaluates an @media query and, where it matches, prepares the
 // rules inside it as though they had been written where the block is.
 //
-// "As though they had been written there" is the whole of §3's cascading
-// behaviour: an @media block adds no specificity and no priority, so the rules
-// in it are ordered among their neighbours by where the block sits. That falls
-// out of preparing them here, in place, rather than gathering them for later.
+// "As though they had been written there" is the whole of CSS Conditional 3
+// §2's processing of a conditional group rule, which applies the rules inside
+// "as though they were at the group rule's location": an @media block adds no
+// specificity and no priority, and the rules in it are ordered among their
+// neighbours by where the block sits. That falls out of preparing them here,
+// in place, rather than gathering them for later.
 //
 // A query that does not match drops what is inside it, and that is not a
 // failure to report: the stylesheet said those rules were for another medium
@@ -762,7 +765,7 @@ func (s *Styler) prepareMedia(rule css.Rule, parent *css.Nesting, origin Origin,
 	if unknown != "" {
 		s.report(Finding{
 			Offset: rule.Offset,
-			Message: "the media query \"" + strings.TrimSpace(serialize(rule.Prelude)) +
+			Message: "the media query \"" + ascii.TrimCSSSpace(serialize(rule.Prelude)) +
 				"\" asks about \"" + unknown + "\", which this engine cannot " +
 				"answer, so the rules inside it were not applied",
 			Unsupported: true,
@@ -847,7 +850,7 @@ func (s *Styler) prepareSupports(rule css.Rule, parent *css.Nesting,
 // neither — "p { @page { size: A5 } }" is not a page rule, and it was dropped
 // with nothing said.
 func (s *Styler) collectAtRule(rule css.Rule, parent *css.Nesting, origin Origin) {
-	name := "@" + strings.ToLower(rule.Name)
+	name := "@" + ascii.Lower(rule.Name)
 	if parent != nil {
 		s.report(Finding{
 			Offset:   rule.Offset,
@@ -865,7 +868,7 @@ func (s *Styler) collectAtRule(rule css.Rule, parent *css.Nesting, origin Origin
 }
 
 // quoted is a condition as it appears in a finding.
-func quoted(s string) string { return strconv.Quote(strings.TrimSpace(s)) }
+func quoted(s string) string { return strconv.Quote(ascii.TrimCSSSpace(s)) }
 
 // prepareNestedConditional prepares an @media written *inside* a style rule.
 //
@@ -906,7 +909,7 @@ func charsetLabel(prelude []css.ComponentValue) (string, bool) {
 	if n != 1 || !only.IsToken() || only.Token.Kind != css.String {
 		return "", false
 	}
-	return strings.ToLower(strings.TrimSpace(only.Token.Value)), true
+	return ascii.Lower(ascii.TrimSpace(only.Token.Value)), true
 }
 
 // utf8Charset reports whether a label names UTF-8, from the Encoding Standard's
@@ -936,19 +939,19 @@ func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 	out *[]preparedRule, order *int) {
 
 	if rule.At {
-		if strings.EqualFold(rule.Name, "media") {
+		if ascii.EqualFold(rule.Name, "media") {
 			s.prepareMedia(rule, parent, origin, out, order)
 			return
 		}
-		if strings.EqualFold(rule.Name, "layer") {
+		if ascii.EqualFold(rule.Name, "layer") {
 			s.prepareLayer(rule, parent, origin, out, order)
 			return
 		}
-		if strings.EqualFold(rule.Name, "supports") {
+		if ascii.EqualFold(rule.Name, "supports") {
 			s.prepareSupports(rule, parent, origin, out, order)
 			return
 		}
-		if strings.EqualFold(rule.Name, "page") || strings.EqualFold(rule.Name, "font-face") {
+		if ascii.EqualFold(rule.Name, "page") || ascii.EqualFold(rule.Name, "font-face") {
 			// @page selects no element and computes no value on one: it
 			// describes the paper. @font-face loads a file. The stages that do
 			// those read them, and this walk is where they are found — at any
@@ -957,7 +960,7 @@ func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 			s.collectAtRule(rule, parent, origin)
 			return
 		}
-		if strings.EqualFold(rule.Name, "charset") {
+		if ascii.EqualFold(rule.Name, "charset") {
 			// @charset names the encoding the stylesheet is written in, which
 			// is not something the cascade applies to anything — it is a fact
 			// about the bytes, settled before they were parsed. A sheet saying
@@ -1087,7 +1090,7 @@ func (s *Styler) expand(d css.Declaration, origin Origin) []preparedDecl {
 
 // expandDecl is expand without the text.
 func (s *Styler) expandDecl(d css.Declaration, origin Origin) []preparedDecl {
-	name := strings.ToLower(d.Name)
+	name := ascii.Lower(d.Name)
 
 	// Custom properties, and every declaration whose value uses one.
 	//
@@ -1375,7 +1378,7 @@ func legalBackgroundImage(vals []css.ComponentValue) bool {
 		default:
 			return false
 		}
-		switch strings.ToLower(v.Token.Value) {
+		switch ascii.Lower(v.Token.Value) {
 		case "none":
 		case kwInherit, kwInitial, kwUnset, kwRevert, kwRevertLayer:
 			// A CSS-wide keyword is the whole value or it is nothing:
@@ -1430,7 +1433,7 @@ func legalDisplay(vals []css.ComponentValue) bool {
 			// is not a keyword, and every display value is one.
 			return false
 		}
-		words = append(words, strings.ToLower(part[0].Token.Value))
+		words = append(words, ascii.Lower(part[0].Token.Value))
 	}
 	if len(words) == 1 {
 		switch words[0] {
@@ -1632,7 +1635,7 @@ func legalQuotes(vals []css.ComponentValue) bool {
 			seen++
 		case css.Ident:
 			// "none" is the only identifier the grammar admits, and only alone.
-			return seen == 0 && strings.EqualFold(v.Token.Value, "none") && onlyIdent(vals)
+			return seen == 0 && ascii.EqualFold(v.Token.Value, "none") && onlyIdent(vals)
 		default:
 			return false
 		}
@@ -1661,7 +1664,7 @@ func legalCounterFunctions(vals []css.ComponentValue) bool {
 		if !v.IsFunction() {
 			continue
 		}
-		name := strings.ToLower(v.Token.Value)
+		name := ascii.Lower(v.Token.Value)
 		if name != "counter" && name != "counters" {
 			continue
 		}
@@ -2014,7 +2017,7 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 	// question — a winner, an inline style against it, and inheritance under
 	// both — asked early.
 	writingMode := s.early("writing-mode", winners, inline, parent)
-	rtl := strings.EqualFold(s.early("direction", winners, inline, parent), "rtl")
+	rtl := ascii.EqualFold(s.early("direction", winners, inline, parent), "rtl")
 	if renameLogical(cands, inline, writingMode, rtl) {
 		pick()
 	}
@@ -2062,7 +2065,7 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 // other value — including "initial", which is a statement about this element —
 // is the element's own.
 func declaresItsOwnValue(value string, prop property) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case kwInherit:
 		return false
 	case kwUnset, kwRevert, kwRevertLayer:
@@ -2084,7 +2087,7 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 	}
 
 	if have {
-		if name == "color" && strings.EqualFold(strings.TrimSpace(value), "currentcolor") {
+		if name == "color" && ascii.EqualFold(ascii.TrimCSSSpace(value), "currentcolor") {
 			// CSS Color 4 §7.2: "If the 'currentcolor' keyword is set on the
 			// 'color' property itself, it is treated as 'color: inherit'."
 			//
@@ -2095,7 +2098,7 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 			// asked for the green.
 			return inheritFrom()
 		}
-		switch strings.ToLower(value) {
+		switch ascii.Lower(value) {
 		case kwInherit:
 			return inheritFrom()
 		case kwInitial:
@@ -2121,7 +2124,7 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 			// of the property and dropped for not being one: "color:
 			// revert-layer" left the colour the *earlier* declaration had set,
 			// which is the opposite of what it asks for.
-			said := strings.ToLower(value)
+			said := ascii.Lower(value)
 			lower := "a lower-priority stylesheet"
 			if said == kwRevertLayer {
 				lower = "a lower cascade layer or a lower-priority stylesheet"
@@ -2276,8 +2279,9 @@ func (rs *ruleSet) candidates(n *html.Node) []int32 {
 	}
 	name := asciiLowerName(n.Name)
 	if name == "" {
-		// A name this cannot fold, which is a name no HTML element has. Every
-		// rule is considered rather than guessed about.
+		// A name with a byte above ASCII. HTML's tag name state keeps such a
+		// character ("<math-α>"), so the reader does make these, but seldom,
+		// and every rule is considered rather than guessed about. See keysOf.
 		for i := range rs.rules {
 			out = append(out, int32(i))
 		}
@@ -2291,7 +2295,7 @@ func (rs *ruleSet) candidates(n *html.Node) []int32 {
 		}
 		if len(rs.byClass) > 0 {
 			if class, ok := n.Attr("class"); ok {
-				for _, c := range asciiFields(class) {
+				for _, c := range ascii.Fields(class) {
 					add(rs.byClass[c])
 				}
 			}
@@ -2310,13 +2314,13 @@ func (rs *ruleSet) candidates(n *html.Node) []int32 {
 // about how short the list it lands in is. The id and class are compared
 // exactly, as the matcher compares them (see hasClass).
 //
-// A selector whose subject names none of the three can select anything, and so
-// can one whose type this cannot fold. The matcher compares a type with
-// strings.EqualFold, which is Unicode's folding rather than ASCII's, and the two
-// differ on characters no element name has — but "differ only on characters
-// nobody uses" is not an argument for an index that decides whether a rule is
-// looked at. A type with a byte above ASCII is filed under nothing and so is
-// walked for every element, exactly as before.
+// A selector whose subject names none of the three can select anything, and is
+// not indexed. Nor is one whose type has a byte above ASCII: the matcher folds
+// a type as this does, ASCII only (see compound), so such a rule selects only
+// an element whose name holds the same bytes — which the HTML reader makes, as
+// HTML's tag name state does ("<math-α>"), but seldom — and a rule like that is
+// walked for every element rather than filed under a key that has to be argued
+// for.
 func keysOf(sels []css.Selector) []ruleKey {
 	keys := make([]ruleKey, 0, len(sels))
 	for _, sel := range sels {
@@ -2344,31 +2348,18 @@ func keysOf(sels []css.Selector) []ruleKey {
 }
 
 // asciiLowerName lower-cases an element or type name, or answers empty for one
-// that holds a byte the ASCII fold does not decide.
+// that holds a byte the index does not file (see keysOf).
+//
+// It must not allocate in the common case, which ascii.Lower sees to: this is
+// asked once per element per style computation, and a copy of every element
+// name would cost more than the loop it is saving.
 func asciiLowerName(s string) string {
-	// The common case by far, and it must not allocate: this is asked once per
-	// element per style computation, and a copy of every element name would
-	// cost more than the loop it is saving.
-	upper := -1
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 0x80 {
+		if s[i] >= 0x80 {
 			return ""
 		}
-		if upper < 0 && c >= 'A' && c <= 'Z' {
-			upper = i
-		}
 	}
-	if upper < 0 {
-		return s
-	}
-	lower := []byte(s)
-	for i := upper; i < len(lower); i++ {
-		if c := lower[i]; c >= 'A' && c <= 'Z' {
-			lower[i] = c + 'a' - 'A'
-		}
-	}
-	return string(lower)
+	return ascii.Lower(s)
 }
 
 // matchSpecificityFor reports whether a rule applies to an element, and with what
@@ -2609,7 +2600,7 @@ func CascadeRank(origin Origin, important bool) int {
 // is parsed as a block's contents rather than as a stylesheet.
 func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 	raw, ok := n.Attr("style")
-	if !ok || strings.TrimSpace(raw) == "" {
+	if !ok || ascii.TrimCSSSpace(raw) == "" {
 		return nil
 	}
 	decls, _, errs := css.ParseDeclarations(raw)
@@ -2709,7 +2700,7 @@ func UsesVar(vals []css.ComponentValue) bool { return usesVar(vals) }
 // know.
 func usesVar(vals []css.ComponentValue) bool {
 	for _, v := range vals {
-		if v.IsFunction() && strings.EqualFold(v.Token.Value, "var") {
+		if v.IsFunction() && ascii.EqualFold(v.Token.Value, "var") {
 			return true
 		}
 		if len(v.Values) > 0 && usesVar(v.Values) {
@@ -2772,5 +2763,5 @@ func (s *Styler) early(name string, winners map[string]candidate,
 	inline map[string]preparedDecl, parent ComputedStyle) string {
 
 	value, have := s.winning(name, winners, inline)
-	return strings.TrimSpace(s.resolve(name, properties[name], value, have, parent))
+	return ascii.TrimCSSSpace(s.resolve(name, properties[name], value, have, parent))
 }

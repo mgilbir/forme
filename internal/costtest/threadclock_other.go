@@ -1,6 +1,6 @@
 //go:build !linux
 
-package paragraph
+package costtest
 
 import "time"
 

@@ -3,9 +3,9 @@ package style
 import (
 	"math"
 	"strconv"
-	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // The shorthands whose parts are told apart by *type* rather than by position.
@@ -410,7 +410,7 @@ func isRepeatKeyword(part []css.ComponentValue) bool {
 	if !isIdentPart(part) {
 		return false
 	}
-	switch strings.ToLower(part[0].Token.Value) {
+	switch ascii.Lower(part[0].Token.Value) {
 	case "repeat", "repeat-x", "repeat-y", "no-repeat", "space", "round":
 		return true
 	}
@@ -423,7 +423,7 @@ func isAxisRepeatKeyword(part []css.ComponentValue) bool {
 	if !isIdentPart(part) {
 		return false
 	}
-	switch strings.ToLower(part[0].Token.Value) {
+	switch ascii.Lower(part[0].Token.Value) {
 	case "repeat-x", "repeat-y":
 		return true
 	}
@@ -434,7 +434,7 @@ func isAttachmentKeyword(part []css.ComponentValue) bool {
 	if !isIdentPart(part) {
 		return false
 	}
-	switch strings.ToLower(part[0].Token.Value) {
+	switch ascii.Lower(part[0].Token.Value) {
 	case "scroll", "fixed", "local":
 		return true
 	}
@@ -445,7 +445,7 @@ func isBoxKeyword(part []css.ComponentValue) bool {
 	if !isIdentPart(part) {
 		return false
 	}
-	switch strings.ToLower(part[0].Token.Value) {
+	switch ascii.Lower(part[0].Token.Value) {
 	case "border-box", "padding-box", "content-box":
 		return true
 	}
@@ -454,7 +454,7 @@ func isBoxKeyword(part []css.ComponentValue) bool {
 
 func isPositionComponent(part []css.ComponentValue) bool {
 	if isIdentPart(part) {
-		switch strings.ToLower(part[0].Token.Value) {
+		switch ascii.Lower(part[0].Token.Value) {
 		case "left", "right", "top", "bottom", "center":
 			return true
 		}
@@ -465,7 +465,7 @@ func isPositionComponent(part []css.ComponentValue) bool {
 
 func isSizeComponent(part []css.ComponentValue) bool {
 	if isIdentPart(part) {
-		switch strings.ToLower(part[0].Token.Value) {
+		switch ascii.Lower(part[0].Token.Value) {
 		case "auto", "cover", "contain":
 			return true
 		}
@@ -483,7 +483,7 @@ func isLengthOrPercent(part []css.ComponentValue) bool {
 func isNone(part []css.ComponentValue) bool {
 	return len(part) == 1 && part[0].IsToken() &&
 		part[0].Token.Kind == css.Ident &&
-		strings.EqualFold(part[0].Token.Value, "none")
+		ascii.EqualFold(part[0].Token.Value, "none")
 }
 
 // listStyleShorthand expands "list-style": a type, a position, and an image.
@@ -585,14 +585,14 @@ func isURLPart(part []css.ComponentValue) bool {
 	if v.IsToken() && v.Token.Kind == css.URL {
 		return true
 	}
-	return v.IsFunction() && strings.EqualFold(v.Token.Value, "url")
+	return v.IsFunction() && ascii.EqualFold(v.Token.Value, "url")
 }
 
 func isListPosition(part []css.ComponentValue) bool {
 	if !isIdentPart(part) {
 		return false
 	}
-	switch strings.ToLower(part[0].Token.Value) {
+	switch ascii.Lower(part[0].Token.Value) {
 	case "inside", "outside":
 		return true
 	}
@@ -640,7 +640,7 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 	// The system-font keywords set every part at once from something this
 	// engine has no access to.
 	if len(parts) == 1 && isIdentPart(parts[0]) {
-		switch strings.ToLower(parts[0][0].Token.Value) {
+		switch ascii.Lower(parts[0][0].Token.Value) {
 		case "caption", "icon", "menu", "message-box", "small-caption", "status-bar":
 			return nil, []string{"the system font " + serialize(parts[0])}, false
 		}
@@ -821,7 +821,7 @@ func textDecorationShorthand(vals []css.ComponentValue) (map[string][]css.Compon
 	for _, part := range splitOnWhitespace(vals) {
 		switch {
 		case isDecorationLine(part):
-			name := strings.ToLower(part[0].Token.Value)
+			name := ascii.Lower(part[0].Token.Value)
 			if seen[name] || seenNone || (name == "none" && len(lines) > 0) {
 				return nil, nil, false
 			}
@@ -884,7 +884,7 @@ func isDecorationLine(part []css.ComponentValue) bool {
 	if !isIdentPart(part) {
 		return false
 	}
-	switch strings.ToLower(part[0].Token.Value) {
+	switch ascii.Lower(part[0].Token.Value) {
 	case "none", "underline", "overline", "line-through":
 		return true
 	}
@@ -1182,7 +1182,7 @@ func fontVariantShorthand(vals []css.ComponentValue) (map[string][]css.Component
 func variantFunction(part []css.ComponentValue) (string, bool) {
 	for _, v := range part {
 		if v.IsFunction() {
-			return strings.ToLower(v.Token.Value) + "()", true
+			return ascii.Lower(v.Token.Value) + "()", true
 		}
 	}
 	return "", false
@@ -1284,7 +1284,7 @@ func singleIdent(vals []css.ComponentValue) (string, bool) {
 		if !v.IsToken() || v.Token.Kind != css.Ident || name != "" {
 			return "", false
 		}
-		name = strings.ToLower(v.Token.Value)
+		name = ascii.Lower(v.Token.Value)
 	}
 	return name, name != ""
 }
@@ -1376,7 +1376,7 @@ func flexShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 	}
 	if len(parts) == 1 && len(parts[0]) == 1 && parts[0][0].IsToken() &&
 		parts[0][0].Token.Kind == css.Ident {
-		switch strings.ToLower(parts[0][0].Token.Value) {
+		switch ascii.Lower(parts[0][0].Token.Value) {
 		case "none":
 			return set(0, 0, "0", "0", "auto")
 		case "auto":
@@ -1416,7 +1416,7 @@ func isFlexBasisKeyword(part []css.ComponentValue) bool {
 	if len(part) != 1 || !part[0].IsToken() || part[0].Token.Kind != css.Ident {
 		return false
 	}
-	switch strings.ToLower(part[0].Token.Value) {
+	switch ascii.Lower(part[0].Token.Value) {
 	case "auto", "content":
 		return true
 	}
@@ -1454,7 +1454,7 @@ func flexFlowShorthand(vals []css.ComponentValue) (map[string][]css.ComponentVal
 		if len(part) != 1 || !part[0].IsToken() || part[0].Token.Kind != css.Ident {
 			return nil, nil, false
 		}
-		switch v := strings.ToLower(part[0].Token.Value); v {
+		switch v := ascii.Lower(part[0].Token.Value); v {
 		case "row", "row-reverse", "column", "column-reverse":
 			if seenDirection {
 				return nil, nil, false
@@ -1531,7 +1531,7 @@ func columnsShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValu
 // isAutoKeyword reports the one keyword both halves of "columns" share.
 func isAutoKeyword(part []css.ComponentValue) bool {
 	return len(part) == 1 && part[0].IsToken() && part[0].Token.Kind == css.Ident &&
-		strings.EqualFold(part[0].Token.Value, "auto")
+		ascii.EqualFold(part[0].Token.Value, "auto")
 }
 
 // isColumnCount is <integer>: written with no fractional part and no unit.
@@ -1569,7 +1569,7 @@ func legacyPageBreak(longhand string) expander {
 			parts[0][0].Token.Kind != css.Ident {
 			return nil, nil, false
 		}
-		word := strings.ToLower(parts[0][0].Token.Value)
+		word := ascii.Lower(parts[0][0].Token.Value)
 		switch word {
 		case "auto", "avoid":
 		case "always", "left", "right":

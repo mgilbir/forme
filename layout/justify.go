@@ -3,8 +3,8 @@ package layout
 import (
 	"sort"
 	"strings"
-	"unicode"
 
+	"github.com/mgilbir/forme/internal/charprop"
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
@@ -492,7 +492,7 @@ func writtenWithoutWordSeparators(items []inlineItem) bool {
 			switch {
 			case isIdeographic(r):
 				seen = true
-			case unicode.IsLetter(r), unicode.IsDigit(r):
+			case charprop.Is(r, charprop.L|charprop.Nd):
 				return false
 			}
 		}

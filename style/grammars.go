@@ -1,9 +1,8 @@
 package style
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 )
 
 // Every registered property's value definition, from its specification. See
@@ -248,7 +247,7 @@ var lineStyle = kw("none", "hidden", "dotted", "dashed", "solid", "double",
 
 // fitContentFn is fit-content(<length-percentage [0,∞]>).
 func fitContentFn(v css.ComponentValue) verdict {
-	if !v.IsFunction() || !strings.EqualFold(v.Token.Value, "fit-content") {
+	if !v.IsFunction() || !ascii.EqualFold(v.Token.Value, "fit-content") {
 		return invalid
 	}
 	return single(num(lengthPctSlot.nonNeg()))(items(v.Values))
@@ -340,7 +339,7 @@ func familyName(it []css.ComponentValue) verdict {
 		if str(it[0]).ok {
 			return valid
 		}
-		if it[0].IsFunction() && strings.EqualFold(it[0].Token.Value, "generic") {
+		if it[0].IsFunction() && ascii.EqualFold(it[0].Token.Value, "generic") {
 			return valid
 		}
 	}
@@ -615,7 +614,7 @@ func lineNames(v css.ComponentValue) verdict {
 // max-content | auto".
 func trackBreadth(v css.ComponentValue) verdict {
 	if v.IsToken() && v.Token.Kind == css.Dimension &&
-		strings.EqualFold(v.Token.Unit, "fr") {
+		ascii.EqualFold(v.Token.Unit, "fr") {
 		if v.Token.Number >= 0 {
 			return valid
 		}
@@ -634,7 +633,7 @@ func trackSize(v css.ComponentValue) verdict {
 	if fitContentFn(v).ok {
 		return valid
 	}
-	if v.IsFunction() && strings.EqualFold(v.Token.Value, "minmax") {
+	if v.IsFunction() && ascii.EqualFold(v.Token.Value, "minmax") {
 		args := splitOnComma(v.Values)
 		if len(args) != 2 {
 			return invalid
@@ -644,7 +643,7 @@ func trackSize(v css.ComponentValue) verdict {
 			return invalid
 		}
 		if a[0].IsToken() && a[0].Token.Kind == css.Dimension &&
-			strings.EqualFold(a[0].Token.Unit, "fr") {
+			ascii.EqualFold(a[0].Token.Unit, "fr") {
 			// The minimum may not be flexible.
 			return invalid
 		}
@@ -656,7 +655,7 @@ func trackSize(v css.ComponentValue) verdict {
 // repeatFn is "repeat( [ <integer [1,∞]> | auto-fill | auto-fit ] ,
 // <track-list> )".
 func repeatFn(v css.ComponentValue) verdict {
-	if !v.IsFunction() || !strings.EqualFold(v.Token.Value, "repeat") {
+	if !v.IsFunction() || !ascii.EqualFold(v.Token.Value, "repeat") {
 		return invalid
 	}
 	args := splitOnComma(v.Values)
@@ -801,7 +800,7 @@ func isContentFunction(v css.ComponentValue, names ...string) bool {
 		return false
 	}
 	for _, n := range names {
-		if strings.EqualFold(v.Token.Value, n) {
+		if ascii.EqualFold(v.Token.Value, n) {
 			return true
 		}
 	}
@@ -825,7 +824,7 @@ func counters(reset bool) grammar {
 			v := it[i]
 			switch {
 			case name(v).ok:
-			case reset && v.IsFunction() && strings.EqualFold(v.Token.Value, "reversed"):
+			case reset && v.IsFunction() && ascii.EqualFold(v.Token.Value, "reversed"):
 				inner := items(v.Values)
 				if len(inner) != 1 || !name(inner[0]).ok {
 					return invalid
@@ -846,7 +845,7 @@ func counters(reset bool) grammar {
 
 // symbolsFn is css-counter-styles-3's symbols(), an anonymous counter style.
 func symbolsFn(v css.ComponentValue) verdict {
-	if v.IsFunction() && strings.EqualFold(v.Token.Value, "symbols") {
+	if v.IsFunction() && ascii.EqualFold(v.Token.Value, "symbols") {
 		return valid
 	}
 	return invalid
@@ -934,7 +933,7 @@ func edgeOffset(it []css.ComponentValue, horiz, vert term) (string, []css.Compon
 // rectFn is CSS 2.1 §11.1.2's rect(), whose four offsets are lengths or auto,
 // separated by commas or, in the older form, by spaces.
 func rectFn(v css.ComponentValue) verdict {
-	if !v.IsFunction() || !strings.EqualFold(v.Token.Value, "rect") {
+	if !v.IsFunction() || !ascii.EqualFold(v.Token.Value, "rect") {
 		return invalid
 	}
 	var parts []css.ComponentValue

@@ -299,6 +299,16 @@ type plan struct {
 	// the mirrored forms at all, so that a run need not be scanned for glyphs to
 	// mask when nothing would read the mask.
 	fractions, rtlm bool
+	// gpos is the positioning lookups the plan applies: every enabled
+	// feature's lookups in the font's GPOS, and the language system's required
+	// positioning feature, in one list in index order, each once. Positioning
+	// has no stages — HarfBuzz pauses between none of its lookups — so the
+	// order of the list is the whole of the order. See position.go.
+	gpos []planLookup
+	// gposKern says the font's positioning offers 'kern' to this run and the
+	// plan has it on, which is what decides whether the legacy kern table is
+	// read instead. See legacykern.go.
+	gposKern bool
 }
 
 // planBuilder collects features into stages, in the order a model asks for
@@ -476,10 +486,16 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 	// The features every script gets, in the stage whatever the model left
 	// open. A tag a model already asked for keeps the model's stage and flags
 	// — see compile — so naming 'ccmp' here again moves nothing.
-	for _, tag := range [...]string{"ccmp", "locl", "rlig"} {
+	//
+	// They are HarfBuzz's common and horizontal features, and a feature is
+	// one name for both tables: the positioning ones ('abvm', 'blwm', 'mark',
+	// 'mkmk', 'curs', 'dist', 'kern') are asked for here like the rest, and a
+	// font that states substitutions under one of them has those applied too,
+	// as it does there. See compile for how the positioning half is gathered.
+	for _, tag := range [...]string{"abvm", "blwm", "ccmp", "locl", "mark", "mkmk", "rlig"} {
 		b.enable(tag, 0)
 	}
-	for _, tag := range [...]string{"calt", "clig", "liga", "rclt"} {
+	for _, tag := range [...]string{"calt", "clig", "curs", "dist", "kern", "liga", "rclt"} {
 		b.enable(tag, 0)
 	}
 
@@ -489,6 +505,13 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 		} else {
 			b.disable(u.tag)
 		}
+	}
+	// font-kerning: none is 'kern' turned off, as a document's
+	// font-feature-settings: "kern" 0 would turn it off. 'dist' is not
+	// kerning — it is where an Indic font states the spacing its conjuncts
+	// need — and stays on.
+	if key.features.NoKerning {
+		b.disable("kern")
 	}
 
 	// What a model turns off after everything else has been asked for, which
@@ -724,32 +747,71 @@ func (p *plan) compile(l *layout, b *planBuilder) {
 	}
 
 	for s, st := range byStage {
-		if len(st) < 2 {
-			continue
-		}
-		sort.SliceStable(st, func(i, j int) bool { return st[i].index < st[j].index })
-		out := st[:1]
-		for _, lk := range st[1:] {
-			last := &out[len(out)-1]
-			if lk.index != last.index {
-				out = append(out, lk)
-				continue
-			}
-			// One lookup named by two features is one piece of work: it is for
-			// the glyphs either feature is for, and steps over a joiner only
-			// where both would.
-			if lk.mask == 0 || last.mask == 0 {
-				last.mask = 0
-			} else {
-				last.mask |= lk.mask
-			}
-			last.manualZWJ = last.manualZWJ || lk.manualZWJ
-			last.manualZWNJ = last.manualZWNJ || lk.manualZWNJ
-			last.perSyllable = last.perSyllable && lk.perSyllable
-		}
-		byStage[s] = out
+		byStage[s] = mergeLookups(st)
 	}
 	p.stages = byStage
+
+	// The positioning half, from the same features. A feature's stage is a
+	// fact about substitution: HarfBuzz puts no pause between positioning
+	// lookups, so they are one list.
+	//
+	// A feature a caller asked for — a document's font-feature-settings or
+	// font-variant, or a tag named to ShapeGlyphsWith — is positioned like
+	// any other, as HarfBuzz positions it. It was not: the flat reading this
+	// replaced applied the default positioning features and nothing a
+	// document asked for, so a document's 'halt' or 'palt' did nothing to the
+	// glyphs.
+	var gpos []planLookup
+	gposEnabled := map[string]bool{}
+	for _, f := range merged {
+		if !f.on {
+			continue
+		}
+		lookups, declared := l.gposFeatures[f.tag]
+		if !declared {
+			continue
+		}
+		gposEnabled[f.tag] = true
+		for _, idx := range lookups {
+			gpos = append(gpos, planLookup{index: idx, mask: f.mask,
+				manualZWJ: f.flags&flagManualZWJ != 0, manualZWNJ: f.flags&flagManualZWNJ != 0})
+		}
+	}
+	if l.gposRequiredTag != "" && !gposEnabled[l.gposRequiredTag] {
+		for _, idx := range l.gposRequired {
+			gpos = append(gpos, planLookup{index: idx})
+		}
+	}
+	p.gpos = mergeLookups(gpos)
+	p.gposKern = gposEnabled["kern"]
+}
+
+// mergeLookups puts a list of lookups into index order with each once.
+func mergeLookups(st []planLookup) []planLookup {
+	if len(st) < 2 {
+		return st
+	}
+	sort.SliceStable(st, func(i, j int) bool { return st[i].index < st[j].index })
+	out := st[:1]
+	for _, lk := range st[1:] {
+		last := &out[len(out)-1]
+		if lk.index != last.index {
+			out = append(out, lk)
+			continue
+		}
+		// One lookup named by two features is one piece of work: it is for
+		// the glyphs either feature is for, and steps over a joiner only
+		// where both would.
+		if lk.mask == 0 || last.mask == 0 {
+			last.mask = 0
+		} else {
+			last.mask |= lk.mask
+		}
+		last.manualZWJ = last.manualZWJ || lk.manualZWJ
+		last.manualZWNJ = last.manualZWNJ || lk.manualZWNJ
+		last.perSyllable = last.perSyllable && lk.perSyllable
+	}
+	return out
 }
 
 // stage is the lookups of one stage, or nothing for a stage the plan does not

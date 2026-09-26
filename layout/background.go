@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"image"
 	"math"
-	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -296,7 +296,7 @@ func (l *layouter) canvasBackgroundSource(root *Fragment) *Fragment {
 	if root.Box == nil || root.Box.Element == nil {
 		return nil
 	}
-	if !strings.EqualFold(root.Box.Element.Name, "html") {
+	if !ascii.EqualFold(root.Box.Element.Name, "html") {
 		// Not an HTML document's root. §2.11.2's propagation from <body> is
 		// specific to HTML, and propagating the root's own background is not:
 		// but without an <html> element this engine is being handed a fragment
@@ -324,7 +324,7 @@ func (l *layouter) hasOwnBackground(b *Box) bool {
 		return false
 	}
 	raw := b.Style.Get("background-color")
-	if strings.EqualFold(strings.TrimSpace(raw), "currentcolor") {
+	if ascii.EqualFold(ascii.TrimCSSSpace(raw), "currentcolor") {
 		// A background of "currentcolor" is the text colour, which is black by
 		// default — so an element declaring it *does* have a background, and
 		// reading the value literally would propagate <body>'s over the top of it.
@@ -334,7 +334,7 @@ func (l *layouter) hasOwnBackground(b *Box) bool {
 		return true
 	}
 	for _, raw := range splitCommaValues(b.Style.Get("background-image")) {
-		if strings.TrimSpace(raw) != "" && !strings.EqualFold(strings.TrimSpace(raw), "none") {
+		if ascii.TrimCSSSpace(raw) != "" && !ascii.EqualFold(ascii.TrimCSSSpace(raw), "none") {
 			return true
 		}
 	}
@@ -355,7 +355,7 @@ func bodyOf(root *Fragment) *Fragment {
 		}
 		for _, c := range f.Children {
 			if c.Box != nil && c.Box.Element != nil &&
-				strings.EqualFold(c.Box.Element.Name, "body") {
+				ascii.EqualFold(c.Box.Element.Name, "body") {
 				found = c
 				return
 			}
@@ -376,8 +376,8 @@ func (l *layouter) colorRect(f *Fragment) Rect {
 	if f.Box == nil {
 		return f.BorderRect
 	}
-	raw := strings.TrimSpace(f.Box.Style.Get("background-clip"))
-	if raw == "" || strings.EqualFold(raw, "border-box") {
+	raw := ascii.TrimCSSSpace(f.Box.Style.Get("background-clip"))
+	if raw == "" || ascii.EqualFold(raw, "border-box") {
 		return f.BorderRect
 	}
 	clips := l.bgBoxes(f.Box, "background-clip", bgBorderBox)
@@ -777,7 +777,7 @@ func (l *layouter) backgroundLayers(b *Box) []backgroundLayer {
 	// allocating anything: almost every box in a document has no background
 	// image, and a memo entry for each of them would cost more than the parse it
 	// saved.
-	raw := strings.TrimSpace(b.Style.Get("background-image"))
+	raw := ascii.TrimCSSSpace(b.Style.Get("background-image"))
 	if raw == "" || isNoneValue(raw) {
 		return nil
 	}
@@ -854,7 +854,7 @@ func (l *layouter) readBackgroundLayers(b *Box, raw string) []backgroundLayer {
 // is the lookup, and the report for a value that is a real CSS image this engine
 // cannot produce.
 func (l *layouter) backgroundImage(b *Box, raw string) *ReplacedContent {
-	raw = strings.TrimSpace(raw)
+	raw = ascii.TrimCSSSpace(raw)
 	if raw == "" || isNoneValue(raw) {
 		return nil
 	}
@@ -909,7 +909,7 @@ type bgRepeatPair struct{ x, y bgRepeat }
 func (l *layouter) bgRepeats(b *Box) []bgRepeatPair {
 	out := make([]bgRepeatPair, 0, 1)
 	for _, raw := range splitCommaValues(b.Style.Get("background-repeat")) {
-		words := strings.Fields(strings.ToLower(raw))
+		words := ascii.CSSFields(ascii.Lower(raw))
 		pair, ok := repeatPair(words)
 		if !ok {
 			l.reportOnce("bg-repeat:"+raw, Finding{
@@ -1179,7 +1179,7 @@ func negativeLength(l style.Length) bool {
 func (l *layouter) bgBoxes(b *Box, property string, initial bgBox) []bgBox {
 	out := make([]bgBox, 0, 1)
 	for _, raw := range splitCommaValues(b.Style.Get(property)) {
-		switch strings.ToLower(strings.TrimSpace(raw)) {
+		switch ascii.Lower(ascii.TrimCSSSpace(raw)) {
 		case "border-box":
 			out = append(out, bgBorderBox)
 		case "padding-box":
@@ -1219,7 +1219,7 @@ func (l *layouter) bgBoxes(b *Box, property string, initial bgBox) []bgBox {
 func (l *layouter) bgAttachments(b *Box) []bool {
 	out := make([]bool, 0, 1)
 	for _, raw := range splitCommaValues(b.Style.Get("background-attachment")) {
-		switch strings.ToLower(strings.TrimSpace(raw)) {
+		switch ascii.Lower(ascii.TrimCSSSpace(raw)) {
 		case "fixed":
 			out = append(out, true)
 		case "scroll", "local":
@@ -1248,7 +1248,7 @@ func (l *layouter) bgAttachments(b *Box) []bool {
 // cascade stores, and it has to skip a comma inside a function: "rgb(1, 2, 3)"
 // is one value and url(a),url(b) is two.
 func splitCommaValues(raw string) []string {
-	raw = strings.TrimSpace(raw)
+	raw = ascii.TrimCSSSpace(raw)
 	if raw == "" {
 		return nil
 	}
@@ -1265,12 +1265,12 @@ func splitCommaValues(raw string) []string {
 			}
 		case ',':
 			if depth == 0 {
-				out = append(out, strings.TrimSpace(raw[start:i]))
+				out = append(out, ascii.TrimCSSSpace(raw[start:i]))
 				start = i + 1
 			}
 		}
 	}
-	return append(out, strings.TrimSpace(raw[start:]))
+	return append(out, ascii.TrimCSSSpace(raw[start:]))
 }
 
 // splitValueParts divides one layer's component values on whitespace.
@@ -1297,11 +1297,11 @@ func identOf(part []css.ComponentValue) (string, bool) {
 	if len(part) != 1 || !part[0].IsToken() || part[0].Token.Kind != css.Ident {
 		return "", false
 	}
-	return strings.ToLower(part[0].Token.Value), true
+	return ascii.Lower(part[0].Token.Value), true
 }
 
 func isNoneValue(raw string) bool {
-	return strings.EqualFold(strings.TrimSpace(raw), "none")
+	return ascii.EqualFold(ascii.TrimCSSSpace(raw), "none")
 }
 
 // urlValue extracts the reference from a url() value, in both spellings.
@@ -1320,7 +1320,7 @@ func urlValue(raw string) (string, bool) {
 	if v.IsToken() && v.Token.Kind == css.URL {
 		return v.Token.Value, true
 	}
-	if v.IsFunction() && strings.EqualFold(v.Token.Value, "url") {
+	if v.IsFunction() && ascii.EqualFold(v.Token.Value, "url") {
 		for _, inner := range v.Values {
 			if !inner.IsToken() {
 				continue
@@ -1342,7 +1342,7 @@ func urlValue(raw string) (string, bool) {
 func backgroundImageRefs(raw string) []string {
 	var out []string
 	for _, layer := range splitCommaValues(raw) {
-		if ref, ok := urlValue(layer); ok && strings.TrimSpace(ref) != "" {
+		if ref, ok := urlValue(layer); ok && ascii.TrimSpace(ref) != "" {
 			out = append(out, ref)
 		}
 	}

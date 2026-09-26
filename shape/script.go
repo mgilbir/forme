@@ -31,9 +31,8 @@ import (
 //
 // What does the font select for it? The ScriptList walk below. A script that
 // the font does not declare falls back to 'DFLT', the conventional tag for "any
-// script"; a font with no ScriptList at all, or one that declares nothing this
-// run can use, falls back to taking every feature — the behaviour this package
-// had before, so that no font that worked stops working.
+// script", then 'dflt' and 'latn'; a table that names none of them selects
+// nothing, as HarfBuzz selects nothing from it (see readLayoutFor).
 //
 // # Language
 //
@@ -457,32 +456,53 @@ func layoutTags(script uint16) []string {
 // The language is asked about too, because a script table the run's language
 // system is not in and that has no default one is passed over for the next
 // tag — so which tag is chosen can turn on it.
-func (f *Face) chosenScriptTag(script uint16, langs []string) string {
+func (f *Face) chosenScriptTag(script uint16, lang otLanguage) string {
+	return f.chosenTag("GSUB", script, lang)
+}
+
+// chosenPositioningTag is chosenScriptTag for the positioning table, whose
+// ScriptList is its own and may name other scripts.
+//
+// It is asked by one model only. HarfBuzz's Hebrew model applies GPOS only
+// where the font's positioning was read under 'hebr' — a font whose GPOS
+// states nothing for Hebrew has its kerning and marks for some other script,
+// and the model places the points itself instead (see fallback.go).
+func (f *Face) chosenPositioningTag(script uint16, lang otLanguage) string {
+	return f.chosenTag("GPOS", script, lang)
+}
+
+func (f *Face) chosenTag(table string, script uint16, lang otLanguage) string {
 	if f.cache == nil {
-		return f.readChosenScriptTag(script, langs)
+		return f.readChosenTag(table, script, lang)
 	}
-	key := languageKey(langs)
-	if tag, ok := f.cache.chosenFor(script, key); ok {
+	key := chosenKey{newScriptKey(script, lang), table}
+	if tag, ok := f.cache.chosenFor(key); ok {
 		return tag
 	}
-	tag := f.readChosenScriptTag(script, langs)
-	f.cache.rememberChosen(script, key, tag)
+	tag := f.readChosenTag(table, script, lang)
+	f.cache.rememberChosen(key, tag)
 	return tag
 }
 
-func (f *Face) readChosenScriptTag(script uint16, langs []string) string {
-	list := scriptList(f.layoutTables["GSUB"])
+// chosenKey is a run's question and the table it is asked of.
+type chosenKey struct {
+	scriptKey
+	table string
+}
+
+func (f *Face) readChosenTag(table string, script uint16, lang otLanguage) string {
+	list := scriptList(f.layoutTables[table])
 	if len(list) == 0 {
 		return ""
 	}
-	tags := layoutTags(script)
+	tags := lang.scriptTags(script)
 	byTag := scriptOffsets(list)
 	for _, tag := range append(append(make([]string, 0, len(tags)+len(defaultScriptTags)), tags...), defaultScriptTags...) {
 		so, ok := byTag[tag]
 		if !ok {
 			continue
 		}
-		if _, ok := readLangSys(list[so:], langs); ok {
+		if _, ok := readLangSys(list[so:], lang.tags); ok {
 			return tag
 		}
 	}
@@ -533,11 +553,17 @@ type langSys struct {
 // tested against HarfBuzz. Then DefaultLangSys. A run with no language, or one the font does not name, is set
 // in whichever it finds.
 //
-// A script that declares neither is unusable, and reports so rather than
-// selecting nothing — the caller then tries the next script tag, and failing
-// that falls back to taking every feature. Selecting nothing would set the text
-// with no ligatures, no kerning and no joining at all, which is a worse answer
-// than the one this package gave before it read scripts.
+// A script that declares neither selects nothing, and is still the script
+// chosen: the run is set with none of the font's features. That is what
+// HarfBuzz does — it chooses a script by its tag alone, and a Script table
+// with no default language system has an empty one — and so it is what a font
+// is tested against and what a browser draws. Noto Sans Anatolian Hieroglyphs
+// declares 'latn' with two language systems and no default, for its Latin
+// fallback glyphs; this used to pass such a script over for 'DFLT' and set
+// Latin with the hieroglyphs' mark attachment, which HarfBuzz does not apply.
+//
+// It is false only for a Script table too short to read, which a font cannot
+// have meant; the caller then tries the next tag.
 func readLangSys(script []byte, langs []string) (langSys, bool) {
 	if len(script) < 4 {
 		return langSys{}, false
@@ -555,7 +581,9 @@ func readLangSys(script []byte, langs []string) (langSys, bool) {
 		off = font.Be16(script, 0) // DefaultLangSys
 	}
 	if off <= 0 || off+6 > len(script) {
-		return langSys{}, false
+		// No language system, or one that does not fit: HarfBuzz reads either
+		// as the empty one.
+		return langSys{required: noRequiredFeature}, true
 	}
 	ls := script[off:]
 	out := langSys{required: font.Be16(ls, 2)}
@@ -673,10 +701,11 @@ type shaper struct {
 	// property or a CSS Text rule has overruled. See Features.
 	features Features
 
-	// langs is the language system tags the run's language is looked up
-	// under, most specific first: features.Language, read once per run. See
-	// language.go.
-	langs []string
+	// lang is what the run's language asks of the font's ScriptList: the
+	// language system tags it is looked up under, most specific first, and a
+	// script tag it names in place of the run's own. It is features.Language,
+	// read once per run. See language.go.
+	lang otLanguage
 
 	// floor and limit bound the glyphs a lookup may look at: it may not match,
 	// or backtrack, outside [floor, limit). They exist for the Indic pass,
@@ -758,12 +787,17 @@ type shaper struct {
 	// is written down.
 	run *runBuf
 
-	// attached is, during a positioning pass, the glyph each mark hangs from
-	// (-1 for none), so that it can be put in place once everything it hangs
-	// from is — see attachMarks. A pointer because a shaper is copied per
-	// lookup and a lookup a rule reaches attaches into the same record; nil
-	// outside positioning.
-	attached *[]int
+	// gp is, during a positioning pass, what the pass keeps beside the buffer:
+	// which glyph each one hangs from, and the caches its lookups search with.
+	// See gposPass. A pointer because a shaper is copied per lookup and a
+	// lookup a rule reaches attaches into the same record; nil outside
+	// positioning.
+	gp *gposPass
+
+	// gposScript is the script tag the face's positioning was read under for
+	// this run, where the model asks: the Hebrew model applies the font's
+	// positioning only where it is 'hebr'. See positioningFor.
+	gposScript string
 
 	// ligIDs hands out the numbers that tie a ligature glyph to the marks that
 	// were inside it, so that positioning can put each mark against the part of
@@ -883,7 +917,7 @@ func (sh shaper) end(buf []Glyph) int {
 // that run to tens of kilobytes. The positioning half is cached on its own key,
 // because a font that varies its substitutions per script usually does not vary
 // its kerning, and the kerning is the large table.
-func (f *Face) layoutFor(script uint16, langs []string) *layout {
+func (f *Face) layoutFor(script uint16, lang otLanguage) *layout {
 	if len(f.layoutTables) == 0 {
 		return f.layout
 	}
@@ -892,23 +926,35 @@ func (f *Face) layoutFor(script uint16, langs []string) *layout {
 	// below. That was half the memory a shaped word cost, spent every time, to
 	// arrive at a cached answer — so the script and the language are the first
 	// key, and the selection is worked out only when it is not yet known.
-	key := languageKey(langs)
-	if l, ok := f.cache.forScript(script, key); ok {
+	key := newScriptKey(script, lang)
+	if l, ok := f.cache.forScript(key); ok {
 		return l
 	}
-	l := f.readLayoutFor(script, langs)
-	f.cache.rememberScript(script, key, l)
+	l := f.readLayoutFor(script, lang)
+	f.cache.rememberScript(key, l)
 	return l
 }
 
-func (f *Face) readLayoutFor(script uint16, langs []string) *layout {
-	tags := layoutTags(script)
-	gsub, gsubOK := scriptSelection(f.layoutTables["GSUB"], tags, langs)
-	gposSel, gposOK := scriptFeatures(f.layoutTables["GPOS"], tags, langs)
-	if !gsubOK && !gposOK {
-		// Neither table says anything about scripts, so there is nothing to
-		// select by: every feature applies, which is what f.layout already is.
-		return f.layout
+func (f *Face) readLayoutFor(script uint16, lang otLanguage) *layout {
+	tags := lang.scriptTags(script)
+	gsub, gsubOK := scriptSelection(f.layoutTables["GSUB"], tags, lang.tags)
+	gpos, gposOK := scriptSelection(f.layoutTables["GPOS"], tags, lang.tags)
+	gposSel := gpos.features
+	// A table that names none of the run's script tags, nor 'DFLT', 'dflt' or
+	// 'latn', selects nothing: HarfBuzz finds no script in it and applies none
+	// of its features, and so a browser sets the run with none. This package
+	// used to take every feature instead, "so that no font that worked stops
+	// working" — and under a language tag naming 'DFLT' ("und-x-hbscdflt"),
+	// every Devanagari, Bengali, Tamil and Myanmar face that states its rules
+	// only under its own script had all of them applied to text HarfBuzz sets
+	// with none: some 2,250 of the 2,579 strings still differing over the
+	// Google Fonts tree. Rubik One, whose GPOS names only a script tagged with
+	// four spaces, was kerned where HarfBuzz does not kern it.
+	if !gsubOK {
+		gsub.features = featureSet{}
+	}
+	if !gposOK {
+		gpos.features, gposSel = featureSet{}, featureSet{}
 	}
 	gsubKey, gposKey := selectionKey(gsub.features), selectionKey(gposSel)
 	if gsub.required != noRequiredFeature {
@@ -916,9 +962,12 @@ func (f *Face) readLayoutFor(script uint16, langs []string) *layout {
 		// selection: the required one applies whether or not it is asked for.
 		gsubKey += "r" + strconv.Itoa(gsub.required)
 	}
+	if gpos.required != noRequiredFeature {
+		gposKey += "r" + strconv.Itoa(gpos.required)
+	}
 	return f.cache.layoutFor(gsubKey, gposKey, func() *layout {
 		pos := f.cache.positioningFor(gposKey, func() *layout {
-			return readPositioning(f.layoutTables, gposSel, f.varCoords)
+			return readPositioning(f.layoutTables, gposSel, gpos.required, f.varCoords)
 		})
 		l := readLayout(f.layoutTables, gsub.features, pos, f.varCoords)
 		l.readRequired(f.layoutTables["GSUB"], gsub.required, f.varCoords)
@@ -967,47 +1016,52 @@ type layoutCache struct {
 	// chosen is the script tag each run's question chose — see
 	// chosenScriptTag — which a layout cannot say, since two scripts a font
 	// treats alike share one.
-	chosen map[scriptKey]string
+	chosen map[chosenKey]string
 }
 
 // scriptKey is a run's script and its language, as the language system tags it
-// is looked up under (see languageKey), which together are everything the
-// selection depends on.
+// is looked up under (see languageKey) and the script tag it names in place of
+// the script's own, which together are everything the selection depends on.
 type scriptKey struct {
-	script uint16
-	lang   string
+	script   uint16
+	lang     string
+	override string
 }
 
-func (c *layoutCache) forScript(script uint16, lang string) (*layout, bool) {
+func newScriptKey(script uint16, lang otLanguage) scriptKey {
+	return scriptKey{script: script, lang: languageKey(lang.tags), override: lang.script}
+}
+
+func (c *layoutCache) forScript(key scriptKey) (*layout, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	l, ok := c.byScript[scriptKey{script, lang}]
+	l, ok := c.byScript[key]
 	return l, ok
 }
 
-func (c *layoutCache) rememberScript(script uint16, lang string, l *layout) {
+func (c *layoutCache) rememberScript(key scriptKey, l *layout) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.byScript == nil {
 		c.byScript = map[scriptKey]*layout{}
 	}
-	c.byScript[scriptKey{script, lang}] = l
+	c.byScript[key] = l
 }
 
-func (c *layoutCache) chosenFor(script uint16, lang string) (string, bool) {
+func (c *layoutCache) chosenFor(key chosenKey) (string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	tag, ok := c.chosen[scriptKey{script, lang}]
+	tag, ok := c.chosen[key]
 	return tag, ok
 }
 
-func (c *layoutCache) rememberChosen(script uint16, lang, tag string) {
+func (c *layoutCache) rememberChosen(key chosenKey, tag string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.chosen == nil {
-		c.chosen = map[scriptKey]string{}
+		c.chosen = map[chosenKey]string{}
 	}
-	c.chosen[scriptKey{script, lang}] = tag
+	c.chosen[key] = tag
 }
 
 func (c *layoutCache) layoutFor(gsubKey, gposKey string, build func() *layout) *layout {

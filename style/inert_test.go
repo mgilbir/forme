@@ -213,15 +213,17 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 		// for the absence of one. An author who wrote any of them gets a page
 		// that runs on, and that is the line between these and the entries
 		// above: "auto" and "avoid" are satisfied by never breaking, and these
-		// are not.
+		// are not. The column breaks — "column", "always" and "all" — are made
+		// in a multi-column container and are not here: whether one is made is
+		// a question about where the box is, which layout answers and reports
+		// (layout/multicolforced_test.go).
 		"page-break-before: always",
 		"page-break-after: always",
-		"break-before: always",
-		"break-after: always",
 		"break-before: page",
 		"break-after: page",
 		"break-before: left",
-		"break-before: column",
+		"break-after: recto",
+		"break-before: region",
 		"filter: blur(1px)",
 		"border-radius: 20px",
 		// The other half of every entry added above: the value that asks for a

@@ -61,6 +61,53 @@ package layout
 // Only the work the document's own content costs, one box and one mark at a
 // time, may spend it: half of it for building boxes, and the rest for painting
 // them. See charge, chargeOwn and chargeMark.
+//
+// # The other bound: laying the document out again
+//
+// There is a second allowance per document, and it is not an oversight that it
+// is not this one: maxLayoutWork, in speculative.go, bounds how many times the
+// layout may lay boxes out and make line boxes. The two measure different
+// things at scales that do not meet, and they were reconciled by making them
+// agree on where their size comes from and on how a cut is reported, rather than
+// by pouring them into one number.
+//
+// This one is a statement about memory: a step is about a byte of what the
+// engine makes and keeps — a box, an op, a pixel, a byte of generated text —
+// and its floor is sized for a page that holds a large picture. That one is a
+// statement about time spent on work that is thrown away: a speculative pass
+// keeps nothing, so its cost is not bytes but passes, and its size is a
+// multiple of what one pass over the tree costs, with a floor of 65,536
+// layouts. One pool would need one rate between a layout and a step, and there
+// is none that serves both:
+//
+//   - At 4,096 steps a layout, the rate that keeps the layout floor where it is
+//     against this floor of 2^28, a byte of input earns a thirty-second of a
+//     layout, and one honest pass costs more than that: measured, a table of
+//     one-letter cells lays out a third of a box or line per byte of markup, a
+//     column of short divs a sixth, a list an eighth. A table past about two
+//     hundred kilobytes would run out on its first pass.
+//   - Granting the layout's share into this pool instead, so that the ten
+//     megabytes get their passes, hands that share to everything else charged
+//     here: a document of ten thousand boxes would get two and a half billion
+//     more steps for tiling a gradient at a hundredth of a pixel, which is the
+//     amplification this budget is for.
+//
+// What the two must agree on is the rule under "The unit": an allowance grows
+// with what the document supplied, and never with what it made. The layout's
+// did not. Its "one pass" counted every box and every byte of text in the
+// tree, generated content included, and generated content is exactly what this
+// budget lets a small input make a great deal of: forty kilobytes of markup
+// whose ::before repeated an attribute sixty-four times made two and a half
+// megabytes of text, which raised the bound on laying it out from its floor of
+// 65,536 layouts to 164 million. It counts what the document wrote now; see
+// onePass.
+//
+// And a cut is reported one way, by refuseAt, whichever allowance ran out: one
+// RuleLimit finding per kind of work left out, saying what was left out, placed
+// where the first refusal was when there is a place, counted once per refusal,
+// and never itself refused for want of budget. The layout's used to be an
+// ordinary finding charged to this budget, so a document that had spent both
+// could have the finding that said so dropped.
 type workBudget struct {
 	// left is what may still be spent, and reserve how much of it only the
 	// document's own content may spend.
@@ -202,9 +249,18 @@ func (r *Recorder) take(steps, keep int64, what string) bool {
 
 // refuse reports one kind of cut work, once, and counts it every time.
 func (r *Recorder) refuse(what string) {
+	r.refuseAt(what, NoSource, "", 1)
+}
+
+// refuseAt is the one finding either of a document's allowances makes when it
+// runs out — this budget, or the layout's (see "The other bound" above): what
+// was left out, reported once per kind, first at src and path where the refusal
+// had a place, and counted times.
+func (r *Recorder) refuseAt(what string, src Source, path string, times int) {
+	times = max(times, 1)
 	for _, c := range r.work.cut {
 		if c == what {
-			r.counts[RuleLimit]++
+			r.counts[RuleLimit] += times
 			return
 		}
 	}
@@ -212,10 +268,11 @@ func (r *Recorder) refuse(what string) {
 	// Not through ReportDetail's own charge: the budget is what ran out, and
 	// the finding saying so is the one thing that must not be refused for it.
 	r.record(Finding{
-		Rule: RuleLimit, Source: NoSource,
+		Rule: RuleLimit, Source: src, Path: path,
 		Message: "this document asks for more work than this engine does for one " +
 			"document; left out: " + what,
 	}, false)
+	r.counts[RuleLimit] += times - 1
 }
 
 // workLeft is what the budget still holds, for a test.

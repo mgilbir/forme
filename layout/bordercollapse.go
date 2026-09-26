@@ -2,8 +2,8 @@ package layout
 
 import (
 	"sort"
-	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -67,7 +67,7 @@ import (
 
 // borderCollapses reports whether a table asks for §17.6.2's model.
 func borderCollapses(table *Box) bool {
-	return strings.EqualFold(strings.TrimSpace(table.Style.Get("border-collapse")), "collapse")
+	return ascii.EqualFold(ascii.TrimCSSSpace(table.Style.Get("border-collapse")), "collapse")
 }
 
 // The two halves a grid line is split into by the boxes that meet on it.

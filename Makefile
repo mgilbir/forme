@@ -1,9 +1,28 @@
-.PHONY: ucd verify-fonts test-corpora linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance
+.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+
+# Every go test in this file names its -timeout, and these are the two it names.
+#
+# go test's own default is ten minutes for each package's test binary, and that
+# stopped being a bound with room in it: layout's tests, with every corpus in
+# the environment, take about 95 seconds here and about 500 under the race
+# detector, which is most of the ten minutes on this machine and more than all
+# of it on a runner two or three times slower. A default that trips on a
+# slower machine is a flaky gate, and one nobody chose is one nobody knows the
+# reason for. So each is written down with the measurement it was chosen from,
+# at about ten times what it covers here for the ordinary run and five for the
+# race run, which is five times slower to begin with. A package that outgrows
+# them is a fact worth hearing about rather than a limit to raise quietly:
+# measure it again, and move the number with the reason.
+#
+# cmd/gotesttimeout_test.go holds every go test here and in .github/workflows
+# to naming one.
+TEST_TIMEOUT = 15m
+RACE_TIMEOUT = 45m
 
 test:
 	gofmt -l . | grep -v '^testdata/' && exit 1 || true
 	go vet ./...
-	go test -count=1 ./...
+	go test -count=1 -timeout $(TEST_TIMEOUT) ./...
 
 # The same suite with every corpus in the environment, which is the only way most
 # of it runs at all.
@@ -41,11 +60,11 @@ CORPUS_ENV = \
 # regenerates each table from them and compares, and with TABLE_INPUTS=required
 # above, a table whose inputs are not here is a failure rather than a skip.
 CORPORA = wpt noto-fonts notocjk ucd css-tests bidi-tests grapheme-tests \
-	normalization-tests $(HTML_ENTITIES) $(TABLE_SOURCES)
+	normalization-tests $(HTML_ENTITIES) $(TABLE_SOURCES) notice-sources
 
 test-corpora:
 	$(MAKE) verify-fonts
-	$(CORPUS_ENV) go test -count=1 ./...
+	$(CORPUS_ENV) go test -count=1 -timeout $(TEST_TIMEOUT) ./...
 
 # The same suite under the race detector.
 #
@@ -63,7 +82,7 @@ test-corpora:
 # over the tests that need nothing fetched, which are the ones that share
 # nothing.
 race:
-	$(CORPUS_ENV) go test -count=1 -race ./...
+	$(CORPUS_ENV) go test -count=1 -race -timeout $(RACE_TIMEOUT) ./...
 
 # Every fetch in this file goes through FETCH rather than through a bare curl.
 #
@@ -132,17 +151,39 @@ $(BIDI_STAMP):
 	touch $@
 
 test-bidi: bidi-tests
-	UNICODE_BIDI_TESTS=$(abspath $(BIDI_DIR)) go test -v -run TestBidiConformance -count=1 ./bidi
+	UNICODE_BIDI_TESTS=$(abspath $(BIDI_DIR)) go test -v -run TestBidiConformance -count=1 -timeout $(TEST_TIMEOUT) ./bidi
 
 clean-bidi-tests:
 	rm -rf $(BIDI_DIR)
 
 # Shaping checked against HarfBuzz, over six fonts. See testdata/harfbuzz.
 #
-#	python3 -m venv .hbenv && .hbenv/bin/pip install uharfbuzz fonttools
-#	PYTHON=.hbenv/bin/python make hbshaping
+#	make hbenv
+#	PYTHON=.hbenv/bin/python make hboracles
+#
+# The oracle is one HarfBuzz release, HARFBUZZ_VERSION, taken through the
+# uharfbuzz release that carries it: testdata/harfbuzz/requirements.txt pins it
+# by version and by digest, and pip refuses anything else. An unpinned
+# `pip install uharfbuzz` is whatever PyPI serves that day, and it had left the
+# expectation files at three releases. The generators refuse another release
+# (testdata/harfbuzz/oracle.py), and shape/oraclepin_test.go refuses a file
+# that records one.
 HARFBUZZ_DIR := testdata/harfbuzz
 PYTHON ?= python3
+HBENV := .hbenv
+
+hbenv:
+	rm -rf $(HBENV)
+	python3 -m venv $(HBENV)
+	$(HBENV)/bin/pip install --require-hashes --no-deps -r $(HARFBUZZ_DIR)/requirements.txt
+	$(HBENV)/bin/python -c 'import sys; sys.path.insert(0, "$(HARFBUZZ_DIR)"); \
+		import oracle; oracle.harfbuzz(); oracle.fonttools()'
+
+# Every file the oracles write through uharfbuzz. hblanguages is below, where
+# the language-tag header it reads has been defined. The one oracle file this
+# leaves out, usecategories.expected.txt, is HarfBuzz's own generator run from a
+# source checkout of the same release; see usecategories.py.
+hboracles: hbshaping hblanguages varinstance
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
@@ -165,9 +206,15 @@ hbshaping:
 		$(HARFBUZZ_DIR)/tibetan.txt $(HARFBUZZ_DIR)/tibetan.expected.txt
 	$(PYTHON) $(HARFBUZZ_DIR)/shapefeatures.py fonts/notosans/NotoSans-Variable.ttf \
 		$(HARFBUZZ_DIR)/features.txt $(HARFBUZZ_DIR)/features.expected.txt
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py $(HARFBUZZ_DIR)/fonts/NotoSansJavanese.ttf \
+		$(HARFBUZZ_DIR)/javanese.txt $(HARFBUZZ_DIR)/javanese.dflt.expected.txt und-x-hbscdflt
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py $(HARFBUZZ_DIR)/fonts/NotoSansBalinese.ttf \
+		$(HARFBUZZ_DIR)/balinese.txt $(HARFBUZZ_DIR)/balinese.dflt.expected.txt und-x-hbscdflt
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py $(HARFBUZZ_DIR)/fonts/NotoSerifTibetan.ttf \
+		$(HARFBUZZ_DIR)/tibetan.txt $(HARFBUZZ_DIR)/tibetan.dflt.expected.txt und-x-hbscdflt
 
 test-hbshaping:
-	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth|TestFeatureShapingAgreesWithHarfBuzz|TestTheFeatureOracleHasTeeth' -count=1 ./shape
+	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth|TestFeatureShapingAgreesWithHarfBuzz|TestTheFeatureOracleHasTeeth|TestTheDefaultModelAgreesWithHarfBuzz' -count=1 -timeout $(TEST_TIMEOUT) ./shape
 
 # Instancing checked against fontTools and HarfBuzz, over four faces and eight
 # locations. Needs the same Python as hbshaping.
@@ -180,7 +227,7 @@ varinstance:
 	$(PYTHON) testdata/varinstance/instance.py
 
 test-varinstance:
-	go test -v -run 'TestInstancingAgreesWithFontToolsAndHarfBuzz|TestTheInstancingOracleHasTeeth' -count=1 ./shape
+	go test -v -run 'TestInstancingAgreesWithFontToolsAndHarfBuzz|TestTheInstancingOracleHasTeeth' -count=1 -timeout $(TEST_TIMEOUT) ./shape
 
 # Differential fuzzing against HarfBuzz. Needs the same Python as hbshaping.
 hbfuzz:
@@ -220,7 +267,7 @@ UCD ?= $(UCD_DIR)
 # argument lists had drifted, and nothing was in a position to notice. See
 # cmd/regenerate_test.go, which now runs every one of them.
 #
-# The eighteen files that are read, rather than UCD.zip: the archive is an
+# The twenty files that are read, rather than UCD.zip: the archive is an
 # order of magnitude larger than the files taken from it, unzip is one more
 # thing to have installed, and a file that moves in a new release fails here by
 # name instead of as a "no such file" from inside a generator.
@@ -231,12 +278,14 @@ UCD_FILES := \
 	ArabicShaping.txt \
 	BidiBrackets.txt \
 	BidiMirroring.txt \
+	CaseFolding.txt \
 	CompositionExclusions.txt \
 	DerivedCoreProperties.txt \
 	EastAsianWidth.txt \
 	IndicPositionalCategory.txt \
 	IndicSyllabicCategory.txt \
 	LineBreak.txt \
+	PropList.txt \
 	PropertyValueAliases.txt \
 	ScriptExtensions.txt \
 	Scripts.txt \
@@ -268,6 +317,46 @@ else
 UCD_DEP :=
 endif
 
+# The Universal Shaping Engine's corrections to two of the database's
+# properties, and the script development specifications' list of invalid vowel
+# clusters: three files HarfBuzz keeps in src/ms-use, which cmd/genuse and
+# cmd/genvowel read. See testdata/ms-use/NOTICE.md.
+#
+# They were committed, taken from HarfBuzz at a commit nobody recorded, and two
+# of the three had drifted from any release anyone could name. They are
+# fetched now at HARFBUZZ_VERSION — the release the shaping oracle runs and the
+# language-tag table is taken from — and each is held to its SHA-256, which is
+# part of the stamp's key, so a new digest fetches again.
+#
+#	<file>:<sha256>
+HARFBUZZ_VERSION := 14.5.0
+MSUSE_URL := https://raw.githubusercontent.com/harfbuzz/harfbuzz/$(HARFBUZZ_VERSION)/src/ms-use
+MSUSE_DIR := testdata/ms-use
+MSUSE_FILES := \
+	IndicPositionalCategory-Additional.txt:2baa1c1efe5a5f108c304b1e27d0d97864c806764eb2b0a1bd91db80ae26b5b8 \
+	IndicShapingInvalidCluster.txt:02024d4289864665721e14ec99eb320ce187f289514b793449b4f6a8ddaf5944 \
+	IndicSyllabicCategory-Additional.txt:b9472e3e72d5fba8cb3f2e0578e73012aaae786db25779de0f1a5a5ab69b84a6
+MSUSE_STAMP := $(call stamp,$(MSUSE_DIR),$(MSUSE_URL) $(MSUSE_FILES))
+
+ms-use-sources: $(MSUSE_STAMP)
+
+$(MSUSE_STAMP):
+	mkdir -p $(MSUSE_DIR)
+	for e in $(foreach f,$(MSUSE_FILES),'$(f)'); do \
+	  f=$${e%%:*}; sum=$${e#*:}; \
+	  $(FETCH) -o $(MSUSE_DIR)/$$f.part $(MSUSE_URL)/$$f || exit 1; \
+	  echo "$$sum  $(MSUSE_DIR)/$$f.part" | sha256sum -c --quiet - || { \
+	    rm -f $(MSUSE_DIR)/$$f.part; \
+	    echo "$(MSUSE_URL)/$$f is not the file MSUSE_FILES pins" >&2; \
+	    exit 1; \
+	  }; \
+	  mv $(MSUSE_DIR)/$$f.part $(MSUSE_DIR)/$$f; \
+	done
+	touch $@
+
+clean-ms-use-sources:
+	rm -f $(MSUSE_DIR)/*.txt $(MSUSE_DIR)/.ok-*
+
 # Every generated table in this repository, and how a target regenerates one.
 #
 # A recipe here used to be "go run ./cmd/genX ... > table.go", and that shape
@@ -291,7 +380,8 @@ TABLE_VARS := UCD UNICODE_VERSION \
 	ICU_DICTS DICT_DIR BUDOUX BUDOUX_DIR HYPHEN_URL HYPHEN_DIR \
 	AFM_URL AFM_DIR BROTLI_URL BROTLI_DIR AGL_URL AGL_DIR \
 	HTML_ENTITIES HTML_ENTITIES_URL HTML_ENTITIES_SHA256 CSS_COLOR_URL CSS_COLOR_SPEC \
-	HB_LANGTAGS HB_LANGTAGS_URL HB_LANGTAGS_SHA256
+	HB_LANGTAGS HB_LANGTAGS_URL HB_LANGTAGS_SHA256 HB_COPYING HB_COPYING_URL HB_COPYING_SHA256 \
+	MSUSE_URL MSUSE_DIR MPL MPL_URL MPL_SHA256
 MAKETABLES = go run ./cmd/maketables $(foreach v,$(TABLE_VARS),-D '$(v)=$($(v))')
 
 # Every input a generator reads that is fetched rather than committed. Each is
@@ -305,14 +395,28 @@ MAKETABLES = go run ./cmd/maketables $(foreach v,$(TABLE_VARS),-D '$(v)=$($(v))'
 # whole, and each set is marked done by a stamp named for its pin and its files
 # (see stamp), so a new pin or a new file fetches again rather than finding the
 # old files and calling them current.
-TABLE_SOURCES = $(UCD_DEP) dictionary-sources phrase-sources hyphen-sources \
-	afm brotli-sources agl css-color-spec $(HTML_ENTITIES) $(HB_LANGTAGS)
+TABLE_SOURCES = $(UCD_DEP) ms-use-sources dictionary-sources phrase-sources hyphen-sources $(MPL) \
+	afm brotli-sources agl css-color-spec $(HTML_ENTITIES) $(HB_LANGTAGS) $(HB_COPYING)
 
 # One file, whole or not at all.
 #
 #	$(call fetch,<destination>,<url>)
 define fetch
 	$(FETCH) -o $(1).part $(2) && mv $(1).part $(1)
+endef
+
+# One file, whole, and the file its pin names or not at all. What a URL serves
+# is checked against the SHA-256 written beside it before it is renamed into
+# place, so a source that moves under its URL is a fetch that fails rather than
+# a corpus that changed. It is a shell command, usable inside a loop with shell
+# variables for its arguments, and it fails as one.
+#
+#	$(call pinned,<destination>,<url>,<sha256>)
+define pinned
+	{ $(FETCH) -o $(1).part $(2) && \
+	  { echo "$(3)  $(1).part" | sha256sum -c --quiet - || \
+	    { rm -f $(1).part; echo "$(2) is not the file its pin names, SHA-256 $(3)" >&2; false; }; } && \
+	  mv $(1).part $(1); }
 endef
 
 # The tables the shaper derives from Unicode, which cmd/genuse's table above is
@@ -322,7 +426,7 @@ endef
 #
 #	make shapetables                              # against the fetched database
 #	make shapetables UCD=/path/to/unpacked/ucd    # against one you already have
-shapetables: $(UCD_DEP)
+shapetables: $(UCD_DEP) ms-use-sources
 	$(MAKETABLES) shapetables
 
 # The bidirectional character properties, UAX #9. See cmd/genbidi.
@@ -344,9 +448,9 @@ grapheme-tables: $(UCD_DEP)
 linebreak: $(UCD_DEP)
 	$(MAKETABLES) linebreak
 
-# Unicode's case mappings, simple and full, from the release UNICODE_VERSION
-# names — not Go's, which are the release the toolchain shipped. See
-# cmd/gencasing.
+# Unicode's case mappings, simple and full, and its full case folding, from the
+# release UNICODE_VERSION names — not Go's, which are the release the toolchain
+# shipped. See cmd/gencasing.
 #
 #	make casing UCD=/path/to/unpacked/ucd
 casing: $(UCD_DEP)
@@ -480,7 +584,27 @@ $(HYPHEN_STAMP):
 	done
 	touch $@
 
-hyphens: hyphen-sources
+# The Mozilla Public License 1.1, under which this repository takes the
+# Hungarian patterns — hyph-hu.tex offers MPL 1.1, GPL 2.0 or LGPL 2.1 at the
+# recipient's option. The licence asks for its Exhibit A notice in each file of
+# the Covered Code, and cmd/genhyphen writes it into the table from this text.
+# mozilla.org publishes it at no versioned URL, so the digest is the pin: a
+# changed text is a fetch that fails, which is the moment to read it.
+MPL_URL := https://www.mozilla.org/media/MPL/1.1/index.txt
+MPL_SHA256 := f849fc26a7a99981611a3a370e83078deb617d12a45776d6c4cada4d338be469
+MPL := testdata/notices/MPL-1.1.txt
+
+$(MPL):
+	mkdir -p $(dir $@)
+	$(FETCH) -o $@.part $(MPL_URL)
+	echo "$(MPL_SHA256)  $@.part" | sha256sum -c --quiet - || { \
+	  rm -f $@.part; \
+	  echo "$(MPL_URL) is not the file MPL_SHA256 pins" >&2; \
+	  exit 1; \
+	}
+	mv $@.part $@
+
+hyphens: hyphen-sources $(MPL)
 	$(MAKETABLES) hyphens
 
 # Which characters stand upright on a line of vertical text, UAX #50. It is
@@ -498,8 +622,17 @@ vertical: $(UCD_DEP)
 widths: $(UCD_DEP)
 	$(MAKETABLES) widths
 
-useable: $(UCD_DEP)
+useable: $(UCD_DEP) ms-use-sources
 	$(MAKETABLES) useable
+
+# The character properties the engine asks of a character that no table above
+# answers: General_Category, White_Space, Soft_Dotted, Cased and
+# Case_Ignorable. They were Go's package unicode, which is the release the
+# toolchain shipped rather than this one. See cmd/gencharprop.
+#
+#	make charprops UCD=/path/to/unpacked/ucd
+charprops: $(UCD_DEP)
+	$(MAKETABLES) charprops
 
 # Only the directory this file fetches into. "make clean-ucd UCD=/path/to/ucd"
 # is the documented way to run a generator against a copy someone already has,
@@ -529,8 +662,20 @@ clean-ucd:
 #	make fonts       # fetch, or bring up to date if already fetched
 #	make fontsweep   # read every face in both and report what happened
 #	make clean-fonts # remove them
+#
+# Both are taken at a commit, like every other corpus here. They were taken
+# from each repository's main branch, so what a sweep counted depended on the
+# day the library was fetched: Google's families are republished every week,
+# and a count of shaping differences over them is a count over whichever fonts
+# the branch held that morning. GF_COMMIT is the commit the sweeps quoted in
+# the shaping commits were run over. NOTO_CJK_COMMIT is noto-cjk's, which the
+# fallback library below also takes a face and a licence from, and it is the
+# commit whose files are byte for byte the ones those runs read.
 GF_DIR := testdata/googlefonts
+GF_COMMIT := 352f6b7d9d6cc4fa9e242b931291d31b21a6dc84
 CJK_DIR := testdata/notocjk
+NOTO_CJK_COMMIT := f8d157532fbfaeda587e826d4cd5b21a49186f7c
+NOTO_CJK_URL := https://raw.githubusercontent.com/notofonts/noto-cjk/$(NOTO_CJK_COMMIT)
 
 .PHONY: fonts googlefonts notocjk fontsweep clean-fonts
 
@@ -545,9 +690,9 @@ fonts: googlefonts notocjk
 googlefonts:
 	@test -d $(GF_DIR)/.git || git clone --filter=blob:none --no-checkout --sparse \
 		https://github.com/google/fonts.git $(GF_DIR)
-	git -C $(GF_DIR) fetch origin main
+	git -C $(GF_DIR) fetch origin $(GF_COMMIT)
 	git -C $(GF_DIR) sparse-checkout set --no-cone '/ofl/**/*.ttf'
-	git -C $(GF_DIR) checkout -f -B main origin/main
+	git -C $(GF_DIR) checkout -f --detach $(GF_COMMIT)
 
 # The CJK faces are fetched file by file rather than cloned.
 #
@@ -561,25 +706,32 @@ googlefonts:
 # One weight per region is enough for what this is for. Every static CJK face is
 # CID-keyed CFF, so any one of them exercises the refusal; the other six weights
 # would be six more copies of the same answer.
-CJK_BASE := https://raw.githubusercontent.com/notofonts/noto-cjk/main
+#
+# Each face is held to its SHA-256, and the set is marked done by a stamp keyed
+# on the commit and the list, as every fetched set is. It used to be marked by
+# nothing: a face already on disk was kept whatever it was, so a checkout never
+# learned that the branch it came from had moved.
+#
+#	<path in noto-cjk>:<sha256>
 CJK_FACES := \
-	Sans/SubsetOTF/JP/NotoSansJP-Regular.otf \
-	Sans/SubsetOTF/KR/NotoSansKR-Regular.otf \
-	Sans/SubsetOTF/SC/NotoSansSC-Regular.otf \
-	Sans/SubsetOTF/TC/NotoSansTC-Regular.otf \
-	Sans/SubsetOTF/HK/NotoSansHK-Regular.otf \
-	Serif/SubsetOTF/JP/NotoSerifJP-Regular.otf
+	Sans/SubsetOTF/JP/NotoSansJP-Regular.otf:dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073 \
+	Sans/SubsetOTF/KR/NotoSansKR-Regular.otf:69975a0ac8472717870aefeab0a4d52739308d90856b9955313b2ad5e0148d68 \
+	Sans/SubsetOTF/SC/NotoSansSC-Regular.otf:faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9 \
+	Sans/SubsetOTF/TC/NotoSansTC-Regular.otf:5bab0cb3c1cf89dde07c4a95a4054b195afbcfe784d69d75c340780712237537 \
+	Sans/SubsetOTF/HK/NotoSansHK-Regular.otf:8a43afea92bb58dfd9027bd7ac6f5b0b2662e2ffb3e7c1edc02c62b2b21924f1 \
+	Serif/SubsetOTF/JP/NotoSerifJP-Regular.otf:2c9a12dbd4f2408c4610c7ee84a108b62d7236c3775baed618c64d9cb44b2f04
+CJK_STAMP := $(call stamp,$(CJK_DIR),$(NOTO_CJK_URL) $(CJK_FACES))
 
-notocjk:
-	@mkdir -p $(CJK_DIR)
-	@for f in $(CJK_FACES); do \
-		out=$(CJK_DIR)/$$(basename $$f); \
-		if [ -s "$$out" ]; then echo "have $$out"; else \
-			echo "fetching $$out"; \
-			$(FETCH) -o "$$out" "$(CJK_BASE)/$$f" || exit 1; \
-		fi; \
+notocjk: $(CJK_STAMP)
+
+$(CJK_STAMP):
+	mkdir -p $(CJK_DIR)
+	for e in $(foreach f,$(CJK_FACES),'$(f)'); do \
+	  p=$${e%%:*}; sum=$${e#*:}; \
+	  $(call pinned,$(CJK_DIR)/$$(basename $$p),$(NOTO_CJK_URL)/$$p,$$sum) || exit 1; \
 	done
 	@echo "$$(ls $(CJK_DIR)/*.otf | wc -l | tr -d ' ') CJK faces in $(CJK_DIR)"
+	touch $@
 
 fontsweep:
 	go run ./cmd/fontsweep $(GF_DIR)/ofl $(CJK_DIR)
@@ -687,7 +839,7 @@ $(GRAPHEME_STAMP):
 # the check, and it once matched no pattern at all and so never ran.
 test-grapheme: grapheme-tests
 	UNICODE_GRAPHEME_TESTS=$(abspath $(GRAPHEME_DIR)) \
-	  go test -v -count=1 ./segment
+	  go test -v -count=1 -timeout $(TEST_TIMEOUT) ./segment
 
 clean-grapheme-tests:
 	rm -rf $(GRAPHEME_DIR)
@@ -715,7 +867,7 @@ $(NORMALIZATION_STAMP):
 # it. A sweep handed no cases passes in silence.
 test-normalization: normalization-tests
 	UNICODE_NORMALIZATION_TESTS=$(abspath $(NORMALIZATION_DIR)) \
-	  go test -v -count=1 -run 'NFC|Normalization' ./shape
+	  go test -v -count=1 -timeout $(TEST_TIMEOUT) -run 'NFC|Normalization' ./shape
 
 clean-normalization-tests:
 	rm -rf $(NORMALIZATION_DIR)
@@ -768,7 +920,7 @@ $(CSS_TESTS_STAMP):
 # every colour the CSS Syntax tests name against what this engine parses it to,
 # and no target set the variable for it — so it skipped, everywhere, always.
 test-css: css-tests
-	CSS_PARSING_TESTS=$(abspath $(CSS_TESTS_DIR)) go test -v -count=1 \
+	CSS_PARSING_TESTS=$(abspath $(CSS_TESTS_DIR)) go test -v -count=1 -timeout $(TEST_TIMEOUT) \
 	  -run 'TestCSSOracle|TestColorOracle|TestUnsupportedColorFilesAreAccountedFor' \
 	  ./css ./style
 
@@ -858,7 +1010,7 @@ clean-css-colors:
 # Taken at a HarfBuzz release — the one the shaping oracle runs — and pinned by
 # digest as well: the fetch refuses a file with any other SHA-256, so does the
 # generator, and the table records it. Moving to a newer release is moving both.
-HB_LANGTAGS_VERSION := 14.5.0
+HB_LANGTAGS_VERSION := $(HARFBUZZ_VERSION)
 HB_LANGTAGS_URL := https://raw.githubusercontent.com/harfbuzz/harfbuzz/$(HB_LANGTAGS_VERSION)/src/hb-ot-tag-table.hh
 HB_LANGTAGS_SHA256 := fe80a969cc25ddf2c4613b9ebbc1dd7e26ec105fafc892d9ff9f221a5d2355e6
 HB_LANGTAGS := testdata/harfbuzz-langtags/hb-ot-tag-table.hh
@@ -873,8 +1025,80 @@ $(HB_LANGTAGS):
 	}
 	mv $@.part $@
 
-language-tags: $(HB_LANGTAGS)
+# HarfBuzz's COPYING at the same release, whose notice the table carries.
+#
+# The "Old MIT" licence permits copying "provided that the above copyright
+# notice and the following two paragraphs appear in all copies", and the table
+# is a copy of part of HarfBuzz. It said "see its COPYING" and carried none of
+# it. cmd/genlangtags writes the file whole into the table's header, and it is
+# pinned by digest for the same reasons the header is.
+HB_COPYING_URL := https://raw.githubusercontent.com/harfbuzz/harfbuzz/$(HB_LANGTAGS_VERSION)/COPYING
+HB_COPYING_SHA256 := ba8f810f2455c2f08e2d56bb49b72f37fcf68f1f4fade38977cfd7372050ad64
+HB_COPYING := testdata/harfbuzz-langtags/COPYING
+
+$(HB_COPYING):
+	mkdir -p $(dir $@)
+	$(FETCH) -o $@.part $(HB_COPYING_URL)
+	echo "$(HB_COPYING_SHA256)  $@.part" | sha256sum -c --quiet - || { \
+	  rm -f $@.part; \
+	  echo "$(HB_COPYING_URL) is not the file HB_COPYING_SHA256 pins" >&2; \
+	  exit 1; \
+	}
+	mv $@.part $@
+
+language-tags: $(HB_LANGTAGS) $(HB_COPYING)
 	$(MAKETABLES) language-tags
+
+# What HarfBuzz answers for the language and script tags, which
+# shape/language_test.go holds the table above to. Needs the pinned oracle; see
+# hbenv.
+hblanguages: $(HB_LANGTAGS)
+	$(PYTHON) $(HARFBUZZ_DIR)/langtags.py $(HB_LANGTAGS) $(HARFBUZZ_DIR)/langtags.expected.txt
+	$(PYTHON) $(HARFBUZZ_DIR)/scripttags.py $(HARFBUZZ_DIR)/scripttags.expected.txt
+
+# The licences THIRD_PARTY_NOTICES quotes that no generator reads.
+#
+# Every notice in that file is a copy of a text somebody else wrote, and a copy
+# typed out is a copy with a typo in it. So each text is quoted from a file
+# taken at a pin — a commit, a release, or where there is neither, the URL and
+# the digest of what it served — and cmd/notices_test.go checks every quotation
+# against the file it names. The licences the generators already read — BudouX's
+# LICENSE, the AFM readme, the glyph list, the word lists, the hyphenation
+# patterns, HarfBuzz's COPYING — are checked against their own copies.
+#
+# Unicode's licence and W3C's have no versioned URL. A change to either is a
+# fetch that fails on its digest, which is the moment to read the new text.
+#
+#	<file>|<url>|<sha256>
+NOTICE_DIR := testdata/notices
+NOTICE_SOURCES := \
+	brotli-LICENSE|https://raw.githubusercontent.com/google/brotli/$(BROTLI_COMMIT)/LICENSE|3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94 \
+	icu-LICENSE|https://raw.githubusercontent.com/unicode-org/icu/$(ICU_COMMIT)/LICENSE|e55522d81edc687a341a4411e0776e54ca654e90147f354a90458aaced4116af \
+	unicode-license.txt|https://www.unicode.org/license.txt|e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96 \
+	whatwg-html-LICENSE|https://raw.githubusercontent.com/whatwg/html/cd8ac6f1bbf86dd0bd09ef75d27dacaebe7b4c1d/LICENSE|85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864 \
+	csswg-drafts-LICENSE.md|https://raw.githubusercontent.com/w3c/csswg-drafts/$(CSSWG_COMMIT)/LICENSE.md|232da9c6c2b9f7e19e5d85cc7cf43760d80b7c4174406ac6404fa2c1b51d531b \
+	w3c-software-license-2023.html|https://www.w3.org/copyright/software-license-2023/|ec32c12624d9dc038328872f288355f9e3ff59f2c1ab575c631868eb894415c1
+
+notice-field = $(word $(2),$(subst |, ,$(1)))
+NOTICE_FILES := $(foreach n,$(NOTICE_SOURCES),$(NOTICE_DIR)/$(call notice-field,$(n),1))
+
+define notice-rule
+$(NOTICE_DIR)/$(call notice-field,$(1),1):
+	mkdir -p $(NOTICE_DIR)
+	$(FETCH) -o $$@.part $(call notice-field,$(1),2)
+	echo "$(call notice-field,$(1),3)  $$@.part" | sha256sum -c --quiet - || { \
+	  rm -f $$@.part; \
+	  echo "$(call notice-field,$(1),2) is not the file its digest in NOTICE_SOURCES pins" >&2; \
+	  exit 1; \
+	}
+	mv $$@.part $$@
+endef
+$(foreach n,$(NOTICE_SOURCES),$(eval $(call notice-rule,$(n))))
+
+notice-sources: $(NOTICE_FILES)
+
+clean-notice-sources:
+	rm -rf $(NOTICE_DIR)
 
 clean-language-tags:
 	rm -rf $(dir $(HB_LANGTAGS))
@@ -992,16 +1216,38 @@ UNIFONT_BASE     := https://ftpmirror.gnu.org/gnu/unifont/unifont-$(UNIFONT_VER)
 UNIFONT_FALLBACK := https://ftp.gnu.org/gnu/unifont/unifont-$(UNIFONT_VER)
 UNIFONT_LICENSE  := testdata/unifont/LICENSE.txt
 
-# One Unifont file, from the redirector or from ftp.gnu.org.
+# One Unifont file, from the redirector or from ftp.gnu.org, and held to its
+# SHA-256 wherever it came from. A mirror that serves something else is passed
+# over for ftp.gnu.org rather than believed.
 #
-#	$(call unifont,<destination>,<basename>)
+#	$(call unifont,<destination>,<basename>,<sha256>)
 define unifont
-	$(FETCH) -o $(1) $(UNIFONT_BASE)/$(2) \
-	  || $(FETCH) -o $(1) $(UNIFONT_FALLBACK)/$(2)
+	$(call pinned,$(1),$(UNIFONT_BASE)/$(2),$(3)) \
+	  || $(call pinned,$(1),$(UNIFONT_FALLBACK)/$(2),$(3))
 endef
+UNIFONT_SHA256       := 85701ab9b1e251ee16f4df00b13f22eac311d72b7dab427a7d975fe7f5064702
+UNIFONT_UPPER_SHA256 := f4fd6d5d752726d384feef175bb780c9f29382cd4941c9e1e6990d7c3822a090
 
+# The library is taken at a commit of each repository it comes from, and every
+# file in it is held to its SHA-256.
+#
+# It was taken from the main branch of both, and that made the reftest baseline
+# a function of the day it was fetched. notofonts.github.io is rebuilt by a bot
+# most nights, and a face that changes under a branch changes the glyphs, the
+# advances and the shaping of every document that falls back to it: a fetch on
+# 2026-09-24 gives a NotoSansDevanagari-Regular.ttf that is not the one the
+# baseline was measured with, because upstream replaced it on 2026-09-10. Only
+# the CI cache, keyed on this file, was holding the library still — which is
+# the accident the reftest corpus's own pin was made to end (see WPT_COMMIT).
+#
+# NOTO_COMMIT is the commit of notofonts.github.io whose files are byte for byte
+# the ones the baseline was measured with, and NOTO_CJK_COMMIT (above, beside
+# the CJK faces) is noto-cjk's. Each digest below is part of the stamp's key, so
+# moving a pin or a digest fetches the library again, and a fetch that does not
+# give exactly these files fails rather than moving the baseline.
 NOTO_DIR := testdata/fonts-noto
-NOTO_BASE := https://raw.githubusercontent.com/notofonts
+NOTO_COMMIT := 4a4f893ee29c828fb9e018b35c8eaad8aa3449e9
+NOTO_URL := https://raw.githubusercontent.com/notofonts/notofonts.github.io/$(NOTO_COMMIT)
 
 # IPAMincho and IPAGothic, which four hanging-punctuation documents ask for by
 # *name*.
@@ -1033,36 +1279,56 @@ NOTO_BASE := https://raw.githubusercontent.com/notofonts
 # shipped in anything it builds — the same arrangement as Ahem, Doulos and the
 # Noto faces.
 IPAFONT_URL := https://moji.or.jp/wp-content/ipafont/IPAfont/IPAfont00303.zip
-NOTO_HINTED := NotoSans NotoSansHebrew NotoSansArabic NotoSansDevanagari \
-               NotoSansArmenian NotoSansGeorgian \
-               NotoSansOgham NotoSansCoptic NotoSansDeseret NotoSansSymbols
+IPAFONT_SHA256 := f755ed79a4b8e715bed2f05a189172138aedf93db0f465b4e20c344a02766fe5
 
-# The faces fetched by path rather than by family, each saved under its base
-# name. They are a list for the stamp's sake: a face written into the recipe
-# and not into a list is a face a checkout with the stamp never fetches.
-NOTO_PATHS := notofonts.github.io/main/fonts/NotoSerifTibetan/hinted/ttf/NotoSerifTibetan-Regular.ttf \
-              noto-cjk/main/Sans/Variable/TTF/Subset/NotoSansJP-VF.ttf
-NOTO_STAMP := $(call stamp,$(NOTO_DIR),$(NOTO_BASE) $(NOTO_HINTED) $(NOTO_PATHS) \
-	$(UNIFONT_BASE) $(UNIFONT_FALLBACK) $(IPAFONT_URL))
+# The hinted faces of notofonts.github.io, by family: each is
+# fonts/<family>/hinted/ttf/<family>-Regular.ttf, saved under its base name.
+#
+#	<family>:<sha256>
+NOTO_HINTED := \
+	NotoSans:478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823 \
+	NotoSansHebrew:cdefaf8efd47045f6820928eba84db5bed7557539328952b5f828315485e02ee \
+	NotoSansArabic:bdff3e5659d67e67def05b33f749683b9376ae819d65d3dd62ac4640b3aaef48 \
+	NotoSansDevanagari:306b53ecfb182a504dd8a7446093c316387d2fd8dc350d0792ed1753fe0996cd \
+	NotoSansArmenian:720df88c332417a235b4d6209d14ec2e2bf4bfe2a954b7453d869ea593bfce1e \
+	NotoSansGeorgian:d3e33254b09e7bb2c5cf0f17e554b80462056c5a107097f258d495168c3a9346 \
+	NotoSansOgham:5b3705f2dbc34a493eaa968af282456f319dd74cd230a61614d5b7f6baa31121 \
+	NotoSansCoptic:e70bd535d7e6cdf2346eab36ea76441059b18ee14d3243e85240b5e65eb0ad45 \
+	NotoSansDeseret:9f384e8a75a059b8efcbead73ef5aa3b504ac3e9d218be5368a20b19bfccdeec \
+	NotoSansSymbols:d0e98e9a2c046594c5021437273943be7e79e0fd980fde125279e22302212595 \
+	NotoSerifTibetan:ee97bf3dc56e813651db734c9f35f8f1d41e7e31acf5f7d893e64ad22b292446
+
+# The files taken from noto-cjk by path, each saved under its base name, and
+# the licence that covers them all, saved as OFL.txt. They are lists for the
+# stamp's sake: a file written into the recipe and not into a list is a file a
+# checkout with the stamp never fetches.
+#
+#	<path in noto-cjk>:<sha256>
+NOTO_PATHS := \
+	Sans/Variable/TTF/Subset/NotoSansJP-VF.ttf:f4b373b226668ee33a6e54b02823dcd2d1209f17159f777421ae8c2275160369
+NOTO_LICENSE := Sans/LICENSE:6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2
+NOTO_STAMP := $(call stamp,$(NOTO_DIR),$(NOTO_URL) $(NOTO_HINTED) $(NOTO_CJK_URL) \
+	$(NOTO_PATHS) $(NOTO_LICENSE) $(UNIFONT_BASE) $(UNIFONT_FALLBACK) \
+	$(UNIFONT_SHA256) $(UNIFONT_UPPER_SHA256) $(IPAFONT_URL) $(IPAFONT_SHA256))
 
 noto-fonts: $(NOTO_STAMP)
 
 $(NOTO_STAMP):
 	mkdir -p $(NOTO_DIR)
-	for fam in $(NOTO_HINTED); do \
-	  $(FETCH) -o $(NOTO_DIR)/$$fam-Regular.ttf \
-	    $(NOTO_BASE)/notofonts.github.io/main/fonts/$$fam/hinted/ttf/$$fam-Regular.ttf \
+	for e in $(foreach f,$(NOTO_HINTED),'$(f)'); do \
+	  fam=$${e%%:*}; sum=$${e#*:}; \
+	  $(call pinned,$(NOTO_DIR)/$$fam-Regular.ttf,$(NOTO_URL)/fonts/$$fam/hinted/ttf/$$fam-Regular.ttf,$$sum) \
 	    || exit 1; \
 	done
-	for p in $(NOTO_PATHS); do \
-	  $(FETCH) -o $(NOTO_DIR)/$$(basename $$p) $(NOTO_BASE)/$$p || exit 1; \
+	for e in $(foreach f,$(NOTO_PATHS),'$(f)'); do \
+	  p=$${e%%:*}; sum=$${e#*:}; \
+	  $(call pinned,$(NOTO_DIR)/$$(basename $$p),$(NOTO_CJK_URL)/$$p,$$sum) || exit 1; \
 	done
-	$(FETCH) -o $(NOTO_DIR)/OFL.txt \
-	  $(NOTO_BASE)/noto-cjk/main/Sans/LICENSE
-	$(call unifont,$(NOTO_DIR)/Unifont-Regular.otf,unifont-$(UNIFONT_VER).otf)
-	$(call unifont,$(NOTO_DIR)/UnifontUpper-Regular.otf,unifont_upper-$(UNIFONT_VER).otf)
+	$(call pinned,$(NOTO_DIR)/OFL.txt,$(NOTO_CJK_URL)/$(firstword $(subst :, ,$(NOTO_LICENSE))),$(lastword $(subst :, ,$(NOTO_LICENSE))))
+	$(call unifont,$(NOTO_DIR)/Unifont-Regular.otf,unifont-$(UNIFONT_VER).otf,$(UNIFONT_SHA256))
+	$(call unifont,$(NOTO_DIR)/UnifontUpper-Regular.otf,unifont_upper-$(UNIFONT_VER).otf,$(UNIFONT_UPPER_SHA256))
 	cp $(UNIFONT_LICENSE) $(NOTO_DIR)/UNIFONT-LICENSE.txt
-	$(FETCH) -o $(NOTO_DIR)/ipafont.zip $(IPAFONT_URL)
+	$(call pinned,$(NOTO_DIR)/ipafont.zip,$(IPAFONT_URL),$(IPAFONT_SHA256))
 	unzip -o -j -d $(NOTO_DIR) $(NOTO_DIR)/ipafont.zip \
 	  'IPAfont00303/ipam.ttf' \
 	  'IPAfont00303/ipag.ttf' \
@@ -1296,7 +1562,7 @@ $(WPT_DIR)/fonts/NotoSansGeorgian-Regular.ttf: $(WPT_STAMP) $(NOTO_STAMP)
 # checked by nothing that anybody ran.
 test-wpt: wpt noto-fonts
 	WPT_TESTS=$(abspath $(WPT_DIR)) NOTO_FONTS=$(abspath $(NOTO_DIR)) \
-	  go test -v -run 'TestWPT|TestTheCorpus|TestTheReadme' -count=1 ./layout/
+	  go test -v -run 'TestWPT|TestTheCorpus|TestTheReadme' -count=1 -timeout $(TEST_TIMEOUT) ./layout/
 
 # Where the reftests that are not clean actually are.
 #
@@ -1312,7 +1578,7 @@ test-wpt: wpt noto-fonts
 # passes has no business in a test run that is supposed to mean something.
 wpt-breakdown: wpt noto-fonts
 	WPT_BREAKDOWN=1 WPT_TESTS=$(abspath $(WPT_DIR)) NOTO_FONTS=$(abspath $(NOTO_DIR)) \
-	  go test -v -run TestWPTBreakdown -count=1 ./layout/
+	  go test -v -run TestWPTBreakdown -count=1 -timeout $(TEST_TIMEOUT) ./layout/
 
 clean-wpt:
 	rm -rf $(WPT_DIR)

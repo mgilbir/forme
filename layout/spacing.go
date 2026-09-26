@@ -1,9 +1,8 @@
 package layout
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -71,7 +70,7 @@ func (l *layouter) spacingFor(b *Box) textSpacing {
 // though nothing in word-spacing-001 can tell: that test is set in Ahem, whose
 // space is exactly one em, so the two answers agree everywhere in it.
 func (l *layouter) spacingValue(b *Box, property string) (style.Unit, bool) {
-	raw := strings.ToLower(strings.TrimSpace(b.Style.Get(property)))
+	raw := ascii.Lower(ascii.TrimCSSSpace(b.Style.Get(property)))
 	if raw == "" || raw == "normal" {
 		return 0, false
 	}
@@ -113,7 +112,7 @@ func (m indentMode) indentsLine(first, afterForced bool) bool {
 // the two are not the same thing — a negative indent moves the first line out,
 // the keyword moves every other line in.
 func (l *layouter) textIndent(b *Box, width style.Unit) (style.Unit, indentMode) {
-	raw := strings.TrimSpace(b.Style.Get("text-indent"))
+	raw := ascii.TrimCSSSpace(b.Style.Get("text-indent"))
 	if raw == "" || raw == "0" {
 		return 0, indentMode{}
 	}
@@ -122,7 +121,7 @@ func (l *layouter) textIndent(b *Box, width style.Unit) (style.Unit, indentMode)
 	var length []css.ComponentValue
 	for _, v := range vals {
 		if v.IsToken() && v.Token.Kind == css.Ident {
-			switch strings.ToLower(v.Token.Value) {
+			switch ascii.Lower(v.Token.Value) {
 			case "hanging":
 				mode.hanging = true
 				continue

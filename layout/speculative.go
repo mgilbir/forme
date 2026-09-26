@@ -711,6 +711,13 @@ func (c *fragmentCloner) line(in LineFragment) LineFragment {
 // case is a line re-fitted inside a balanced paragraph inside a measured item,
 // and each of those is a small bound of its own. A variable so that a test can
 // lower it and watch it fire.
+//
+// It is an allowance of its own beside the document's work budget, and
+// budget.go says why under "The other bound": that one is bytes made and kept,
+// this one is passes made and thrown away, and no one rate serves both. What
+// the two share is the rule that an allowance grows with what the document
+// wrote and not with what it made — see onePass — and the one finding a cut
+// makes — see reportOverWork.
 var maxLayoutWork = 64
 
 // minLayoutWork is the floor of that bound, so that a small document is never
@@ -722,11 +729,24 @@ func layoutWorkLimit(root *Box) int {
 	return max(minLayoutWork, maxLayoutWork*onePass(root))
 }
 
-// onePass is what one pass over a box tree can make at most: each box once,
-// and a line box per byte of its text.
+// onePass is what one pass over what the document wrote can make at most: each
+// box once, and a line box per byte of its text.
+//
+// A generated box — a ::before or an ::after — counts as one box and its
+// content not at all. Its content is still laid out, from the floor and from
+// what the document's own content earns, and it is charged to the document's
+// work budget where it is made. What it must not do is earn a layout
+// allowance: generated text is what that budget lets a small input make a
+// great deal of, and counted here it raised this bound by as much again —
+// forty kilobytes of markup whose ::before repeated an attribute made two and
+// a half megabytes of text and a bound of 164 million layouts, where what the
+// document wrote earns the floor.
 func onePass(b *Box) int {
 	if b == nil {
 		return 0
+	}
+	if b.Pseudo != "" {
+		return 1
 	}
 	n := 1 + len(b.Text)
 	for _, c := range b.Children {
@@ -833,19 +853,26 @@ func (l *layouter) reportOverWork() {
 		lost = append(lost, strconv.Itoa(o.blocks)+" "+choosePlural(o.blocks, "block was", "blocks were")+
 			" cut short with lines still to make")
 	}
-	what := "nothing was left out"
+	what := "nothing"
 	if len(lost) > 0 {
-		what = strings.Join(lost, " and ") + ", and that content is not on the page"
+		what = strings.Join(lost, " and ")
 	}
-	l.rec.ReportDetail(Finding{
-		Rule:   RuleLimit,
-		Source: AtHTML(offsetOf(o.first)),
-		Message: "laying this document out took more than " + strconv.Itoa(l.workLimit) +
-			" box layouts and lines, counting copies of reused layouts at " +
-			strconv.Itoa(copiesPerUnit) + " to one, which is more than this engine will do " +
-			"for a document of its size; after that " + what,
-		Path: PathOf(o.first.Element),
-	})
+	// The budget's own finding, with the budget's shape: what was left out,
+	// where it began, and a count of each refusal. See refuseAt.
+	//
+	// Where it began is the element the first refused box belongs to, which is
+	// the nearest one above it when that box is anonymous — as it is when the
+	// refusal falls on the lines of a paragraph wrapped in one. Placed at the box
+	// itself, such a finding had no place and no path at all.
+	at, el := NoSource, boxElement(o.first)
+	if el != nil {
+		at = AtHTML(el.Offset)
+	}
+	l.rec.refuseAt(what+", once laying it out had taken "+strconv.Itoa(l.workLimit)+
+		" box layouts and lines, counting copies of reused layouts at "+
+		strconv.Itoa(copiesPerUnit)+" to one, which is the most this engine does "+
+		"for a document of its size",
+		at, PathOf(el), o.boxes+o.blocks)
 }
 
 func choosePlural(n int, one, many string) string {

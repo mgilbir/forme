@@ -1,11 +1,10 @@
 package paragraph
 
 import (
-	"github.com/mgilbir/forme/segment"
-	"unicode"
-
 	"unicode/utf8"
 
+	"github.com/mgilbir/forme/internal/charprop"
+	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -171,7 +170,7 @@ func scanCursiveTracking(text string, fn func(start, last int, suppressed bool))
 			switch {
 			case IsDefaultIgnorable(r):
 				continue
-			case unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r):
+			case charprop.Is(r, charprop.Mn|charprop.Me):
 				// A mark does not decide the script — it inherits the base's,
 				// which the base has already set — but it can be the last thing
 				// in the cluster, and the spacing goes after the whole of it.

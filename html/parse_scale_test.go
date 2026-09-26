@@ -42,43 +42,10 @@ func TestParseIsLinearInDocumentSize(t *testing.T) {
 	}
 }
 
-// TestCaseInsensitiveSearchIsCorrect pins the two helpers the fix introduced,
-// because a faster search that is also wrong would be worse than the slow one.
-func TestCaseInsensitiveSearchIsCorrect(t *testing.T) {
-	for _, tc := range []struct {
-		s, prefix string
-		want      bool
-	}{
-		{"<!DOCTYPE html>", "<!doctype", true},
-		{"<!DoCtYpE html>", "<!doctype", true},
-		{"<!doctype html>", "<!doctype", true},
-		{"<!docty", "<!doctype", false},
-		{"<div>", "<!doctype", false},
-		{"", "", true},
-	} {
-		if got := hasPrefixFold(tc.s, tc.prefix); got != tc.want {
-			t.Errorf("hasPrefixFold(%q, %q) = %v, want %v", tc.s, tc.prefix, got, tc.want)
-		}
-	}
-
-	for _, tc := range []struct {
-		s, sub string
-		want   int
-	}{
-		{"abc</STYLE>", "</style", 3},
-		{"abc</style>", "</style", 3},
-		{"</styl", "</style", -1},
-		{"xx</Style></style>", "</style", 2},
-		{"nothing", "</style", -1},
-		// The needle's own case must not matter either, since findEndTag builds
-		// it from a tag name that has already been folded once.
-		{"abc</style>", "</STYLE", 3},
-	} {
-		if got := indexFold(tc.s, tc.sub); got != tc.want {
-			t.Errorf("indexFold(%q, %q) = %d, want %d", tc.s, tc.sub, got, tc.want)
-		}
-	}
-}
+// The two case-insensitive searches the fix introduced are internal/ascii's
+// now, and TestPrefixSuffixAndIndexFold there holds them to the cases that were
+// pinned here, because a faster search that is also wrong would be worse than
+// the slow one.
 
 // TestMergingTextIsLinearInTheNumberOfRuns guards the other quadratic this
 // parser had, which the test above cannot see.

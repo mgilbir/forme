@@ -3,7 +3,6 @@ package paragraph
 import (
 	"strings"
 	"testing"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -74,11 +73,12 @@ func TestTextWithNoFullMappingIsUnchangedByTheTable(t *testing.T) {
 
 // TestTheFastPathAgreesWithTheSlowOne.
 //
-// fullCased hands text with no full-mapped character straight to strings.ToUpper
-// and rebuilds the rest a character at a time, and the two halves must not be
-// able to disagree. The reference here is the obvious implementation — look in
-// the table, fall back to Go — written out so that the optimisation has
-// something to be measured against rather than only itself.
+// fullCased hands text with no full-mapped character straight to the
+// whole-string simple mapping and rebuilds the rest a character at a time, and
+// the two halves must not be able to disagree. The reference here is the
+// obvious implementation — look in the table, fall back to the simple mapping —
+// written out so that the optimisation has something to be measured against
+// rather than only itself.
 //
 // The corpus is every character in the tables in turn, each with ASCII, a
 // multi-byte character with no mapping, and another table character on either
@@ -103,8 +103,8 @@ func TestTheFastPathAgreesWithTheSlowOne(t *testing.T) {
 		simple func(rune) rune
 		whole  func(string) string
 	}{
-		{"uppercase", fullUppercase[:], unicode.ToUpper, strings.ToUpper},
-		{"lowercase", fullLowercase[:], unicode.ToLower, strings.ToLower},
+		{"uppercase", fullUppercase[:], simpleUpper, upperString},
+		{"lowercase", fullLowercase[:], simpleLower, lowerString},
 	} {
 		for _, e := range m.table {
 			c := string(e.r)

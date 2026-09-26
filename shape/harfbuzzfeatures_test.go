@@ -368,5 +368,6 @@ func readFeatureExpectations(t *testing.T, name string) ([][]hbGlyph, map[string
 	if header["font-sha256"] == "" {
 		t.Fatalf("%s has no font-sha256 line, so there is nothing tying it to a font", path)
 	}
+	refuseUnpinnedOracle(t, path)
 	return out, header
 }

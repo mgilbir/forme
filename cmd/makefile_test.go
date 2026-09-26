@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -106,10 +107,14 @@ func TestEveryFetchStampMovesWithWhatItFetches(t *testing.T) {
 		"AFM_STAMP":           {"MATPLOTLIB_COMMIT", "AFM_FILES"},
 		"BROTLI_STAMP":        {"BROTLI_COMMIT", "BROTLI_FILES"},
 		"AGL_STAMP":           {"AGL_COMMIT"},
+		"MSUSE_STAMP":         {"HARFBUZZ_VERSION", "MSUSE_FILES"},
 		"CSS_TESTS_STAMP":     {"CSS_TESTS_COMMIT"},
 		"CSS_COLOR_STAMP":     {"CSSWG_COMMIT"},
-		"NOTO_STAMP":          {"NOTO_HINTED", "NOTO_PATHS", "UNIFONT_VER", "IPAFONT_URL"},
-		"WPT_STAMP":           {"WPT_COMMIT", "WPT_DIRS"},
+		"NOTO_STAMP": {"NOTO_COMMIT", "NOTO_HINTED", "NOTO_CJK_COMMIT", "NOTO_PATHS",
+			"NOTO_LICENSE", "UNIFONT_VER", "UNIFONT_SHA256", "UNIFONT_UPPER_SHA256",
+			"IPAFONT_URL", "IPAFONT_SHA256"},
+		"CJK_STAMP": {"NOTO_CJK_COMMIT", "CJK_FACES"},
+		"WPT_STAMP": {"WPT_COMMIT", "WPT_DIRS"},
 	}
 	stamps := map[string]string{}
 	for stamp, vars := range keyedOn {
@@ -157,5 +162,40 @@ func TestEveryFetchStampMovesWithWhatItFetches(t *testing.T) {
 	if len(rules) < len(keyedOn) {
 		t.Fatalf("make's database has %d stamp rules for %d stamps, so the database "+
 			"was not read", len(rules), len(keyedOn))
+	}
+}
+
+// TestNoFetchNamesABranch is the fault that made the reftest baseline a
+// function of the day the fonts were fetched. The Noto faces came from
+// notofonts.github.io's main branch, which a bot rebuilds most nights, and the
+// Google Fonts and CJK libraries came from their main branches too, so two
+// checkouts made a fortnight apart shaped the same document with different
+// fonts and the sweeps counted differences over different families. Only a CI
+// cache was holding any of it still.
+//
+// A branch name is a pin that moves. So make's database is read — every
+// variable as it expands and every recipe as written — and no line of it may
+// fetch from one: no /main/ or /master/ in a URL, no "latest", and no git fetch
+// or checkout of a branch. A pin is a commit, a release or a digest.
+func TestNoFetchNamesABranch(t *testing.T) {
+	needMake(t)
+	out, _ := exec.Command("make", "-C", "..", "--no-print-directory", "-p", "-q",
+		"test-corpora").Output()
+	moving := regexp.MustCompile(`/(main|master|latest)(/|$|\s)|origin[ /](main|master)\b|-B (main|master)\b`)
+	lines := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.Contains(line, "https://") || strings.Contains(line, "git -C") {
+			lines++
+		}
+		if m := moving.FindString(line); m != "" {
+			t.Errorf("the Makefile fetches from a branch (%q), which moves: pin it to a "+
+				"commit and hold each file to its SHA-256\n\t%s", m, strings.TrimSpace(line))
+		}
+	}
+	if lines < 20 {
+		t.Fatalf("make's database has %d lines that fetch anything, so it was not read", lines)
 	}
 }

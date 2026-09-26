@@ -3,12 +3,11 @@ package shape
 import (
 	"encoding/binary"
 	"runtime"
-	"runtime/debug"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mgilbir/forme/fonttest"
+	"github.com/mgilbir/forme/internal/costtest"
 )
 
 // What reading a layout table costs, against the shapes a font can take that
@@ -101,31 +100,6 @@ func tableWith(tag string, lookups int, list []byte) []byte {
 	return withLookupList(fonttest.GPOSLookups(placeholder, map[string][]int{tag: named}), list)
 }
 
-// best is the shortest of five runs of f: the clock is noisy upward only, and
-// these are short.
-//
-// The collector runs only past half a gigabyte while they do. What is measured
-// here is the reader's own work, and a collection landing in one run and not
-// the other moved the ratio of a linear reader past eight, one run in three.
-// The limit is what keeps a regression that allocates without end from taking
-// the machine with it.
-func best(f func()) time.Duration {
-	defer debug.SetMemoryLimit(debug.SetMemoryLimit(1 << 29))
-	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	b := time.Duration(1 << 62)
-	for i := 0; i < 5; i++ {
-		// Collected between runs, so that each starts from the same heap
-		// rather than one that grew under the runs before it.
-		runtime.GC()
-		start := time.Now()
-		f()
-		if d := time.Since(start); d < b {
-			b = d
-		}
-	}
-	return b
-}
-
 // allocated is how many bytes f allocates.
 func allocated(f func()) uint64 {
 	runtime.GC()
@@ -137,25 +111,15 @@ func allocated(f func()) uint64 {
 }
 
 // growth fails the test when the cost at the larger size is more than limit
-// times the cost at the smaller.
-//
-// The two sizes are measured in turn, three times each, and the best of each
-// kept: the machine is shared, and a burst of someone else's work landing on
-// every run of one size and on none of the other is what a ratio cannot tell
-// from a curve.
-func growth(t *testing.T, what string, measure func(n int) time.Duration, small, large int, limit float64) {
+// times the cost at the smaller. at builds the input at a size, outside the
+// timing, and returns the work to time; costtest.Time times the two, and says
+// how a busy machine is kept from deciding the ratio.
+func growth(t *testing.T, what string, at func(n int) func(), small, large int, limit float64) {
 	t.Helper()
-	a, b := time.Duration(1<<62), time.Duration(1<<62)
-	for i := 0; i < 3; i++ {
-		a = min(a, measure(small))
-		b = min(b, measure(large))
-	}
-	if a <= 0 {
-		a = 1
-	}
-	if r := float64(b) / float64(a); r > limit {
+	c := costtest.Time(t, what, at(small), at(large))
+	if c.Ratio > limit {
 		t.Errorf("%s: %v against %v, a factor of %.1f where %.0f is the most the "+
-			"input allows", what, b, a, r, limit)
+			"input allows", what, c.Large, c.Small, c.Ratio, limit)
 	}
 }
 
@@ -231,16 +195,17 @@ func pairSemanticsFace(t *testing.T) *Face {
 	return f
 }
 
-// TestAPairIsFoundAsTheListingFoundIt pins that searching the subtables for a
-// pair answers what listing them into a map answered, case by case — which
-// subtable wins, and what counts as a subtable naming a pair at all.
+// TestAPairIsFoundAsTheListingFoundIt pins which subtable of a lookup applies
+// to a pair, case by case, and what counts as a subtable naming a pair at all.
+// The answers are HarfBuzz 14.5.0's for this font.
 //
-// Two of the cases are this engine's reading and not the specification's, and
-// they are kept as they were because changing them changes what real fonts
-// kern: a class pair that adjusts nothing does not stop the search (by the
-// specification it matches, and applies nothing), and a second glyph the class
-// table does not name is not paired (by the specification it is class 0, and
-// the class 0 column applies to it). Both are marked below.
+// Two of them used to be this engine's own reading, kept because changing
+// them changed what real fonts kern: a class pair that adjusts nothing did not
+// stop the search, and a second glyph the class table does not name was not
+// paired. By the specification and in HarfBuzz the first is a match that
+// applies nothing and the second is class 0, and the class 0 column applies to
+// it. The positioning pass now applies lookups as HarfBuzz does (pairPosAt),
+// and this reading follows it.
 func TestAPairIsFoundAsTheListingFoundIt(t *testing.T) {
 	f := pairSemanticsFace(t)
 	for _, tc := range []struct {
@@ -250,14 +215,18 @@ func TestAPairIsFoundAsTheListingFoundIt(t *testing.T) {
 	}{
 		{"ab", 500, "an explicit pair of zero is a match, and the class pair after it is not reached"},
 		{"cb", 450, "the first subtable to name the pair wins over the third"},
-		// This engine's reading, not the specification's.
-		{"ca", 470, "a class pair that adjusts nothing does not stop the search, so the third subtable applies"},
-		{"cd", 500, "a second glyph the class table does not name is not paired, whatever class 0 says"},
-		{"ad", 500, "nothing names d"},
+		{"ca", 500, "a class pair that adjusts nothing is a match, and the third subtable is not reached"},
+		{"cd", 430, "a second glyph the class table does not name is class 0, and the class 0 column applies"},
+		{"ad", 430, "the explicit list does not name d, so the class subtable after it applies, with d in class 0"},
 	} {
 		got, _ := f.ShapeGlyphs(tc.text)
 		if len(got) != 2 || got[0].XAdvance != tc.want {
 			t.Errorf("%q: the first glyph advances %v, want %v: %s", tc.text, got[0].XAdvance, tc.want, tc.why)
+		}
+		// The pair across a run boundary is found by the same reading.
+		if split := contextAdvance(f, tc.text[:1], "", tc.text[1:]); split != tc.want {
+			t.Errorf("%q: the first glyph, with the second as the next run, advances %v, want %v",
+				tc.text, split, tc.want)
 		}
 	}
 }
@@ -267,16 +236,16 @@ func TestAPairIsFoundAsTheListingFoundIt(t *testing.T) {
 // once per offset the work is n times 16n, sixteen times over for four times
 // the font; read once it is the glyphs it names.
 func TestAliasedPairSubtablesCostWhatTheirBytesDo(t *testing.T) {
-	load := func(n int) time.Duration {
+	load := func(n int) func() {
 		width := 16 * n
 		data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Cost", Glyphs: costGlyphs,
 			Extra: map[string][]byte{"GPOS": tableWith("kern", 1,
 				aliasedLookupList(2, 1, n, wideClassPairSubtable(width, 2)))}})
-		return best(func() {
+		return func() {
 			if _, err := Load(data); err != nil {
 				t.Fatal(err)
 			}
-		})
+		}
 	}
 	growth(t, "loading n offsets to one subtable naming 16n glyphs, at 4n against n",
 		load, 250, 1000, 8)
@@ -326,11 +295,11 @@ func TestChainedClassRulesDoNotExpandTheirClasses(t *testing.T) {
 			[]fonttest.Lookup{{Type: 6, Subtables: [][]byte{sub}}},
 			map[string][]int{"calt": {0}})})
 	}
-	shape := func(k int) time.Duration {
+	shape := func(k int) func() {
 		f := face(min(64*k, 0xFFFF))
 		text := strings.Repeat("ab", k/2)
 		f.ShapeGlyphs(text)
-		return best(func() { f.ShapeGlyphs(text) })
+		return func() { f.ShapeGlyphs(text) }
 	}
 	growth(t, "shaping k glyphs past class tables naming 64k, at 4k against k",
 		shape, 250, 1000, 8)
@@ -411,9 +380,14 @@ func TestACoverageStartingLateFillsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := f.layout.singlePos[0]; ok {
-		t.Error("glyph 0 was given the adjustment: the reader named it at every index " +
-			"it filled in")
+	// The notdef, glyph 0, is what every index before the late one would
+	// have named, and it must not be adjusted.
+	want, _ := f.ShapeGlyphs("z")
+	if len(want) != 1 || want[0].GID != 0 {
+		t.Fatalf("an unmapped character did not shape to the notdef: %+v", want)
+	}
+	if want[0].XAdvance != f.advanceGID(0) {
+		t.Errorf("glyph 0 was given the adjustment: %+v", want)
 	}
 	if got, _ := f.ShapeGlyphs("a"); len(got) != 1 || got[0].XAdvance != 507 {
 		t.Errorf("the covered glyph was not adjusted: %+v", got)
@@ -425,7 +399,7 @@ func TestACoverageStartingLateFillsNothing(t *testing.T) {
 // n features with distinct tags cost n² — sixty-four kilobytes of GSUB took 1.7
 // seconds, on the Load path and again per script a document sets.
 func TestTheFeatureListIsWalkedOncePerRead(t *testing.T) {
-	load := func(n int) time.Duration {
+	load := func(n int) func() {
 		lookups := make([]fonttest.Lookup, n)
 		features := map[string][]int{}
 		for i := range lookups {
@@ -438,11 +412,11 @@ func TestTheFeatureListIsWalkedOncePerRead(t *testing.T) {
 		}
 		data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Cost", Glyphs: costGlyphs,
 			Extra: map[string][]byte{"GSUB": fonttest.GSUBLookups(lookups, features)}})
-		return best(func() {
+		return func() {
 			if _, err := Load(data); err != nil {
 				t.Fatal(err)
 			}
-		})
+		}
 	}
 	growth(t, "loading n features with distinct tags, at 4n against n", load, 900, 3600, 8)
 }
@@ -452,7 +426,7 @@ func TestTheFeatureListIsWalkedOncePerRead(t *testing.T) {
 // that there are a handful. A feature may name every lookup there is, in
 // descending order.
 func TestALongLookupOrderIsNotInsertionSorted(t *testing.T) {
-	load := func(n int) time.Duration {
+	load := func(n int) func() {
 		// n lookups, all one single adjustment, named by 'kern' last first.
 		named := make([]int, n)
 		for i := range named {
@@ -468,11 +442,11 @@ func TestALongLookupOrderIsNotInsertionSorted(t *testing.T) {
 			aliasedLookupList(1, n, 1, sub))
 		data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Cost", Glyphs: costGlyphs,
 			Extra: map[string][]byte{"GPOS": table}})
-		return best(func() {
+		return func() {
 			if _, err := Load(data); err != nil {
 				t.Fatal(err)
 			}
-		})
+		}
 	}
 	growth(t, "loading a feature naming n lookups in descending order, at 4n against n",
 		load, 3000, 12000, 8)
@@ -488,7 +462,7 @@ func TestALongLookupOrderIsNotInsertionSorted(t *testing.T) {
 // offsets to one small subtable after it. Sorted after each subtable that is
 // 16n² steps.
 func TestLigaturesAreSortedOnceNotPerSubtable(t *testing.T) {
-	load := func(n int) time.Duration {
+	load := func(n int) func() {
 		m := 4 * n
 		// LigatureSubst format 1: a's one ligature set of m offsets to one
 		// ligature, a b -> c.
@@ -513,11 +487,11 @@ func TestLigaturesAreSortedOnceNotPerSubtable(t *testing.T) {
 		if f, err := Load(data); err != nil || len(f.layout.ligatures[1]) != m || len(f.layout.ligatures[2]) != 4*n {
 			t.Fatalf("the fixture was not read as it was written: %v", err)
 		}
-		return best(func() {
+		return func() {
 			if _, err := Load(data); err != nil {
 				t.Fatal(err)
 			}
-		})
+		}
 	}
 	growth(t, "loading 4n ligatures for one glyph followed by 4n subtables, at 4n against n",
 		load, 750, 3000, 8)
@@ -566,10 +540,10 @@ func wideMarkRuleFace(t testing.TB, width int) *Face {
 // placed.
 func TestAMarkRuleReachedFromAContextReadsOnlyWhatItAsks(t *testing.T) {
 	text := "a" + strings.Repeat("́", 64)
-	shape := func(width int) time.Duration {
+	shape := func(width int) func() {
 		f := wideMarkRuleFace(t, width)
 		f.ShapeGlyphs(text)
-		return best(func() { f.ShapeGlyphs(text) })
+		return func() { f.ShapeGlyphs(text) }
 	}
 	growth(t, "shaping 64 marks through a rule whose subtable's coverages name 65,535 "+
 		"glyphs against 4,096", shape, 4096, 0xFFFF, 4)
@@ -582,9 +556,9 @@ func TestAMarkRuleReachedFromAContextReadsOnlyWhatItAsks(t *testing.T) {
 
 // TestAliasedMarkSubtablesAreReadOnce is aliasing across lookups: n mark
 // lookups that all point at one subtable whose coverages name sixteen thousand
-// glyphs. The anchors are the same bytes whoever names them, so the subtable
-// is read once; read once per lookup, it would spend the allowance, and the
-// face would say so.
+// glyphs. A mark subtable is searched where a mark is met rather than read at
+// load, so naming it n times costs nothing to load; read once per lookup, it
+// would spend the allowance, and the face would say so.
 func TestAliasedMarkSubtablesAreReadOnce(t *testing.T) {
 	const lookups, width = 200, 16000
 	// The subtable wideMarkRuleFace applies through a rule, taken out of it and
@@ -616,16 +590,19 @@ func TestAliasedMarkSubtablesAreReadOnce(t *testing.T) {
 		t.Errorf("the mark was not placed: %+v", got)
 	}
 
-	// And one lookup naming it n times keeps it once: within a lookup the
-	// first subtable that applies wins, so the copies can never apply, and
-	// every copy kept is one more for every mark in every run to be tried
-	// against.
+	// And one lookup naming it n times places the mark as one naming it once:
+	// within a lookup the first subtable that applies wins, so the copies
+	// after it are never reached.
 	g := costFace(t, map[string][]byte{
 		"GPOS": tableWith("mark", 1, aliasedLookupList(4, 1, lookups, sub)),
 		"GDEF": fonttest.GDEF(map[int]int{1: classBase, 4: classMark}),
 	})
-	if n := len(g.layout.markBase); n != 1 {
-		t.Errorf("one lookup naming a subtable %d times keeps %d copies of it, want 1", lookups, n)
+	if limits := g.LayoutLimits(); len(limits) != 0 {
+		t.Errorf("one lookup naming a subtable %d times spent the allowance: %q", lookups, limits)
+	}
+	if again, _ := g.ShapeGlyphs("á"); len(again) != 2 || again[1] != got[1] {
+		t.Errorf("one lookup naming the subtable %d times placed the mark at %+v, "+
+			"and %d lookups naming it once each at %+v", lookups, again, lookups, got)
 	}
 }
 
@@ -635,7 +612,7 @@ func TestAliasedMarkSubtablesAreReadOnce(t *testing.T) {
 // once per glyph, however many records name it: at n records each naming 16n
 // glyphs, and 4n, the work is the glyph space and not the product.
 func TestGlyphClassesAreNotExpandedPerRecord(t *testing.T) {
-	load := func(n int) time.Duration {
+	load := func(n int) func() {
 		width := 16 * n
 		cd := u16(nil, 2, n)
 		for i := 0; i < n; i++ {
@@ -647,11 +624,11 @@ func TestGlyphClassesAreNotExpandedPerRecord(t *testing.T) {
 		gdef = append(gdef, cd...)
 		data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Cost", Glyphs: costGlyphs,
 			Extra: map[string][]byte{"GDEF": gdef}})
-		return best(func() {
+		return func() {
 			if _, err := Load(data); err != nil {
 				t.Fatal(err)
 			}
-		})
+		}
 	}
 	growth(t, "loading a glyph class table of n records each naming 16n glyphs, at 4n "+
 		"against n", load, 250, 1000, 8)

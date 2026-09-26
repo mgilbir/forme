@@ -62,6 +62,15 @@ var (
 // which is the distinction §10.5 draws and the one that stops an image
 // collapsing inside an auto-height parent.
 func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefinite bool) Size {
+	return l.replacedSizeOf(b, containing, cbHeight, cbDefinite, false)
+}
+
+// replacedSizeOf is replacedSize, with autoHeight to size the box as though its
+// declared height were "auto": what a flex column measuring the content of an
+// item asks. See forcedGeometry.contentHeight.
+func (l *layouter) replacedSizeOf(b *Box, containing, cbHeight style.Unit, cbDefinite,
+	autoHeight bool) Size {
+
 	rc := b.Replaced
 	if rc == nil {
 		return Size{}
@@ -75,6 +84,9 @@ func (l *layouter) replacedSize(b *Box, containing, cbHeight style.Unit, cbDefin
 
 	width, hasWidth := l.lengthOf(b, "width", containing)
 	height, hasHeight := l.verticalLength(b, "height", cbHeight, cbDefinite)
+	if autoHeight {
+		height, hasHeight = 0, false
+	}
 	// A negative width or height is not a declaration this engine honours; the
 	// property does not accept one and the initial value stands. The test is made
 	// against the *declared* value, before box-sizing takes the padding out of it,

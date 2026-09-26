@@ -3,8 +3,8 @@ package layout
 import (
 	"maps"
 	"slices"
-	"strings"
 
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/shape"
 )
@@ -380,8 +380,7 @@ func (l *layouter) familyListIsRestricted(b *Box) bool {
 	}
 	restricted := false
 	for _, family := range parseFamilyList(families) {
-		key := strings.TrimSpace(strings.Trim(strings.TrimSpace(strings.ToLower(family)), `"'`))
-		for _, c := range set.byFamily[key] {
+		for _, c := range set.byFamily[familyKey(family)] {
 			if len(c.rule.ranges) > 0 {
 				restricted = true
 			}
@@ -439,7 +438,7 @@ func namesOnlyGenericFamilies(list string) bool {
 		return true
 	}
 	for _, name := range names {
-		if !genericFamilies[strings.ToLower(strings.TrimSpace(name))] {
+		if !genericFamilies[ascii.Lower(ascii.TrimCSSSpace(name))] {
 			return false
 		}
 	}

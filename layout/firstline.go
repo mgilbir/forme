@@ -1,8 +1,7 @@
 package layout
 
 import (
-	"strings"
-
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -107,7 +106,7 @@ func (l *layouter) reportFirstLine(b *Box) {
 		return
 	}
 	for _, name := range firstLineReports {
-		v := strings.TrimSpace(fl.Get(name))
+		v := ascii.TrimCSSSpace(fl.Get(name))
 		if v == "" || v == style.Undeclared(name, b.Style.Get(name)) {
 			continue
 		}

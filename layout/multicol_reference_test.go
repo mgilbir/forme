@@ -1,6 +1,11 @@
 package layout
 
-import "github.com/mgilbir/forme/style"
+import (
+	"slices"
+	"sort"
+
+	"github.com/mgilbir/forme/style"
+)
 
 // The pour as it was written before it was made linear: split the remainder at
 // one column height, copy what is below, and do it again. It is kept here as
@@ -101,36 +106,127 @@ func fillColumnsByCopy(f *Fragment, c columns, height style.Unit) bool {
 	return true
 }
 
-func balancedHeightByScan(breaks []style.Unit, n int) (style.Unit, bool) {
-	for _, h := range breaks {
-		if fitsColumnsByScan(breaks, n, h) {
+// fillColumnsByCopyWith is the literal pour with the column ends a forced break
+// and a balanced height ask for: each column ends at the first forced break
+// after it begins, if that comes within a column height, and otherwise — where
+// breaks is given — at the last breakpoint within a column height, found by
+// walking the list. With overflow, the columns go on past c.n until nothing is
+// left: css-multicol-1 §8.2's overflow columns, placed as the next column
+// would be, and refused past maxOverflowColumns of them.
+func fillColumnsByCopyWith(f *Fragment, c columns, height style.Unit,
+	forced, breaks []style.Unit, overflow bool) bool {
+
+	if height <= 0 {
+		return false
+	}
+	bands := make([]*Fragment, 0, c.n)
+	rest := f
+	start := style.Unit(0)
+	for i := 0; (i < c.n || overflow) && rest != nil; i++ {
+		if i >= c.n && len(rest.Lines) == 0 && len(rest.Children) == 0 {
+			// Nothing left, and nothing was ever there: a split with nothing
+			// above keeps what is below whether or not it holds anything.
+			rest = nil
+			break
+		}
+		if i-c.n >= maxOverflowColumns {
+			return false
+		}
+		cut := start.Add(height)
+		ended := false
+		for _, b := range forced {
+			if b > start && b <= cut {
+				cut, ended = b, true
+				break
+			}
+		}
+		if !ended && breaks != nil {
+			for _, b := range breaks {
+				if b > start && b <= start.Add(height) {
+					cut = b
+				}
+			}
+		}
+		top, bottom, ok := splitAtByCopy(rest, cut.Sub(start))
+		if !ok {
+			return false
+		}
+		bands = append(bands, top)
+		rest = bottom
+		start = cut
+	}
+	if rest != nil {
+		return false
+	}
+	f.Lines, f.Children = nil, nil
+	for i, band := range bands {
+		if band == nil {
+			continue
+		}
+		dx := c.width.Add(c.gap).Mul(float64(i))
+		for _, line := range band.Lines {
+			line.Rect.X = line.Rect.X.Add(dx)
+			f.Lines = append(f.Lines, line)
+		}
+		for _, child := range band.Children {
+			child.BorderRect.X = child.BorderRect.X.Add(dx)
+			f.Children = append(f.Children, child)
+		}
+	}
+	return true
+}
+
+// balancedHeightByScan is the shortest height the content fits in, found by
+// trying every height a column can have — every breakpoint, and every distance
+// between two, which is what a column that begins at one and ends at another
+// is — in increasing order.
+func balancedHeightByScan(breaks, forced []style.Unit, n int) (style.Unit, bool) {
+	if len(breaks) == 0 {
+		return 0, true
+	}
+	candidates := append([]style.Unit(nil), breaks...)
+	for i := range breaks {
+		for j := i + 1; j < len(breaks); j++ {
+			candidates = append(candidates, breaks[j].Sub(breaks[i]))
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i] < candidates[j] })
+	for _, h := range candidates {
+		if h > 0 && fitsColumnsByScan(breaks, forced, n, h) {
 			return h, true
 		}
+	}
+	if breaks[len(breaks)-1] <= 0 {
+		return breaks[len(breaks)-1], true
 	}
 	return 0, false
 }
 
 // fitsColumns reports whether content whose breakpoints are these fits in n
-// columns of the given height, filled greedily.
-func fitsColumnsByScan(breaks []style.Unit, n int, height style.Unit) bool {
+// columns of the given height, filled greedily, with a column ending at every
+// forced break but one at the very end.
+func fitsColumnsByScan(breaks, forced []style.Unit, n int, height style.Unit) bool {
 	if len(breaks) == 0 {
 		return true
 	}
 	used, start := 1, style.Unit(0)
+	last := breaks[len(breaks)-1]
 	for _, at := range breaks {
-		if at.Sub(start) <= height {
-			continue
-		}
-		// This piece does not fit in the column being filled, so the column
-		// ended at the breakpoint before it. Nothing here needs to know which
-		// one that was: what is counted is the columns, and the piece that did
-		// not fit begins the next.
-		used++
-		start = previousBreakByScan(breaks, at)
 		if at.Sub(start) > height {
-			// One piece taller than a whole column. No number of columns holds
-			// it, and a taller column is the only answer.
-			return false
+			// This piece does not fit in the column being filled, so the
+			// column ended at the breakpoint before it, and the piece that did
+			// not fit begins the next.
+			used++
+			start = previousBreakByScan(breaks, at)
+			if at.Sub(start) > height {
+				// One piece taller than a whole column. No number of columns
+				// holds it, and a taller column is the only answer.
+				return false
+			}
+		}
+		if at < last && slices.Contains(forced, at) {
+			used++
+			start = at
 		}
 	}
 	return used <= n
