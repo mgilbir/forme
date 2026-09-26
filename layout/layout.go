@@ -1481,13 +1481,27 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 				//
 				// A block whose only child is such a box makes no line box at
 				// all, which is why the answer cannot come from there.
-				x := style.Unit(0)
-				if child.staticInline && !lineBaseIsRTL(b, nil) {
-					if indent, mode := l.textIndent(b, width); mode.indentsLine(true, false) {
-						x = indent
+				//
+				// That line begins at its *start* edge, which on a right-to-left
+				// line is the right one, so the indent is taken in from there.
+				// And the inline box is a point on the line rather than a box
+				// filling it, so its two static positions are the same point
+				// read from the two edges — which the block-level answer, nought
+				// from both, is not. Taking the indent for a left-to-right line
+				// only left the dir=rtl half of text-indent-with-absolute-pos-
+				// child at the block's right edge, an indent from the words.
+				x, end := style.Unit(0), style.Unit(0)
+				if child.staticInline {
+					var indent style.Unit
+					if v, mode := l.textIndent(b, width); mode.indentsLine(true, false) {
+						indent = v
+					}
+					x, end = indent, width.Sub(indent)
+					if lineBaseIsRTL(b, nil) {
+						x, end = width.Sub(indent), indent
 					}
 				}
-				l.deferAbsolute(child, parent, x, y.Add(offset), 0, listIndex)
+				l.deferAbsolute(child, parent, x, y.Add(offset), end, listIndex)
 				continue
 			}
 			parent.Children = append(parent.Children,
