@@ -731,6 +731,19 @@ var ideographicRanges = [...]struct{ lo, hi rune }{
 	{0x30000, 0x3FFFD},
 }
 
+// The Hangul conjoining jamo, UAX #14's classes JL, JV and JT. Unicode 17.0.0.
+//
+// 4 ranges, merged from 6 the file states separately: JL 2, JT 2, JV 2.
+// They break as the Hangul syllables do, between one syllable and the next and
+// never inside one. See jamoClasses in cmd/genlinebreak for why the grapheme
+// cluster is what says where the syllable ends.
+var jamoRanges = [...]struct{ lo, hi rune }{
+	{0x1100, 0x11FF},
+	{0xA960, 0xA97C},
+	{0xD7B0, 0xD7C6},
+	{0xD7CB, 0xD7FB},
+}
+
 // The characters an aksara cluster may begin with, UAX #14's classes AK and
 // AS. Unicode 17.0.0.
 //

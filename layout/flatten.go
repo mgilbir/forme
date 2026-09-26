@@ -1297,10 +1297,12 @@ func endsBinding(text string) bool {
 }
 
 // startsIdeographic reports whether a piece begins with an ideograph, which is a
-// character a line may begin with and may end in front of.
+// character a line may begin with and may end in front of — or with a Hangul
+// jamo, which breaks as one between syllables. See
+// paragraph.BreaksLikeAnIdeograph.
 func startsIdeographic(text string) bool {
 	r, _ := utf8.DecodeRuneInString(text)
-	return r != utf8.RuneError && paragraph.IsIdeographic(r)
+	return r != utf8.RuneError && paragraph.BreaksLikeAnIdeograph(r)
 }
 
 // endsLetterUnit reports whether the character before the next boundary is a
@@ -1331,7 +1333,7 @@ func endsLetterUnit(text string, was bool) bool {
 	if !ok {
 		return was
 	}
-	return paragraph.IsLetterUnit(r) && !paragraph.IsIdeographic(r)
+	return paragraph.IsLetterUnit(r) && !paragraph.BreaksLikeAnIdeograph(r)
 }
 
 // lastBaseOr is the last base character of text, or what it was given where the

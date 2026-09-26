@@ -142,13 +142,10 @@ func hangulSet(t *testing.T, composed bool) FontSet {
 // shaped glyphs by byte offset, so a cluster that took in both syllables would
 // charge both to the first and make the first piece two syllables wide.
 //
-// Two syllables both written as jamo are not here, because the line breaker
-// offers no break between them and never has: it breaks around the characters
-// of class ID, CJ, H2 and H3, and a syllable spelt JL JV JT is none of them.
-// UAX #14 allows the break (LB31: LB26 holds JT against a following JT only),
-// so that is a gap of its own in the breaker, found by this test, and not
-// something the shaper hid — the breaker reads characters, not clusters, and
-// the gap is the same with the Hangul model or without it.
+// Every spelling is here: both syllables composed, both in jamo, and one of
+// each in either order. Two syllables in jamo once had no break between them
+// at all, because the line breaker offered one only around the classes ID, CJ,
+// H2 and H3; see paragraph.BreaksLikeAnIdeograph.
 func TestABreakBetweenTwoHangulSyllablesIsStillOffered(t *testing.T) {
 	for _, c := range []struct {
 		what     string
@@ -159,7 +156,7 @@ func TestABreakBetweenTwoHangulSyllablesIsStillOffered(t *testing.T) {
 		{"a face with the syllables", true, 20},
 		{"a face with jamo only", false, 26},
 	} {
-		for _, text := range []string{hangulTwoS, hangulMixed, hangulMixed2} {
+		for _, text := range []string{hangulTwoS, hangulLVTLVT, hangulMixed, hangulMixed2} {
 			for _, wb := range []struct {
 				value string
 				want  float64
@@ -264,6 +261,33 @@ func checkSyllableSpacing(t *testing.T, composed bool, text string, v DrawText) 
 			syllable(glyphs[i+1].Cluster) == syllable(glyphs[i].Cluster) {
 			t.Errorf("composed=%v, %+q: a spacing after glyph %d, inside the "+
 				"syllable its next glyph is part of", composed, text, i)
+		}
+	}
+}
+
+// TestAJamoSyllableAcrossTwoBoxesIsNotCut.
+//
+// A syllable whose jamo are in two elements is still one syllable, and a line
+// may not end inside it; two syllables in two elements may be broken between.
+// The opportunity a jamo offers crosses into the next box, and it is the next
+// box's first character that decides whether the syllable ended there.
+func TestAJamoSyllableAcrossTwoBoxesIsNotCut(t *testing.T) {
+	for _, c := range []struct {
+		html  string
+		lines int
+	}{
+		{"<span>\u1100</span>\u1161", 1},
+		{"<span>\u1100\u1161</span>\u11A8", 1},
+		{"\u1100<span>\u1161\u11A8</span>", 1},
+		{"<span>\u1100\u1161\u11A8</span>\u1100\u1161\u11A8", 2},
+		{"\u1100\u1161\u11A8<span>\u1100\u1161\u11A8</span>", 2},
+		{"a<span>\u1100\u1161\u11A8</span>", 2},
+		{"<span>a</span>\u1100\u1161\u11A8", 2},
+	} {
+		root := layoutOf(t, 600, `<div id="p">`+c.html+`</div>`,
+			`#p { font-family: Courier; font-size: 20px; width: 1px }`)
+		if got := len(find(t, root, "p").Lines); got != c.lines {
+			t.Errorf("%+q in a box one pixel wide: %d line(s), want %d", c.html, got, c.lines)
 		}
 	}
 }
