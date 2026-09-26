@@ -182,6 +182,12 @@ func dimOps(ops []Op, at int, alpha float64) ([]Op, []groupMark) {
 				continue
 			}
 			kept = append(kept, op)
+		case Link:
+			// Not a mark: it puts nothing on the page to lie over anything,
+			// and opacity does not take a link away — a browser hit-tests a
+			// transparent box like any other. The painter emits links outside
+			// every group, so this is here for the list of kinds to be whole.
+			kept = append(kept, op)
 		default:
 			kept = append(kept, op)
 		}

@@ -387,6 +387,13 @@ type Box struct {
 	// policy; a second path to a file would be a second policy, and the second
 	// one is always the one that is missing a check.
 	ContentImage string
+
+	// link is the hyperlink this box is the element of, where the element is
+	// an <a> with an href the engine makes a link of, and nil for every other
+	// box. It is the element's and not the box's: every piece §9.2.1.1 splits
+	// the <a> into carries the same pointer, which is how the painter knows the
+	// pieces are one link. See link.go.
+	link *hyperlink
 }
 
 // outOfFlow reports whether a box takes no space among its siblings, which is
@@ -779,6 +786,7 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	box.FirstLine = b.pseudo[style.PseudoKey{Node: n, Name: "first-line"}]
 	box.ListValue, box.ListNumbered = b.listValueOf(n, listItem)
 	box.Control = b.controlFor(n)
+	box.link = b.hyperlinkOf(n)
 	if (outer != OuterInline && !box.outOfFlow()) || endsAWord(n) {
 		// A block-level box begins its text afresh, so a word cannot run into it
 		// from the paragraph before. Without this, "<p>hi</p><p>there</p>" under
@@ -1951,7 +1959,7 @@ func clonePiece(b *Box) *Box {
 		ListItem: b.ListItem, Replaced: b.Replaced,
 		Float: b.Float, Clear: b.Clear,
 		Position: b.Position, ZIndex: b.ZIndex, ZAuto: b.ZAuto,
-		Order: b.Order,
+		Order: b.Order, link: b.link,
 	}
 }
 

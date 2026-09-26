@@ -626,10 +626,10 @@ func (c *layoutCache) unlink(e *layoutEntry) {
 // copy reaches the original, and remembers which copy each fragment became.
 //
 // Deep enough is every slice and every pointer layout or painting writes
-// through: the children and the lines, each line's runs and inline boxes, the
-// marker, and the rectangle lists. What is shared is what nothing writes to
-// once made — the boxes, the faces, the images and a run's decorations, which
-// are memoized and shared across runs already.
+// through: the children and the lines, each line's runs, inline boxes and
+// links, the marker, and the rectangle lists. What is shared is what nothing
+// writes to once made — the boxes, the faces, the images and a run's
+// decorations, which are memoized and shared across runs already.
 //
 // A slice that was nil stays nil and one that was empty stays empty, so a copy
 // is indistinguishable from the original to anything that compares them.
@@ -682,6 +682,12 @@ func (c *fragmentCloner) line(in LineFragment) LineFragment {
 		out.Boxes = make([]*Fragment, len(in.Boxes))
 		for i, b := range in.Boxes {
 			out.Boxes[i] = c.clone(b)
+		}
+	}
+	if in.links != nil {
+		out.links = make([]*Fragment, len(in.links))
+		for i, b := range in.links {
+			out.links[i] = c.clone(b)
 		}
 	}
 	return out

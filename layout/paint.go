@@ -35,6 +35,11 @@ import (
 // something this stage should have decomposed — a border is four filled bands
 // rather than a "border" primitive, because a backend that had to understand
 // border-collapse would be a second layout engine.
+//
+// There are five: FillRect, DrawText, DrawImage and TileImage, which put ink on
+// the page, and Link, which puts none and says where a hyperlink is. A backend
+// that switches over them must have a case for each, and one that only draws
+// may skip Link.
 type Op interface{ isOp() }
 
 // FillRect paints a rectangle in a solid colour.
@@ -273,10 +278,62 @@ func tileSpan(clipLo, clipHi, tileLo, size, step style.Unit) int {
 	return int(n)
 }
 
+// Link is a hyperlink: the areas of the page that follow it, and where to.
+//
+// It draws nothing. It is in the display list because a backend that makes a
+// link annotation needs the areas, and the areas are layout's geometry: the
+// alternative is a backend finding the <a>'s boxes again in the fragment tree,
+// which is the second layout engine this list exists to make unnecessary. See
+// link.go for which elements are links.
+//
+// There is one Link per <a>, however many places it is on the page, and it is
+// at the place in the list where the first of its areas was painted. An area
+// on a line is painted just before that line's text, and the area of a box
+// with the box's background — so a link in the flow is in document order, and
+// one Appendix E moves out of the flow is where its box is painted.
+type Link struct {
+	// Rects are the border boxes of the <a>'s fragments: one for each line an
+	// inline <a> is broken across, one for a block-level or atomic <a>, and one
+	// for each image, inline-block, float, absolutely positioned box or lifted
+	// block that an inline <a> holds and its line fragments do not enclose. They
+	// are in the order they were painted, and they may overlap.
+	//
+	// Each is cut to whatever clips the box it came from — an "overflow:
+	// hidden" ancestor, a "clip" — exactly as a fill there would be, so no part
+	// of a link reaches outside what is visible of it. An area clipped away
+	// entirely is not here, and a link with no area left is not in the list at
+	// all: a reader cannot click what they cannot see. An area whose box is
+	// "visibility: hidden" is not here either, since §11.2's box is not drawn
+	// and a browser does not send a click to it; opacity is no such thing, and
+	// a transparent link is still a link.
+	//
+	// Where two links' areas overlap, the one later in the list is on top, as
+	// a later mark is on top of an earlier one, and a browser gives a click to
+	// what is on top. A link inside another in the flow — XHTML can nest them,
+	// and HTML can through a table — is the later of the two, so a backend
+	// that lets the last annotation win gives the click to the innermost link,
+	// which is the one a browser follows.
+	Rects []Rect
+	// Href is where the link goes, as the URL standard reads it and otherwise
+	// as the document wrote it.
+	//
+	// It is an http, https or mailto URL, or a reference with no scheme — a
+	// relative one, which is relative to the document and is left for the
+	// backend to resolve against the document's address, since this engine is
+	// never told it; or a fragment, "#x", into the document itself. Every other
+	// scheme is refused before it gets here, and is reported. See link.go.
+	Href string
+
+	// of is the <a> the areas belong to, while the paint gathers them into one
+	// Link. It is nil in every Link that leaves Paint.
+	of *hyperlink
+}
+
 func (FillRect) isOp()  {}
 func (DrawText) isOp()  {}
 func (DrawImage) isOp() {}
 func (TileImage) isOp() {}
+func (Link) isOp()      {}
 
 // Paint turns a fragment tree into a display list, in painting order.
 //
@@ -353,7 +410,7 @@ func PaintReporting(root *Fragment, rec *Recorder) []Op {
 	for _, b := range p.order {
 		p.groups[b].report(rec)
 	}
-	return p.ops
+	return gatherLinks(p.ops)
 }
 
 // dimming works out, before anything is painted, how much of each fragment's
@@ -699,6 +756,10 @@ type painter struct {
 	elementGroups map[groupKey]*Box
 	// inlineDims memoizes inlineDim, per inline box.
 	inlineDims map[*Box]memoDim
+	// inlineLinks memoizes linkAbove, per inline box, and linkSteps counts the
+	// boxes it has walked, which is what a test bounds.
+	inlineLinks map[*Box]*hyperlink
+	linkSteps   int
 
 	// levels is the inline level of each element that has one, innerLevels
 	// memoizes innerLevelOf per box, and lineLevels is, per block, the
@@ -1238,6 +1299,22 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 			}
 			kept = append(kept, v)
 
+		case Link:
+			// Exact, as a fill's is: each area cut by the clip, and one cut
+			// away entirely is gone. A new slice, since the areas may be
+			// shared with an op nothing here is narrowing.
+			rects := make([]Rect, 0, len(v.Rects))
+			for _, r := range v.Rects {
+				if r = r.Intersect(c.Rect); !r.Empty() {
+					rects = append(rects, r)
+				}
+			}
+			if len(rects) == 0 {
+				continue
+			}
+			v.Rects = rects
+			kept = append(kept, v)
+
 		case DrawText:
 			ink := textInk(v)
 			if ink.Empty() {
@@ -1381,6 +1458,10 @@ func (p *painter) decorations(f *Fragment) {
 		return
 	}
 	p.grouped(f, func() { p.decorationsIn(f) })
+	// The fragment's area as a link's, where it is one: every fragment that
+	// is not a line's comes through here exactly once, which is what makes
+	// this the place. The clip is the one its background has.
+	p.linkArea(f, f.clipSelf, p.linkOf(f.Box))
 }
 
 func (p *painter) decorationsIn(f *Fragment) {
@@ -1913,6 +1994,14 @@ func (p *painter) lines(f *Fragment) {
 	content, around := f.ContentRect(), p.dimOf(f)
 	for li := range f.Lines {
 		line := &f.Lines[li]
+		// The links on the line first, at the place of the text they are
+		// around. They are the block's own whatever inline level the <a> is
+		// in, because they draw nothing and so have no place in a stacking
+		// order to be sorted into — what they need is the clip, and the
+		// block's content clip is the one every mark on its lines has.
+		for _, lf := range line.links {
+			p.linkArea(lf, f.clipContent, lf.Box.link)
+		}
 		// §E.2's inline layer, in the order it gives: for each line box, the
 		// background and border of the inline boxes on it, then the text. They
 		// are in tree order among themselves, so an inner box's background is

@@ -791,6 +791,13 @@ func absolutise(f *Fragment, x, y style.Unit) {
 			ib.BorderRect.Y = ib.BorderRect.Y.Add(content.Y).Add(ib.Offset.Y)
 			ib.absolute = true
 		}
+		// A link's area on the line, which is sliced as those are and moves
+		// with them. See LineFragment.links.
+		for _, lf := range f.Lines[i].links {
+			lf.BorderRect.X = lf.BorderRect.X.Add(content.X).Add(lf.Offset.X)
+			lf.BorderRect.Y = lf.BorderRect.Y.Add(content.Y).Add(lf.Offset.Y)
+			lf.absolute = true
+		}
 	}
 	for _, c := range f.Children {
 		absolutise(c, content.X, content.Y)

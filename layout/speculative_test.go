@@ -344,7 +344,7 @@ func TestFragmentClonerCopiesEveryField(t *testing.T) {
 		f := lt.Field(i)
 		switch f.Type.Kind() {
 		case reflect.Slice, reflect.Pointer, reflect.Map, reflect.Interface:
-			if f.Name != "Runs" && f.Name != "Boxes" {
+			if f.Name != "Runs" && f.Name != "Boxes" && f.Name != "links" {
 				t.Errorf("LineFragment.%s is a %v, and fragmentCloner does not copy it",
 					f.Name, f.Type)
 			}
@@ -353,7 +353,8 @@ func TestFragmentClonerCopiesEveryField(t *testing.T) {
 
 	// And that what it copies is copied: a write through the copy does not
 	// reach the original.
-	built := Build(Input{HTML: `<ul><li>a <span style="background:red;position:relative">b</span></li></ul>`})
+	built := Build(Input{HTML: `<ul><li>a <span style="background:red;position:relative">b</span>
+		<a href="x">c</a></li></ul>`})
 	w, _ := style.FromPx(300)
 	orig := Layout(built.Root, Size{W: w, H: w}, nil, nil)
 	c := fragmentCloner{seen: map[*Fragment]*Fragment{}}
@@ -367,6 +368,9 @@ func TestFragmentClonerCopiesEveryField(t *testing.T) {
 				f.Lines[i].Runs[j].X += 7
 			}
 			for _, b := range f.Lines[i].Boxes {
+				mutate(b)
+			}
+			for _, b := range f.Lines[i].links {
 				mutate(b)
 			}
 		}
@@ -383,6 +387,32 @@ func TestFragmentClonerCopiesEveryField(t *testing.T) {
 	again := c
 	again.seen = map[*Fragment]*Fragment{}
 	before := again.clone(orig)
+	// And every inline fragment of the copy is its own: a copy that shared one
+	// with the original would share it with before as well, and the comparison
+	// below could not see the write.
+	origs := map[*Fragment]bool{}
+	var mine func(f *Fragment, into map[*Fragment]bool)
+	mine = func(f *Fragment, into map[*Fragment]bool) {
+		for _, line := range f.Lines {
+			for _, b := range append(append([]*Fragment(nil), line.Boxes...), line.links...) {
+				into[b] = true
+			}
+		}
+		for _, k := range f.Children {
+			mine(k, into)
+		}
+	}
+	mine(orig, origs)
+	copies := map[*Fragment]bool{}
+	mine(cp, copies)
+	if len(origs) < 2 {
+		t.Fatalf("the document has %d inline fragments, so this checks nothing", len(origs))
+	}
+	for f := range copies {
+		if origs[f] {
+			t.Errorf("the copy shares the inline fragment of %v with the original", f.Box.Element)
+		}
+	}
 	mutate(cp)
 	if diff := fragmentDiff("original", orig, before); diff != "" {
 		t.Fatalf("writing into a copy changed the original: %s", diff)

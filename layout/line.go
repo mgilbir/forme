@@ -46,6 +46,17 @@ type LineFragment struct {
 	// border, and a rectangle for each of them on each line would be work in
 	// proportion to the document that nothing would ever read.
 	Boxes []*Fragment
+	// links are the fragments of the inline <a> elements on this line that
+	// are links, one per <a> per line, in tree order — the area each covers,
+	// for the display list's Link. See link.go.
+	//
+	// They are made by the same slicing as Boxes and kept apart from them,
+	// because a link draws nothing: a Boxes entry is ink, and everything that
+	// reads Boxes — the page's natural size, the backgrounds, the inline
+	// stacking levels — is asking about ink. An <a> that also has a background
+	// has a fragment in each, and the two are separate copies so that
+	// absolutise, which moves both lists, moves each once.
+	links []*Fragment
 	// Sideways says this line runs down the page rather than across it: its
 	// Baseline is measured leftwards from the line box's right edge, and each
 	// run's X is a distance downwards from its top.

@@ -346,6 +346,7 @@ func (n *pending) materialise() *Fragment {
 			continue
 		}
 		line.Rect.Y = line.Rect.Y.Sub(n.shift)
+		line.links = movedLinks(line.links, 0, -n.shift)
 		f.Lines = append(f.Lines, line)
 	}
 	kids := make([]cutKid, 0, n.kidsLeft+len(n.cut))
@@ -412,6 +413,7 @@ func (n *pending) split(y style.Unit) (top *Fragment, below, ok bool) {
 	for _, i := range took {
 		line := n.src.Lines[i]
 		line.Rect.Y = line.Rect.Y.Sub(n.shift)
+		line.links = movedLinks(line.links, 0, -n.shift)
 		above.Lines = append(above.Lines, line)
 	}
 
@@ -773,6 +775,7 @@ func fillColumnsWith(f *Fragment, c columns, height style.Unit, ends *columnEnds
 		dx := c.width.Add(c.gap).Mul(float64(i))
 		for _, line := range band.Lines {
 			line.Rect.X = line.Rect.X.Add(dx)
+			line.links = movedLinks(line.links, dx, 0)
 			f.Lines = append(f.Lines, line)
 		}
 		for _, child := range band.Children {

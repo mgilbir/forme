@@ -2491,6 +2491,10 @@ func (l *layouter) alignCell(p placedCell, height, rowBaseline style.Unit) {
 	}
 	for i := range p.frag.Lines {
 		p.frag.Lines[i].Rect.Y = p.frag.Lines[i].Rect.Y.Add(delta)
+		// A link's areas are in the cell's content coordinates, as the lines
+		// are, and not relative to the line they are on: moving the line
+		// does not move them. See movedLinks.
+		p.frag.Lines[i].links = movedLinks(p.frag.Lines[i].links, 0, delta)
 	}
 	l.absScans += p.absTo - p.absFrom
 	for i := p.absFrom; i < p.absTo && i < len(l.deferred); i++ {
