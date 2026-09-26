@@ -79,6 +79,13 @@ type Fragment struct {
 	// See gridSharedBaseline.
 	gridBaseline    style.Unit
 	hasGridBaseline bool
+	// tableBaseline is a table's first baseline, which is its first row's, and
+	// tableRowTop is the top of that row, both measured down the table's content
+	// box; hasTableBaseline says the table has a row to take them from. They are
+	// recorded by the table layout because only it knows where its rows are and
+	// which of its cells took part in their alignment. See firstRowBaseline.
+	tableBaseline, tableRowTop style.Unit
+	hasTableBaseline           bool
 	// column is which column of its parent's pour this fragment was put in,
 	// counted from one, and nought where its parent was not poured — a box
 	// whose parent is not a multicol container, or is one that laid its

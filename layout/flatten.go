@@ -116,8 +116,11 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 			//
 			// The wrapper is what arrives here — §17.4 puts one around every
 			// table, and for an inline-table it is the atomic inline — so the
-			// search starts outside the table and finds the first line box in
-			// it, which is in the first cell of the first row.
+			// search starts outside the table, passes over its captions, and
+			// takes the first row's baseline the table layout recorded: a line
+			// box when the row's cells have one, and the bottom content edge of
+			// its lowest cell when they are empty. See firstRowBaseline. Only a
+			// table with no row at all is left on its bottom margin edge.
 			baseline, ok = firstBaseline(frag)
 		case b.Inner == InnerFlex || b.Inner == InnerGrid:
 			// The same sentence for the other two containers that are not

@@ -1690,6 +1690,7 @@ func (l *layouter) tableContent(table *Box, parent *Fragment, width style.Unit,
 	origin flow) style.Unit {
 
 	g := l.tableGridFor(table)
+	parent.hasTableBaseline = false
 	if len(g.rows) == 0 {
 		return 0
 	}
@@ -1785,6 +1786,8 @@ func (l *layouter) tableContent(table *Box, parent *Fragment, width style.Unit,
 	}
 	gridHeight := y.Sub(s.v).Sub(s.v)
 	gridWidth := maxZero(width.Sub(s.h).Sub(s.h))
+	parent.tableBaseline, parent.tableRowTop, parent.hasTableBaseline =
+		firstRowBaseline(g, placed, rowY, rowH, rowBaseline, s)
 
 	bands := l.newTableBands(table, g, cols, colX, rowY, rowH, s.collapsed == nil)
 	l.paintableColumns(parent, g, bands, cols, colX, s.v, gridHeight)
@@ -1924,6 +1927,82 @@ func firstBaseline(f *Fragment) (style.Unit, bool) {
 		return f.Marker.At.Y, true
 	}
 	return 0, false
+}
+
+// firstRowBaseline is a table's first baseline, and the top of the row it is on,
+// as distances down the table's content box: ok is false when the table has no
+// row to take one from.
+//
+// css-tables-3 §3 says "the baseline of a table-root is the baseline of its first
+// row", and CSS Box Alignment 3 §9.1 says what a row's is, as the first of:
+//
+//  1. the shared baseline of the cells in it that take part in baseline
+//     alignment, which is the row baseline §17.5.3 aligned them on;
+//  2. the same for cells aligned on their last baseline, which nothing in this
+//     engine does;
+//  3. "if the row is not empty, synthesize from the lowest and highest content
+//     edges of all the cells in the row" — for an alphabetic baseline, the
+//     lowest content edge, which is also §17.5.3's "bottom content edge of the
+//     lowest cell in the row";
+//  4. otherwise the row's own block-start content edge.
+//
+// The baseline used to be found by walking the table's fragments for the first
+// line box in any of them, which is a block container's rule and not a
+// table's, and it went wrong both ways the rules above can differ from it. A
+// first row of empty cells has no line box, so the walk either went on into the
+// second row and put the table's baseline there, or found nothing at all and
+// left an inline-table on its bottom margin edge — margin-collapse-134-ref is
+// three inline-tables of empty 1em cells, and the second one sat a strut's
+// descent lower than every browser puts it.
+//
+// A cell that spans rows counts for the row its span starts in, which is §9.1's
+// rule, and a cell or a row §17.5.5 collapsed away is not there to count: the
+// first row is the first one that is rendered.
+func firstRowBaseline(g *tableGrid, placed []placedCell, rowY, rowH, rowBaseline []style.Unit,
+	s tableSpacing) (baseline, top style.Unit, ok bool) {
+
+	first := -1
+	for r, info := range g.rows {
+		if !isCollapsedTrack(info.box) {
+			first = r
+			break
+		}
+	}
+	if first < 0 || first >= len(rowY) {
+		return 0, 0, false
+	}
+	top = rowY[first]
+
+	aligned, cells := false, false
+	var lowest style.Unit
+	for _, p := range placed {
+		c := p.cell
+		if c.row != first || whollyCollapsed(g, c) {
+			continue
+		}
+		if p.alignsOnBaseline() {
+			aligned = true
+		}
+		// The cell's height is the rows it spans, as assembleRows gives it, and
+		// its content edge is that less its own bottom border and padding.
+		var height style.Unit
+		for k := c.row; k < c.row+c.rowSpan && k < len(rowH); k++ {
+			height = height.Add(rowH[k])
+		}
+		height = height.Add(s.v.Mul(float64(c.rowSpan - 1)))
+		bottom := height.Sub(p.frag.Border.Bottom).Sub(p.frag.Padding.Bottom)
+		if !cells || bottom > lowest {
+			lowest = bottom
+		}
+		cells = true
+	}
+	switch {
+	case aligned:
+		return top.Add(rowBaseline[first]), top, true
+	case cells:
+		return top.Add(lowest), top, true
+	}
+	return top, top, true
 }
 
 // rowHeights is §17.5.3.
