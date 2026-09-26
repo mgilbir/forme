@@ -475,3 +475,144 @@ func TestALinkDrawsNothing(t *testing.T) {
 			link.NaturalSize, link.Scale, span.NaturalSize, span.Scale)
 	}
 }
+
+// TestADisplayContentsLinkIsTheAreasOfWhatItHolds: an <a> with "display:
+// contents" generates no box of its own, and its children's boxes stand in its
+// place (css-display-3 §2.5). A click on any of them is a click on the link,
+// which is how a browser hit-tests one, so the link's areas are theirs: its
+// text's content area on each line it is on, the border box of an inline box,
+// an inline-block or a block it holds, and its ::before's text.
+func TestADisplayContentsLinkIsTheAreasOfWhatItHolds(t *testing.T) {
+	adv, asc, h := mustPx(inkAdvance), mustPx(inkAscent), mustPx(inkHeight)
+	textArea := func(at Point, chars int) Rect {
+		return Rect{X: at.X, Y: at.Y.Sub(asc), W: adv.Mul(float64(chars)), H: h}
+	}
+	has := func(l Link, r Rect) bool {
+		for _, got := range l.Rects {
+			if got == r {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Text alone, on one line, and nothing either side of it in the link.
+	ops := paintOf(t, `<p>x<a href="c" style="display: contents">ab</a>y</p>`, courierInk)
+	l, _ := oneLink(t, ops)
+	_, ab := drawnAt(t, ops, "ab")
+	if want := textArea(ab, 2); l.Href != "c" || len(l.Rects) != 1 || l.Rects[0] != want {
+		t.Errorf("the link is %+v, want one area over its text, %v", l, want)
+	}
+
+	// Broken across three lines, an area on each.
+	root := layoutOf(t, 400, `<p id="p"><a href="w" style="display: contents">ab ab ab</a></p>`,
+		courierInk)
+	l, _ = oneLink(t, Paint(root))
+	base := baselineOfFirstRun(t, root, "p")
+	if len(l.Rects) != 3 {
+		t.Fatalf("the link has %d areas over three lines: %v", len(l.Rects), l.Rects)
+	}
+	for i, r := range l.Rects {
+		want := Rect{Y: base.Sub(asc).Add(mustPx(400 * float64(i))), W: 2 * adv, H: h}
+		if r != want {
+			t.Errorf("area %d is %v, want %v — the word on line %d", i, r, want, i+1)
+		}
+	}
+
+	// What it holds, each as the box it is.
+	root = layoutOf(t, 4000, `<style>a::before { content: "gh" }</style>`+
+		`<div id="p">x<a href="h" style="display: contents"><span id="s">cd`+
+		`<span id="in" style="display: inline-block; width: 20px; height: 20px"></span></span>`+
+		`<span id="ib" style="display: inline-block; width: 50px; height: 90px"></span>`+
+		`ef<div id="d">z</div></a></div>`, courierInk+`#s { border: 5px solid }`)
+	ops = Paint(root)
+	l, _ = oneLink(t, ops)
+	_, gh := drawnAt(t, ops, "gh")
+	_, ef := drawnAt(t, ops, "ef")
+	_, cd := drawnAt(t, ops, "cd")
+	five := mustPx(5)
+	for what, r := range map[string]Rect{
+		"its ::before": textArea(gh, 2),
+		"its text":     textArea(ef, 2),
+		// The span's border box: its content area with the border round it.
+		"an inline box it holds": {X: cd.X.Sub(five), Y: cd.Y.Sub(asc).Sub(five),
+			W: (2 * adv).Add(mustPx(20)).Add(2 * five), H: h.Add(2 * five)},
+		"an inline-block it holds": find(t, root, "ib").BorderRect,
+		// Inside an inline box it holds, which is the link's as much as
+		// the text beside it is.
+		"an inline-block in an inline box it holds": find(t, root, "in").BorderRect,
+		"a block it holds":                          find(t, root, "d").BorderRect,
+	} {
+		if !has(l, r) {
+			t.Errorf("%s, at %v, is not one of the link's areas %v", what, r, l.Rects)
+		}
+	}
+	// And nothing else: the "x" before it is not in it, and the block's own
+	// text is inside the block's area rather than an area of its own.
+	if len(l.Rects) != 6 {
+		t.Errorf("the link has %d areas, want 6 — ::before, the span, the two "+
+			"inline-blocks, the text and the block: %v", len(l.Rects), l.Rects)
+	}
+}
+
+// TestADisplayContentsLinkSurvivesASplit: an inline box it holds that a block
+// inside splits in two (§9.2.1.1) is two boxes, and both are its.
+func TestADisplayContentsLinkSurvivesASplit(t *testing.T) {
+	ops := paintOf(t, `<div><a href="c" style="display: contents"><span>ab<div>z</div>cd</span></a></div>`,
+		courierInk+`span { border: 5px solid }`)
+	l, _ := oneLink(t, ops)
+	for _, text := range []string{"ab", "cd"} {
+		_, at := drawnAt(t, ops, text)
+		inside := false
+		for _, r := range l.Rects {
+			if r.X <= at.X && at.X < r.Right() && r.Y < at.Y && at.Y < r.Bottom() {
+				inside = true
+			}
+		}
+		if !inside {
+			t.Errorf("%q, drawn at %v, is in none of the link's areas %v", text, at, l.Rects)
+		}
+	}
+}
+
+// TestADisplayContentsLinkDrawsNothingOfItsOwn: the element has no box, so a
+// background it declares is not painted — the text box standing for its text
+// carries its style, and must not be read as though it were the box — and the
+// area moves with its text when the box around it is moved.
+func TestADisplayContentsLinkDrawsNothingOfItsOwn(t *testing.T) {
+	ops := paintOf(t, `<p>x<span style="position: relative; left: 10px; top: 5px">`+
+		`<a href="c" style="display: contents; background: rgb(0, 0, 255); padding: 30px; `+
+		`border: 5px solid rgb(0, 0, 255)">ab</a></span></p>`, courierInk)
+	if got := inkOf(ops, blue); len(got) != 0 {
+		t.Errorf("a display: contents link painted its own background or border: %v", got)
+	}
+	l, _ := oneLink(t, ops)
+	_, ab := drawnAt(t, ops, "ab")
+	want := Rect{X: ab.X, Y: ab.Y.Sub(mustPx(inkAscent)), W: mustPx(2 * inkAdvance),
+		H: mustPx(inkHeight)}
+	if len(l.Rects) != 1 || l.Rects[0] != want {
+		t.Errorf("the link's areas are %v, want its text's content area %v", l.Rects, want)
+	}
+
+	// And with it when the box around it is raised.
+	ops = paintOf(t, `<p>x<span style="vertical-align: 40px">`+
+		`<a href="c" style="display: contents">ab</a></span></p>`, courierInk)
+	l, _ = oneLink(t, ops)
+	_, ab = drawnAt(t, ops, "ab")
+	want = Rect{X: ab.X, Y: ab.Y.Sub(mustPx(inkAscent)), W: mustPx(2 * inkAdvance),
+		H: mustPx(inkHeight)}
+	if len(l.Rects) != 1 || l.Rects[0] != want {
+		t.Errorf("raised: the link's areas are %v, want its text's content area %v", l.Rects, want)
+	}
+}
+
+// TestADisplayContentsLinkIsRefusedAsAnyOther: its href is held to the same
+// list, and a refusal is reported.
+func TestADisplayContentsLinkIsRefusedAsAnyOther(t *testing.T) {
+	out := Compose(Input{HTML: `<p><a href="javascript:x()" style="display: contents">ab</a></p>`},
+		Options{})
+	if got, _ := linksIn(out.Ops); len(got) != 0 {
+		t.Errorf("a refused link is in the list: %+v", got)
+	}
+	requireFinding(t, out.Findings, RuleLinkRefused, `"javascript:x()"`)
+}

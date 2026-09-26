@@ -394,6 +394,32 @@ type Box struct {
 	// the <a> into carries the same pointer, which is how the painter knows the
 	// pieces are one link. See link.go.
 	link *hyperlink
+	// contentsLink is the link of the innermost "display: contents" <a> this
+	// box was generated for the content of, where the box is one of the boxes
+	// that element stands for in its parent — its children's, and its
+	// ::before and ::after — and nil for every other box.
+	//
+	// css-display-3 §2.5: the element generates no box, and its children's
+	// boxes stand in the tree in its place. It is still a link, and a browser
+	// sends a click on any of those boxes to it — the click lands on the
+	// child and its activation is the <a>'s — so the link's areas are theirs.
+	// The field is separate from link because link says "this box is the
+	// <a>", and a child that is an <a> of its own is both: its own link is the
+	// innermost, and wins, as a nested link does. See areaLink.
+	//
+	// A text box is among them. It has no fragment of its own, so the inline
+	// walk makes it one for the link and for nothing else; see
+	// inlineDecor.textLinkArea.
+	contentsLink *hyperlink
+}
+
+// areaLink is the link a fragment of this box is an area of in its own right:
+// the <a> it is, or the "display: contents" <a> it stands in for.
+func (b *Box) areaLink() *hyperlink {
+	if b.link != nil {
+		return b.link
+	}
+	return b.contentsLink
 }
 
 // outOfFlow reports whether a box takes no space among its siblings, which is
@@ -458,8 +484,14 @@ var maxBoxDepth = 1024
 // document produces no boxes at all, which is what "html { display: none }"
 // means and is not an error.
 func BuildBoxes(doc *html.Node, styled style.Styled, rec *Recorder) *Box {
+	return buildBoxes(doc, styled, documentBaseOf(doc), rec)
+}
+
+// buildBoxes is BuildBoxes with the document's base URL already found, which
+// the pipeline has done for its stylesheets. A link is relative to it.
+func buildBoxes(doc *html.Node, styled style.Styled, base documentBase, rec *Recorder) *Box {
 	b := &boxBuilder{
-		styles: styled.Styles, pseudo: styled.Pseudo, rec: rec,
+		styles: styled.Styles, pseudo: styled.Pseudo, rec: rec, base: base,
 		ownFontSize: styled.OwnFontSize, ownPseudoFontSize: styled.OwnPseudoFontSize,
 		// Counters are settled before any box exists, because a counter's value
 		// depends on what came *before* an element in the document and the box
@@ -533,6 +565,9 @@ type boxBuilder struct {
 
 	styles map[*html.Node]style.ComputedStyle
 	pseudo map[style.PseudoKey]style.ComputedStyle
+	// base is the document's base URL, which an <a href> is relative to. See
+	// base.go.
+	base documentBase
 	// ownFontSize and ownPseudoFontSize say which elements declared a font-size
 	// of their own. See fontSizeOf.
 	ownFontSize map[*html.Node]bool
@@ -982,9 +1017,21 @@ func (b *boxBuilder) appendContents(box *Box, n *html.Node, parentFontSize style
 	}
 	cs := b.styles[n]
 	fontSize := b.fontSizeOf(n, parentFontSize)
+	from := len(box.Children)
 	b.addGenerated(box, n, "before", fontSize)
 	b.appendChildren(box, n, cs, fontSize)
 	b.addGenerated(box, n, "after", fontSize)
+	// A link with no box of its own, whose areas are those of the boxes it
+	// stands for. A box a "display: contents" element nested inside this one
+	// stood for is already that element's, which is the inner of the two.
+	// See Box.contentsLink.
+	if link := b.hyperlinkOf(n); link != nil {
+		for _, c := range box.Children[from:] {
+			if c.contentsLink == nil {
+				c.contentsLink = link
+			}
+		}
+	}
 }
 
 // replacedByItsContents reports whether an element is one that "display:
@@ -1959,7 +2006,7 @@ func clonePiece(b *Box) *Box {
 		ListItem: b.ListItem, Replaced: b.Replaced,
 		Float: b.Float, Clear: b.Clear,
 		Position: b.Position, ZIndex: b.ZIndex, ZAuto: b.ZAuto,
-		Order: b.Order, link: b.link,
+		Order: b.Order, link: b.link, contentsLink: b.contentsLink,
 	}
 }
 

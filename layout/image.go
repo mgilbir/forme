@@ -191,6 +191,10 @@ type replacedLoader struct {
 
 	res ResourceResolver
 	rec *Recorder
+	// base is the document's base URL, which a reference in an attribute is
+	// relative to. A reference in a url() arrives resolved already, by the
+	// sheet it was written in, and is not resolved again. See base.go.
+	base documentBase
 
 	// loaded memoizes by reference, so a document that repeats one src reads,
 	// decodes and charges the budget once.
@@ -258,12 +262,12 @@ type decoded struct {
 // element is replaced changes nothing about the shape of the tree: an <img> is
 // a box either way, and only its sizing differs. Doing it as a pass keeps the
 // box builder from having to carry a resolver through every recursion.
-func resolveReplaced(root *Box, res ResourceResolver, rec *Recorder) {
+func resolveReplaced(root *Box, res ResourceResolver, base documentBase, rec *Recorder) {
 	if root == nil {
 		return
 	}
 	l := &replacedLoader{
-		res: res, rec: rec,
+		res: res, rec: rec, base: base,
 		loaded:    map[refKey]*ReplacedContent{},
 		failed:    map[refKey]bool{},
 		byContent: map[contentKey]decoded{},
@@ -387,7 +391,7 @@ func (l *replacedLoader) image(b *Box) {
 
 	// A reference that failed before comes back with no finding, and the
 	// element still gets its alt text.
-	content, why := l.memoized(src, "image", svgAsImage)
+	content, why := l.attribute(src, "image", svgAsImage)
 	if content == nil {
 		l.notReplaced(b, why)
 		return
@@ -424,7 +428,7 @@ func (l *replacedLoader) object(b *Box) {
 	if !ok || data == "" {
 		return
 	}
-	content, why := l.memoized(data, "object", svgAsDocument)
+	content, why := l.attribute(data, "object", svgAsDocument)
 	if content == nil {
 		l.fallbackTo(b, why, data)
 		return
@@ -586,7 +590,7 @@ func (l *replacedLoader) video(b *Box) {
 	// needed no trick to cost a decode again (audit C19). A poster that failed
 	// is reported for the first element that names it, as a background is.
 	if poster, ok := b.Element.Attr("poster"); ok && ascii.TrimSpace(poster) != "" {
-		content, why := l.memoized(ascii.TrimSpace(poster), "video poster", svgAsImage)
+		content, why := l.attribute(ascii.TrimSpace(poster), "video poster", svgAsImage)
 		switch {
 		case content != nil:
 			b.Replaced = content
@@ -839,6 +843,18 @@ func (l *replacedLoader) memoized(ref, what string, as svgAs) (*ReplacedContent,
 	}
 	l.loaded[key] = content
 	return content, nil
+}
+
+// attribute is memoized for a reference written in an attribute, which is
+// relative to the document's base URL and is made relative to the document
+// first. The memo is keyed by what it came to, so "a.png" under
+// <base href="img/"> and "img/a.png" beside it are one read.
+func (l *replacedLoader) attribute(ref, what string, as svgAs) (*ReplacedContent, *loadFailure) {
+	resolved, fail := l.base.resolve(ref, what, l.rec)
+	if fail != nil {
+		return nil, fail
+	}
+	return l.memoized(resolved, what, as)
 }
 
 // cutShort is the finding for a picture the work budget refused. The budget has

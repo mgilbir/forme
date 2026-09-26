@@ -112,6 +112,11 @@ type authorSheet struct {
 	// empty for a <style> element, matching the Source.Sheet convention in
 	// finding.go.
 	name string
+	// base is what the sheet's references are relative to: the reference it
+	// was read by, made relative to the document, for a sheet that was read;
+	// the document's base URL for a <style> element (see base.go); and the
+	// name a caller gave its own. It is not name, which a long URL shortens.
+	base string
 	// source is the CSS.
 	source string
 }
@@ -144,7 +149,7 @@ func documentStylesheets(doc *html.Node, l *sheetLoader) []authorSheet {
 			// every one of them applied to the paper.
 			if text := n.TextContent(); text != "" && l.mediaApplies(n, "this <style> element") &&
 				l.admit(text, "this <style> element", AtHTML(n.Offset), PathOf(n)) {
-				out = append(out, l.expandImports(authorSheet{source: text})...)
+				out = append(out, l.expandImports(authorSheet{base: l.base.href, source: text})...)
 			}
 			// A <style> element's content is raw text, so there is nothing
 			// below it to walk.
@@ -164,6 +169,9 @@ func documentStylesheets(doc *html.Node, l *sheetLoader) []authorSheet {
 type sheetLoader struct {
 	res ResourceResolver
 	rec *Recorder
+	// base is the document's base URL, which a <link>'s href and a <style>
+	// element's references are relative to. See base.go.
+	base documentBase
 
 	// media is the sheet a query is asked about: the page this document is
 	// being printed on, before its own @page rules have narrowed it.
@@ -253,6 +261,20 @@ func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 	if !l.mediaApplies(n, "the stylesheet at "+quoteValue(href)) {
 		return authorSheet{}, false
 	}
+	// Relative to the document's base URL, and from here on the reference is
+	// the resolved one: it is what is read, what the cache and the refusals
+	// are keyed by — so a <link> and an @import naming one file share both —
+	// and what the sheet's own references are relative to.
+	href, unresolved := l.base.resolve(href, "stylesheet", l.rec)
+	if unresolved != nil {
+		l.rec.ReportDetail(Finding{
+			Rule:    unresolved.rule,
+			Source:  AtHTML(n.Offset),
+			Message: unresolved.message,
+			Path:    PathOf(n),
+		})
+		return authorSheet{}, false
+	}
 
 	if l.failed[href] {
 		// Already refused, and already reported. Retrying would be the same
@@ -271,7 +293,7 @@ func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 			return authorSheet{}, false
 		}
 		l.applied++
-		return authorSheet{name: sheetName(href), source: src}, true
+		return authorSheet{name: sheetName(href), base: href, source: src}, true
 	}
 
 	src, fail := l.fetch(href)
@@ -294,7 +316,7 @@ func (l *sheetLoader) link(n *html.Node) (authorSheet, bool) {
 		return authorSheet{}, false
 	}
 	l.applied++
-	return authorSheet{name: sheetName(href), source: src}, true
+	return authorSheet{name: sheetName(href), base: href, source: src}, true
 }
 
 // admit decides whether a stylesheet that was not fetched — a <style> element,
@@ -623,7 +645,7 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 		for _, p := range pending {
 			b.WriteString(s.source[p.from:p.to])
 		}
-		out = append(out, authorSheet{name: s.name, source: b.String()})
+		out = append(out, authorSheet{name: s.name, base: s.base, source: b.String()})
 		// And out of the sheet, so the names are declared once. Re-declaring
 		// them would change no order, but a malformed one would be reported
 		// twice and at two different offsets.
@@ -680,9 +702,8 @@ func (l *sheetLoader) expandImports(s authorSheet) []authorSheet {
 			continue
 		}
 		at := Source{HTMLOffset: -1, CSSOffset: r.Offset, Sheet: s.name}
-		if src, ok := l.fetchImport(ref, s.name, at); ok {
-			resolved, _ := resolveAgainstSheet(ref, s.name)
-			next := authorSheet{name: sheetName(resolved), source: src}
+		if resolved, src, ok := l.fetchImport(ref, s, at); ok {
+			next := authorSheet{name: sheetName(resolved), base: resolved, source: src}
 			if why := l.cycle(next.name); why != "" {
 				l.rec.ReportDetail(Finding{
 					Rule:    RuleInvalidCSS,
@@ -808,40 +829,43 @@ func (l *sheetLoader) importMedia(media []css.ComponentValue, ref string, offset
 // reference is relative to: "@import \"../base.css\"" inside "css/page.css"
 // names "base.css", and resolving it against the document instead would name a
 // file beside the document that is not there. A <style> element has no name and
-// its imports are relative to the document, which is what an empty from means.
-// at is where the @import was written, which is where a finding about it
-// points.
-func (l *sheetLoader) fetchImport(ref, from string, at Source) (string, bool) {
-	ref, unresolved := resolveAgainstSheet(ref, from)
+// its imports are relative to the document's base URL, which is the document
+// itself unless a <base> names another. at is where the @import was written,
+// which is where a finding about it points.
+//
+// It returns the reference resolved as well as the sheet, because the resolved
+// reference is what the imported sheet's own references are relative to.
+func (l *sheetLoader) fetchImport(ref string, from authorSheet, at Source) (string, string, bool) {
+	ref, unresolved := l.resolveIn(from, ref)
 	if unresolved != "" {
 		l.rec.ReportDetail(Finding{
 			Rule:    RuleResourceBlocked,
 			Source:  at,
 			Message: "the @import of " + unresolved,
 		})
-		return "", false
+		return "", "", false
 	}
 	if l.failed[ref] {
 		// Already refused, and already reported. As with a <link> to the same
 		// missing file, the Recorder deduplicates the finding on its own and
 		// what this saves is the system calls — so removing it changes no
 		// output, which is why there is no test below that it fails.
-		return "", false
+		return "", "", false
 	}
 	if src, ok := l.cache[ref]; ok {
 		if l.applied >= maxDocumentStylesheets {
-			return "", false
+			return "", "", false
 		}
 		if why := l.charge(src); why != "" {
 			l.overTokens(ref, why, at, "")
-			return "", false
+			return "", "", false
 		}
 		l.applied++
-		return src, true
+		return ref, src, true
 	}
 	if l.applied >= maxDocumentStylesheets {
 		l.overCapImport(ref, at)
-		return "", false
+		return "", "", false
 	}
 	src, fail := l.fetch(ref)
 	if fail != nil {
@@ -851,7 +875,7 @@ func (l *sheetLoader) fetchImport(ref, from string, at Source) (string, bool) {
 			Source:  at,
 			Message: fail.message,
 		})
-		return "", false
+		return "", "", false
 	}
 	if l.cache == nil {
 		l.cache = map[string]string{}
@@ -859,10 +883,35 @@ func (l *sheetLoader) fetchImport(ref, from string, at Source) (string, bool) {
 	l.cache[ref] = src
 	if why := l.charge(src); why != "" {
 		l.overTokens(ref, why, at, "")
-		return "", false
+		return "", "", false
 	}
 	l.applied++
-	return src, true
+	return ref, src, true
+}
+
+// resolveIn is resolveAgainst for a reference written in a sheet: against the
+// sheet's base, named in a refusal as that sheet or as the document's base URL,
+// and charged to the work budget by its length where a base was joined onto
+// it. A sheet's references are as many as its tokens and each is as long as
+// its base, which is the document's to choose either way — a <link> href or a
+// <base> href a megabyte long.
+func (l *sheetLoader) resolveIn(s authorSheet, ref string) (string, string) {
+	of := "a stylesheet"
+	if s.name == "" {
+		of = baseOf
+	}
+	got, why := resolveAgainst(ref, s.base, of, l.affordRefs)
+	if got == "" && why == "" {
+		return "", quoteValue(ref) + " was not resolved against its sheet, because the " +
+			"document had used up the work this engine does for one document, so it " +
+			"was not loaded"
+	}
+	return got, why
+}
+
+// affordRefs charges a stylesheet reference's join. See resolveAgainst.
+func (l *sheetLoader) affordRefs(n int) bool {
+	return l.rec.charge(int64(n), "the stylesheet references past that point")
 }
 
 // cycle says why a sheet may not be expanded again, or the empty string.
@@ -909,8 +958,9 @@ func (l *sheetLoader) cycle(name string) string {
 //   - A reference that is only a fragment is not a file: CSS Values 4 §4.5.1
 //     makes "url(#x)" a reference into the document whatever sheet it is in.
 //   - The empty reference names nothing, in any sheet.
-//   - A sheet with no name — a <style> element — has the document as its base
-//     already.
+//   - An empty base is the document itself, which is every reference's base
+//     already: a <style> element's, where no <base> names another (see
+//     base.go), and that of a sheet a caller passed with no name.
 //
 // And what it cannot resolve at all: any other reference in a sheet that
 // arrived as a URL rather than as a path. See the note in the body; the second
@@ -931,6 +981,30 @@ func (l *sheetLoader) cycle(name string) string {
 // A reference that really does go above the sheet's own root keeps its "..":
 // path.Clean has nowhere to take it, and the resolver refuses it as before.
 func resolveAgainstSheet(ref, from string) (string, string) {
+	return resolveAgainst(ref, from, "a stylesheet", nil)
+}
+
+// resolveAgainst is resolveAgainstSheet against any base the engine knows as a
+// path: a stylesheet's name, or the document's base URL (see base.go). of names
+// the base in a refusal — "a stylesheet", "the document's base URL" — which is
+// the one thing the two differ in.
+//
+// A base naming a host with its scheme left out is refused as a base, as it is
+// refused as a reference. Joined like a path, "//cdn.test/a/" and "x.png" gave
+// "//cdn.test/a/x.png", which path.Clean then folded to "/cdn.test/a/x.png": a
+// reference to a host turned into a path on the document's own root, and
+// handed to the resolver as one. Every reference relative to such a base is on
+// that host, and this engine fetches from none.
+//
+// afford is asked for the length of a join before the join is made, where the
+// caller has a budget to keep; nil where it has none. A join is as long as the
+// base, which is the document's to choose, so it is paid for before it is
+// allocated rather than after: charged afterwards, every reference a spent
+// budget went on refusing still cost a copy of the base, and a sixteen-megabyte
+// base under a million references was that many copies refused one at a time.
+// A join afford refuses comes back empty with no reason — the budget has
+// reported itself — and names nothing, which is what an empty reference is.
+func resolveAgainst(ref, from, of string, afford func(n int) bool) (string, string) {
 	ref = referenceText(ref)
 	if from == "" || ref == "" || ref[0] == '#' {
 		return ref, ""
@@ -955,13 +1029,20 @@ func resolveAgainstSheet(ref, from string) (string, string) {
 		// step later: the reference would resolve to a URL with that scheme,
 		// which is refused.
 		if scheme == "data" {
-			return "", quoteValue(ref) + " is relative, and a data: stylesheet has no base " +
-				"to resolve it against — a data: URL's path is opaque, so the URL " +
-				"standard fails the reference — and nothing was loaded"
+			return "", quoteValue(ref) + " is relative, and " + of + " is a data: URL, " +
+				"which is no base to resolve it against — a data: URL's path is opaque, " +
+				"so the URL standard fails the reference — and nothing was loaded"
 		}
-		return "", quoteValue(ref) + " is relative to a stylesheet named by a " +
+		return "", quoteValue(ref) + " is relative to " + of + " named by a " +
 			quoteValue(scheme) + " URL, which would make it one; this engine resolves no " +
 			"URLs, so nothing was loaded"
+	}
+	if namesAHost(from) {
+		// Before the root-relative case below, because against a host "/x" is
+		// that host's root and not the document's.
+		return "", quoteValue(ref) + " is relative to " + of + ", which names a host " +
+			"with its scheme left out, so it would be a URL on that host; this engine " +
+			"resolves no URLs, so nothing was loaded"
 	}
 	if ref[0] == '/' || ref[0] == '\\' {
 		return ref, ""
@@ -974,16 +1055,24 @@ func resolveAgainstSheet(ref, from string) (string, string) {
 	if i := strings.IndexAny(ref, "?#"); i >= 0 {
 		rel, suffix = ref[:i], ref[i:]
 	}
+	if afford != nil && !afford(len(base)+len(ref)) {
+		return "", ""
+	}
 	if rel == "" {
 		// "?v=2" alone: RFC 3986 §5.2.2 keeps the base's path and takes the
 		// reference's query, so it is the sheet itself asked for again.
 		return base + suffix, ""
 	}
-	i := strings.LastIndexByte(base, '/')
+	// Either slash ends the base's directory, because the URL standard reads a
+	// backslash as a slash in every URL a document is served over: a base
+	// written `assets\` is the directory "assets/" to all of them, and is
+	// joined as that.
+	i := strings.LastIndexAny(base, `/\`)
 	if i < 0 {
 		return path.Clean(rel) + suffix, ""
 	}
-	return path.Clean(base[:i+1]+rel) + suffix, ""
+	dir := strings.ReplaceAll(base[:i+1], `\`, "/")
+	return path.Clean(dir+rel) + suffix, ""
 }
 
 // resolveSheetURLs resolves every url() in a parsed stylesheet against the
@@ -1005,43 +1094,58 @@ func resolveAgainstSheet(ref, from string) (string, string) {
 // already resolved and taken out, and the other — @namespace — is a name that
 // must not be resolved at all.
 //
-// The resolved text is charged to the work budget, because it is longer than
-// what was written by the sheet's own name and that is the document's to
-// choose: a <link> whose href is a megabyte of directory prefixes it to every
-// url() in the sheet behind it. A reference the budget refuses is emptied
+// The resolved text is charged to the work budget, before it is made (see
+// resolveAgainst), because it is longer than what was written by the sheet's
+// own name and that is the document's to choose: a <link> whose href is a
+// megabyte of directory prefixes it to every url() in the sheet behind it, and
+// a <base> href does the same to a <style> element's. A reference the budget
+// refuses is emptied
 // rather than left as written, because as written it is relative to the
 // document and names some other file; empty, it names nothing, and the budget
 // has said what was cut.
-func resolveSheetURLs(rules []css.Rule, sheet string, rec *Recorder) {
-	if sheet == "" {
+//
+// base is what the sheet's references are relative to, and name what the sheet
+// is called in a finding. They are the same string for a sheet that was read
+// from somewhere, and differ for a <style> element: it has no name, and its
+// base is the document's base URL (see base.go), which is empty — the document
+// itself — unless a <base> gave another.
+func resolveSheetURLs(rules []css.Rule, base, name string, rec *Recorder) {
+	if base == "" {
 		return
 	}
+	of := "a stylesheet"
+	if name == "" {
+		of = baseOf
+	}
+	at := func(offset int) Source { return Source{HTMLOffset: -1, CSSOffset: offset, Sheet: name} }
 	for i := range rules {
-		resolveURLsIn(rules[i].Block, sheet, rec)
+		resolveURLsIn(rules[i].Block, base, of, at, rec)
 	}
 }
 
-func resolveURLsIn(vals []css.ComponentValue, sheet string, rec *Recorder) {
+// resolveURLsIn resolves every url() in vals against base, which of names in a
+// refusal, and at places a finding about the one at a CSS offset.
+func resolveURLsIn(vals []css.ComponentValue, base, of string, at func(offset int) Source, rec *Recorder) {
+	afford := func(n int) bool {
+		return rec.charge(int64(n), "the stylesheet references past that point")
+	}
 	resolve := func(t *css.Token) {
-		got, why := resolveAgainstSheet(t.Value, sheet)
+		got, why := resolveAgainst(t.Value, base, of, afford)
 		if why != "" {
 			// Nothing to load, and said so where the reference was written.
 			// The url() is emptied, which names nothing, rather than left
 			// relative to the document, which names some other file.
 			rec.ReportDetail(Finding{
 				Rule:    RuleResourceBlocked,
-				Source:  Source{HTMLOffset: -1, CSSOffset: t.Offset, Sheet: sheet},
+				Source:  at(t.Offset),
 				Message: "the url() " + why,
 			})
 			t.Value = ""
 			return
 		}
-		if got == t.Value {
-			return
-		}
-		if !rec.charge(int64(len(got)), "the stylesheet references past that point") {
-			got = ""
-		}
+		// A join the budget refused is empty, which names nothing: as written
+		// it is relative to the document and names some other file. The
+		// budget has said what was cut.
 		t.Value = got
 	}
 	for i := range vals {
@@ -1069,7 +1173,7 @@ func resolveURLsIn(vals []css.ComponentValue, sheet string, rec *Recorder) {
 					}
 				}
 			}
-			resolveURLsIn(v.Values, sheet, rec)
+			resolveURLsIn(v.Values, base, of, at, rec)
 		}
 	}
 }
