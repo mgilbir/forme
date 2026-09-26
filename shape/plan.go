@@ -380,12 +380,37 @@ type userFeature struct {
 	on  bool
 }
 
-// requested is what a Features value and a caller's extra tags ask of a plan:
-// the features turned off first and the ones turned on after, so that a tag
-// both turns on and off comes out on. That is CSS Fonts 4's precedence — what
-// font-feature-settings asks for by tag overrides what the font-variant
-// properties and the spacing rule turned off — and it is the only one of the two
-// orders that lets an author who wrote "liga" 1 have the ligatures.
+// requested is what a Features value and a caller's extra tags ask of a plan,
+// in CSS Fonts 4 §7.2's order of precedence, lowest first — a plan's merge
+// lets the later of two requests for one tag decide whether it is on:
+//
+//  1. The features on by default, and the ones a script requires. Those are
+//     the model's, asked for before this list (see buildPlan).
+//  2. An @font-face rule's font-feature-settings descriptor. This engine does
+//     not read the descriptor — layout reports it where it is written — so
+//     there is nothing at this step.
+//  3. The font-variant properties and font-kerning: the ligatures and
+//     contextual alternates font-variant-ligatures turns off, the kerning
+//     font-kerning: none turns off, and what caps, numeric, east-asian and
+//     position turn on.
+//  4. The properties other than those two that turn features off: CSS Text
+//     §8.2's letter-spacing rule, which turns the optional ligatures off. It
+//     shares NoOptionalLigatures with step 3, and both only turn features
+//     off, so the order between the two decides nothing.
+//  5. font-feature-settings, the tags it turns off and the ones it turns on.
+//     No tag is in both, so the order between those two decides nothing.
+//
+// Then a caller's extra tags, named to ShapeGlyphsWith, which is not CSS and
+// asks for its tags outright.
+//
+// font-kerning: none was applied after all of these, so a document's
+// font-feature-settings: "kern" 1 beside it did nothing, and a "kern" 0 or
+// "liga" 0 was not applied at all: a tag turned off by name was dropped.
+//
+// What a model turns off comes after this list, and stays after it — see
+// buildPlan. That is HarfBuzz's order and not CSS's to change: an author's
+// "liga" does not turn it back on in a script whose model says a font's 'liga'
+// is not for it.
 func (f Features) requested(extra []string) []userFeature {
 	var out []userFeature
 	for _, tag := range [...]string{"liga", "clig", "dlig", "hlig", "calt"} {
@@ -393,7 +418,16 @@ func (f Features) requested(extra []string) []userFeature {
 			out = append(out, userFeature{tag, false})
 		}
 	}
+	if f.NoKerning {
+		out = append(out, userFeature{"kern", false})
+	}
 	for _, tag := range f.adds() {
+		out = append(out, userFeature{tag, true})
+	}
+	for _, tag := range f.tagsOff() {
+		out = append(out, userFeature{tag, false})
+	}
+	for _, tag := range f.tags() {
 		out = append(out, userFeature{tag, true})
 	}
 	for _, tag := range extra {
@@ -556,13 +590,9 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 			b.disable(u.tag)
 		}
 	}
-	// font-kerning: none is 'kern' turned off, as a document's
-	// font-feature-settings: "kern" 0 would turn it off. 'dist' is not
-	// kerning — it is where an Indic font states the spacing its conjuncts
-	// need — and stays on.
-	if key.features.NoKerning {
-		b.disable("kern")
-	}
+	// font-kerning: none is 'kern' turned off among the requests above, in
+	// §7.2's place for it. 'dist' is not kerning — it is where an Indic font
+	// states the spacing its conjuncts need — and stays on.
 
 	// What a model turns off after everything else has been asked for, which
 	// is why it comes last: an author's "liga" does not turn it back on in a
@@ -578,7 +608,7 @@ func buildPlan(l *layout, key planKey, extra []string) *plan {
 		// jamo, which some fonts assemble under it and should not. Where it
 		// has been turned off it stays off, as it does there — HarfBuzz's
 		// merge keeps the value the earlier request gave.
-		if !key.features.suppresses("calt") {
+		if !key.features.turnsOff("calt") {
 			b.add("calt", maskCaltNotJamo, 0)
 		}
 	}

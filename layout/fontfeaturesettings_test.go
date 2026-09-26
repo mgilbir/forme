@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -69,13 +70,12 @@ func TestFontFeatureSettingsAsksTheFaceForTheTag(t *testing.T) {
 // TestFontFeatureSettingsReportsWhatItCannotDo is the other half, and it is
 // what keeps the half above from being a claim that everything works.
 //
-// Two things in this property are still not carried out, and they are different
-// from each other. A tag turned *off* asks for a feature not to be applied, and
-// the features this engine applies without being asked have switches of their
-// own — font-variant-ligatures and font-kerning — so the tag is not the way to
-// reach them. And a tag turned on that the face has not got is carried out and
-// changes nothing, which is what reportCaps says about a face with no small
-// capitals.
+// One thing in this property is not carried out: a tag turned on that the face
+// has not got changes nothing, which is what reportCaps says about a face with
+// no small capitals. A tag turned *off* is carried out — CSS Fonts 4 §7.2 puts
+// this property above font-variant-ligatures and font-kerning — and so is not
+// reported, whether or not the face has the feature: turning off what is not
+// there asks for the page that is already there.
 func TestFontFeatureSettingsReportsWhatItCannotDo(t *testing.T) {
 	set := numericFontSet(t)
 	findings := func(decl string) []Finding {
@@ -103,20 +103,15 @@ func TestFontFeatureSettingsReportsWhatItCannotDo(t *testing.T) {
 			`face for a feature it has not got changes no glyph and the page ` +
 			`does not show that it was asked`)
 	}
-	// A tag turned off: not what this property can do.
+	// A tag turned off: applied, whether the face has it or not.
 	for _, decl := range []string{
 		`font-feature-settings: "liga" 0`,
 		`font-feature-settings: "liga" off`,
+		`font-feature-settings: "zzzz" 0`,
+		`font-kerning: none; font-feature-settings: "kern" 1`,
 	} {
-		got := findings(decl)
-		if len(got) == 0 {
-			t.Errorf("%s said nothing; a feature is turned off through "+
-				"font-variant-ligatures rather than by tag", decl)
-			continue
-		}
-		if !strings.Contains(got[0].Message, "turned off") {
-			t.Errorf("%s reported %q, which does not say what was not done",
-				decl, got[0].Message)
+		if got := findings(decl); len(got) != 0 {
+			t.Errorf("%s reported %q; it is applied", decl, got[0].Message)
 		}
 	}
 }
@@ -141,6 +136,23 @@ func TestFontFeatureSettingsSettlesTheOrderOfItsTags(t *testing.T) {
 	// And a tag named twice is one tag.
 	if once, _ := featureSettingsOf(`"onum", "onum"`); once != "onum" {
 		t.Errorf(`"onum" twice came out as %q, want "onum"`, once)
+	}
+	// And a tag given two settings takes the last, in either direction, so a
+	// tag is never both turned on and turned off.
+	for _, c := range []struct {
+		value, on string
+		off       []string
+	}{
+		{`"liga" 0, "liga" 1`, "liga", nil},
+		{`"liga" 1, "liga" 0`, "", []string{"liga"}},
+		{`"kern" 0, "onum", "kern" on, "liga" off`, "kern,onum", []string{"liga"}},
+		{`"liga" 0, "calt" 0, "liga" 0`, "", []string{"calt", "liga"}},
+	} {
+		on, off := featureSettingsOf(c.value)
+		if on != c.on || !slices.Equal(off, c.off) {
+			t.Errorf("%s came out as on %q, off %q; want on %q, off %q",
+				c.value, on, off, c.on, c.off)
+		}
 	}
 }
 

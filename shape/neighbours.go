@@ -60,7 +60,7 @@ func (f *Face) ContextCanChange(s string, off Features) bool {
 	var one [1]scriptRun
 	for _, p := range scriptRuns(s, scriptUnknown, scriptUnknown, one[:0]) {
 		l := f.layoutFor(p.script, lang)
-		if len(l.kern) > 0 && !off.NoKerning {
+		if len(l.kern) > 0 && !off.kerningOff() {
 			return true
 		}
 		if f.formsFollowIn(s[p.start:p.end], p.script, lang, off) {

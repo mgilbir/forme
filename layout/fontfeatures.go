@@ -76,8 +76,11 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 	out.EastAsian, _ = eastAsianOf(b.Style.Get("font-variant-east-asian"))
 	out.Position, _ = variantPositionOf(b.Style.Get("font-variant-position"))
 	// And the escape hatch: the face's own features by tag, for everything the
-	// descriptors above have no keyword for.
-	out.Tags, _ = featureSettingsOf(b.Style.Get("font-feature-settings"))
+	// descriptors above have no keyword for — on and off, and above all of
+	// them in CSS Fonts 4 §7.2's order. See shape.Features.requested.
+	var off []string
+	out.Tags, off = featureSettingsOf(b.Style.Get("font-feature-settings"))
+	out.TagsOff = strings.Join(off, ",")
 	// And the language the text is in, which chooses among the font's
 	// language systems: lang="sr" has a font draw its Serbian forms. It is the
 	// attribute as written — shape reads BCP 47 as HarfBuzz does — and it is
@@ -89,51 +92,55 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 	return out
 }
 
-// featureSettingsOf reads CSS Fonts 4 §6.11's font-feature-settings into the
+// featureSettingsOf reads CSS Fonts 4's font-feature-settings into the
 // tags it turns on, and the ones it turns off.
 //
-// The two are not symmetrical and that is the property rather than a choice
-// here. A tag turned *on* is a request this engine can carry out for any face:
-// the shaping layer takes a list of tags and runs their lookups, whatever they
-// are. A tag turned *off* is only meaningful for a feature something would
-// otherwise have applied, and the ones this engine applies by default have
-// switches of their own — font-variant-ligatures and font-kerning — reached
-// through the fields above rather than through a tag list. So the off list is
-// returned for reporting and not acted on.
+// Both are applied. A tag turned off is turned off above everything else that
+// asks for it, font-kerning and font-variant-ligatures included, which is
+// §7.2's order: "kern" off turns off kerning a face applies by default, and
+// "liga" off its ligatures. It was returned for reporting and not acted on, on
+// the ground that the features this engine applies by default have switches of
+// their own; §7.2 makes this property the one that wins over those switches.
 //
-// The tags come back sorted and deduplicated, as one comma-separated string.
-// The order a document writes them in is not the order they are applied in —
-// that is the font's, by lookup index — so two declarations naming the same
-// features are the same request, and settling the order lets them share the
-// memo entry the shaped group is kept under.
+// A tag the list names more than once takes the last setting it is given,
+// the later setting overriding the earlier, so the two lists never share one.
+// Both come back sorted and deduplicated, the on list as one comma-separated
+// string. The order a document writes them in is not the order they are
+// applied in — that is the font's, by lookup index — so two declarations
+// naming the same features are the same request, and settling the order lets
+// them share the memo entry the shaped group is kept under.
 func featureSettingsOf(raw string) (on string, off []string) {
 	value := ascii.TrimCSSSpace(raw)
 	if value == "" || ascii.EqualFold(value, "normal") {
 		return "", nil
 	}
-	var enabled []string
+	type setting struct {
+		tag string
+		on  bool
+	}
+	var all []setting
 	for _, part := range strings.Split(value, ",") {
-		tag, setting, ok := featureSetting(part)
+		tag, set, ok := featureSetting(part)
 		if !ok {
 			continue
 		}
-		if setting {
-			enabled = append(enabled, tag)
+		all = append(all, setting{tag, set})
+	}
+	// The last setting of each tag: a stable sort by tag keeps the written
+	// order among one tag's settings, so the last of each run is the one.
+	slices.SortStableFunc(all, func(a, b setting) int { return strings.Compare(a.tag, b.tag) })
+	var enabled []string
+	for i, s := range all {
+		if i+1 < len(all) && all[i+1].tag == s.tag {
 			continue
 		}
-		off = append(off, tag)
-	}
-	if len(enabled) == 0 {
-		return "", off
-	}
-	slices.Sort(enabled)
-	out := enabled[:0]
-	for i, tag := range enabled {
-		if i == 0 || tag != enabled[i-1] {
-			out = append(out, tag)
+		if s.on {
+			enabled = append(enabled, s.tag)
+			continue
 		}
+		off = append(off, s.tag)
 	}
-	return strings.Join(out, ","), off
+	return strings.Join(enabled, ","), off
 }
 
 // featureSetting reads one "<tag> [<setting>]" of the list.
