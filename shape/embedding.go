@@ -196,6 +196,32 @@ func (f *Face) GlyphCode(gid int) int { return f.codeForGID(gid) }
 // how a format has to carry the program and what it may say about it.
 func (f *Face) IsCFF() bool { return f.cff }
 
+// IsCIDKeyed reports whether the outlines are a CID-keyed CFF: whether the
+// codes Encode writes, and GlyphCode returns, are CIDs rather than glyph
+// indices.
+//
+// It answers the one question CharacterCollection's ok deliberately does not.
+// ok is false for a face with no CFF, for a CFF that is not CID-keyed, and for
+// a CID-keyed CFF whose ROS is unusable, and a caller that only has to write a
+// /CIDSystemInfo needs no more than that. A caller deciding how to embed the
+// face does: a face that is not CID-keyed is embedded addressed by its glyph
+// indices, while a CID-keyed one whose collection cannot be stated has to be
+// refused, because its codes are CIDs in a numbering nothing can name. So:
+//
+//   - IsCIDKeyed false: the codes are glyph indices, and CharacterCollection's
+//     ok is false because there is no collection at all.
+//   - IsCIDKeyed true and ok true: the codes are CIDs in the collection it
+//     names.
+//   - IsCIDKeyed true and ok false: the codes are CIDs and the font has not
+//     said which collection they are numbered in.
+//
+// It reads the same field codeForGID and CharacterCollection do, from the
+// parse Load already did, so it cannot disagree with the codes Encode writes:
+// true here is exactly the case in which those codes are CIDs. Re-reading the
+// program to find out would be a second parse that could reach a second
+// answer. A face from LoadSimple or Standard is never CID-keyed.
+func (f *Face) IsCIDKeyed() bool { return f.gidToCID != nil }
+
 // CharacterCollection is the collection this face's CIDs are numbered in — the
 // CFF's ROS — and whether it has one to state.
 //
@@ -219,7 +245,10 @@ func (f *Face) IsCFF() bool { return f.cff }
 // ok is false for all three. A caller that has to write a /CIDSystemInfo and
 // gets false should refuse to embed the face rather than reach for a default:
 // Adobe-Identity-0 is not a safe fallback, it is a specific claim, and it is
-// wrong for exactly the fonts this distinguishes.
+// wrong for exactly the fonts this distinguishes. A caller that has to tell the
+// second case from the third — to embed a face that is not CID-keyed by its
+// glyph indices, and refuse one that is and cannot name its collection — asks
+// IsCIDKeyed, which reads the same field.
 //
 // The values come from the parse Load already did, so this costs nothing and
 // cannot disagree with the CIDs Encode writes. It describes the program the
