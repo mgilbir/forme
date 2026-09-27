@@ -134,6 +134,8 @@ type Fragment struct {
 	// area of the bottom layer and so is the border box by default rather than
 	// the padding box. An empty rectangle means no colour is painted.
 	bgColorRect Rect
+	// bgColorRadii is the curve of that rectangle's box. See radius.go.
+	bgColorRadii Radii
 	// bgBands are the rectangles this box's background is painted in, instead of
 	// over its whole box. An empty slice means the ordinary single rectangle.
 	//
@@ -181,6 +183,20 @@ type Fragment struct {
 	// box, because a box that is not drawn is far harder to notice than one
 	// that is drawn too large.
 	clipSelf, clipContent Clip
+	// roundSelf and roundContent are the rounded rectangles that clip the same
+	// two things, when some box's border-radius curves a clip: the curve of an
+	// "overflow" box's padding edge, clipping what is inside it. The rectangle
+	// each one is inside is already in clipSelf or clipContent, so these add
+	// only the corners. nil is no curve. See radius.go.
+	roundSelf, roundContent *roundClip
+
+	// radii is the box's used border-radius, CSS Backgrounds 3 §4, and zero
+	// for a box with square corners. See radius.go.
+	radii Radii
+	// slicedLeft and slicedRight mark a piece of an inline box that does not
+	// begin or does not end the box on that side — §8.6's slice model, which
+	// gives such a side no border, no padding and no rounded corners.
+	slicedLeft, slicedRight bool
 
 	// absolute says absolutise has made this fragment's position a page
 	// position, which it does to every fragment in the tree and to nothing

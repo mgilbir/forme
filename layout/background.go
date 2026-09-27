@@ -181,6 +181,12 @@ type bgPaint struct {
 	// Gradient is set instead of any of them when the layer paints a gradient
 	// whose colour interpolates, laid out for this layer's tile.
 	Gradient *Gradient
+
+	// Area and Radii are the painting area and its curve, when its corners are
+	// rounded: CSS Backgrounds 3 §4.3 clips a background to the curve of the
+	// box background-clip names. Radii is zero for a box with square corners.
+	Area  Rect
+	Radii Radii
 }
 
 // bgBand is one stripe of a banded gradient, positioned within a tile.
@@ -250,9 +256,12 @@ func (l *layouter) resolveBackgrounds(root *Fragment, canvas Rect) {
 
 	var walk func(*Fragment)
 	walk = func(f *Fragment) {
+		// The corners first, since a background is clipped to one of their
+		// curves. See radius.go.
+		f.radii = l.usedRadii(f)
 		if f.Box != nil && !f.bgSuppressed {
 			f.background = l.paintsFor(f.Box, f, canvas, Rect{})
-			f.bgColorRect = l.colorRect(f)
+			f.bgColorRect, f.bgColorRadii = l.colorRect(f)
 		}
 		// An inline box's own fragments, one per line it is broken across. They
 		// are not children — see LineFragment.Boxes — and each is positioned
@@ -261,8 +270,19 @@ func (l *layouter) resolveBackgrounds(root *Fragment, canvas Rect) {
 		// That is what the slice model asks for and what every browser does.
 		for i := range f.Lines {
 			for _, ib := range f.Lines[i].Boxes {
+				ib.radii = l.usedRadii(ib)
+				if (ib.slicedLeft || ib.slicedRight) && !ib.radii.IsZero() && hasPercentRadius(ib.Box) {
+					l.reportOnce("radius-slice:"+PathOf(ib.Box.Element), Finding{
+						Rule:   RuleUnsupportedValue,
+						Source: AtHTML(offsetOf(ib.Box)),
+						Message: "a percentage border-radius on an inline box broken across lines " +
+							"was measured against each piece rather than against the whole box",
+						Path:     PathOf(ib.Box.Element),
+						Property: "border-radius",
+					})
+				}
 				ib.background = l.paintsFor(ib.Box, ib, canvas, Rect{})
-				ib.bgColorRect = l.colorRect(ib)
+				ib.bgColorRect, ib.bgColorRadii = l.colorRect(ib)
 			}
 		}
 		for _, c := range f.Children {
@@ -384,16 +404,19 @@ func bodyOf(root *Fragment) *Fragment {
 // and is why this is not simply the padding box. The default is the border box,
 // so a colour runs under the border — which is what makes a dashed border show
 // the colour through its gaps rather than the page.
-func (l *layouter) colorRect(f *Fragment) Rect {
+//
+// The radii are that box's curve, which the colour is clipped to as well.
+func (l *layouter) colorRect(f *Fragment) (Rect, Radii) {
 	if f.Box == nil {
-		return f.BorderRect
+		return f.BorderRect, f.radii
 	}
 	raw := ascii.TrimCSSSpace(f.Box.Style.Get("background-clip"))
 	if raw == "" || ascii.EqualFold(raw, "border-box") {
-		return f.BorderRect
+		return f.BorderRect, f.radii
 	}
 	clips := l.bgBoxes(f.Box, "background-clip", bgBorderBox)
-	return boxRect(f, clips[len(clips)-1])
+	which := clips[len(clips)-1]
+	return boxRect(f, which), f.radiiFor(which)
 }
 
 // boxRect is one of the three rectangles an origin or a clip names.
@@ -435,6 +458,12 @@ func (l *layouter) paintsFor(b *Box, f *Fragment, canvas, over Rect) []bgPaint {
 			painting = over
 		}
 		if p, ok := l.tiling(b, layer, positioning, painting); ok {
+			if over.Empty() {
+				// The curve of the painting area, which the layer is clipped
+				// to. The canvas has no corners: a root element's radius
+				// rounds its own box and not the page its background covers.
+				p.Area, p.Radii = painting, f.radiiFor(layer.clip)
+			}
 			out = append(out, p)
 		}
 	}

@@ -133,14 +133,18 @@ func (l *layouter) resolveClips(root *Fragment) {
 	// given the clip of its containing block rather than of wherever in the
 	// fragment tree it ended up hanging.
 	inherited := map[*Box]Clip{}
+	// And the rounded corners that go with each, where a border-radius curves
+	// the clip. See radius.go.
+	inheritedRound := map[*Box]*roundClip{}
 	var reported bool
 
-	var walk func(f *Fragment, from Clip, depth int)
-	walk = func(f *Fragment, from Clip, depth int) {
+	var walk func(f *Fragment, from Clip, round *roundClip, depth int)
+	walk = func(f *Fragment, from Clip, round *roundClip, depth int) {
 		if f.Box == nil {
 			return
 		}
 		if f.Box.Position.outOfFlow() {
+			var anc *Box
 			// §11.1.1: an absolutely positioned box is not clipped by an
 			// ancestor's overflow unless that ancestor is in its containing
 			// block chain. This is the rule the "abspos-overflow" family of the
@@ -151,10 +155,12 @@ func (l *layouter) resolveClips(root *Fragment) {
 			// thing to do and exactly the bug. A tooltip written inside a
 			// scrolling panel but positioned against the page must not be cut
 			// off by the panel.
-			from, depth = l.clipFromContainingBlock(f.Box, inherited)
+			from, depth, anc = l.clipFromContainingBlock(f.Box, inherited)
+			round = inheritedRound[anc]
 		}
 		self := from.meet(l.clipRectOf(f))
 		content := self
+		roundContent := round
 		if l.overflowClips(f.Box) {
 			// The padding box, not the border box and not the content box.
 			// §11.1.1 says the content is clipped to the element's *padding*
@@ -162,11 +168,19 @@ func (l *layouter) resolveClips(root *Fragment) {
 			// under its own padding and stopping at its border.
 			content = self.with(overflowClipRect(f))
 			depth++
+			// And to its curve, when the box's corners are rounded — CSS
+			// Backgrounds 3 §4.3, "when overflow on both axes is not visible".
+			// A box clipped on one axis only runs on along the other, and a
+			// corner of it cannot be cut.
+			if x, y := overflowClipsAxes(f.Box.Style); x && y {
+				roundContent = round.with(f.PaddingRect(), f.paddingRadii())
+			}
 		}
 		if self.Active || content.Active {
 			if depth > maxClipDepth {
 				content = Clip{Active: true}
 				self = Clip{Active: true}
+				round, roundContent = nil, nil
 				if !reported {
 					reported = true
 					l.rec.Report(RuleLimit, AtHTML(offsetOf(f.Box)),
@@ -177,7 +191,9 @@ func (l *layouter) resolveClips(root *Fragment) {
 		}
 		f.clipSelf = self
 		f.clipContent = content
+		f.roundSelf, f.roundContent = round, roundContent
 		inherited[f.Box] = content
+		inheritedRound[f.Box] = roundContent
 		// An inline box's own fragments — one per line it was broken across, and
 		// not children of anything; see LineFragment.Boxes — are deliberately
 		// left alone. They are painted from inside painter.content, which has
@@ -192,10 +208,10 @@ func (l *layouter) resolveClips(root *Fragment) {
 		// to an inline box, and §11.1.2's applies only to a positioned one,
 		// which an inline box is not by the time it reaches a line.
 		for _, c := range f.Children {
-			walk(c, content, depth)
+			walk(c, content, roundContent, depth)
 		}
 	}
-	walk(root, Clip{}, 0)
+	walk(root, Clip{}, nil, 0)
 }
 
 // clipFromContainingBlock is the clip an out-of-flow box inherits: the one its
@@ -211,9 +227,13 @@ func (l *layouter) resolveClips(root *Fragment) {
 // so that the bound counts a chain rather than a path through the fragment
 // tree. A box with no positioned ancestor is clipped by nothing — its
 // containing block is the page — and that is the case abspos-overflow-001 is.
-func (l *layouter) clipFromContainingBlock(b *Box, inherited map[*Box]Clip) (Clip, int) {
+//
+// The box it returns is the containing block the clip came from, or nil when
+// it came from the page, which is what the rounded corners of that clip are
+// looked up by.
+func (l *layouter) clipFromContainingBlock(b *Box, inherited map[*Box]Clip) (Clip, int, *Box) {
 	if b.Position == PositionFixed {
-		return Clip{}, 0
+		return Clip{}, 0, nil
 	}
 	for anc := b.Parent; anc != nil; anc = anc.Parent {
 		if !anc.Position.positioned() {
@@ -226,9 +246,9 @@ func (l *layouter) clipFromContainingBlock(b *Box, inherited map[*Box]Clip) (Cli
 			continue
 		}
 		c := inherited[anc]
-		return c, clipDepthOf(c)
+		return c, clipDepthOf(c), anc
 	}
-	return Clip{}, 0
+	return Clip{}, 0, nil
 }
 
 // clipDepthOf is how a resolved clip counts against the nesting bound.

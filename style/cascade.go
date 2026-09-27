@@ -1604,6 +1604,12 @@ var nonNegative = map[string]bool{
 	"column-gap": true, "row-gap": true, "gap": true, "columns": true,
 	"line-clamp": true, "-webkit-line-clamp": true,
 	"flex": true,
+
+	// CSS Backgrounds 3 §4.1's corners, <length-percentage [0,∞]>{1,2}, and
+	// their shorthand, every number of which is one of those radii.
+	"border-top-left-radius": true, "border-top-right-radius": true,
+	"border-bottom-right-radius": true, "border-bottom-left-radius": true,
+	"border-radius": true,
 }
 
 // The logical longhands and shorthands whose physical counterparts may not be

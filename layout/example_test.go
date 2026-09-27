@@ -49,6 +49,10 @@ func Example() {
 			tiles++
 		case layout.FillGradient: // op.Gradient, op.Clip, op.Tile — a CSS gradient, tiled
 			tiles++
+		case layout.FillPath: // op.Path, op.Color — a shape with curves in it, even-odd
+			fills++
+		case layout.ClipPath: // op.Path, op.Ops — what op.Ops draw, clipped to the shape
+			fills++
 		case layout.Link: // op.Rects, op.Href — a hyperlink's areas; draws nothing
 			links++
 		}

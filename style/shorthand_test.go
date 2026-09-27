@@ -415,6 +415,7 @@ func TestShorthandLonghandsMatchWhatTheExpanderProduces(t *testing.T) {
 		"grid-row":        "1 / 2",
 		"grid-column":     "main",
 		"grid-area":       "a",
+		"border-radius":   "2em 1em 4em / 0.5em 3em",
 
 		// css-break-3's legacy shorthands for the break properties.
 		"page-break-before": "avoid",

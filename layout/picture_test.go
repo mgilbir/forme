@@ -58,7 +58,22 @@ type coloured struct {
 	// rectangle: a gradient, whose colour at each point shade says. c is then
 	// unused. See rasterCell, which is what reads a cell such a mark reaches.
 	shade shader
+	// masks are the shapes the mark is clipped to, when it was drawn inside a
+	// ClipPath or is a FillPath: it marks a point only where every one of them
+	// holds it. A mark with masks is not uniform across its rectangle, and is
+	// sampled like a gradient.
+	masks []mask
 }
+
+// mask is a path, with its boundary cut into the pieces its inside test reads.
+type mask struct {
+	path   Path
+	pieces []edgePiece
+}
+
+func newMask(p Path) mask { return mask{path: p, pieces: p.pieces()} }
+
+func (m mask) holds(x, y style.Unit) bool { return m.path.containsPx(x.Px(), y.Px(), m.pieces) }
 
 // shader is the colour a mark that varies puts at a point, alpha included, the
 // point in page pixels.
@@ -109,6 +124,12 @@ const sliver = style.Unit(16) // 1/4 px, given 64 units to the pixel
 // Order is the whole point and must not be sorted away: it is what decides which
 // of two overlapping marks is visible.
 func picFills(ops []Op) []coloured {
+	return picFillsIn(ops, nil)
+}
+
+// picFillsIn is picFills for operations inside the given masks: every mark
+// they make is clipped to all of them.
+func picFillsIn(ops []Op, masks []mask) []coloured {
 	out := make([]coloured, 0, len(ops))
 	for _, op := range ops {
 		switch v := op.(type) {
@@ -192,6 +213,30 @@ func picFills(ops []Op) []coloured {
 
 		case FillGradient:
 			out = append(out, gradientFills(v)...)
+
+		case FillPath:
+			if len(v.Path) == 0 || v.Color.A == 0 {
+				continue
+			}
+			r := v.Path.Bounds()
+			if v.Clip.Active {
+				r = intersect(r, v.Clip.Rect)
+			}
+			if r.Empty() {
+				continue
+			}
+			out = append(out, coloured{r: r, c: v.Color, masks: []mask{newMask(v.Path)}})
+
+		case ClipPath:
+			out = append(out, picFillsIn(v.Ops, []mask{newMask(v.Path)})...)
+		}
+	}
+	// Every mark made here, including those of the groups inside, is clipped
+	// to what this level is inside as well. A new slice each, since a group's
+	// marks may share one.
+	if len(masks) > 0 {
+		for i := range out {
+			out[i].masks = append(append([]mask(nil), masks...), out[i].masks...)
 		}
 	}
 	return out
@@ -714,8 +759,12 @@ func drawnGlyphs(v DrawText) string {
 }
 
 func texts(ops []Op, under []coloured, page Rect) []textMark {
+	ops, paths := flattenGroups(ops, "")
 	covers := opaqueCovers(ops)
 	var marking []DrawText
+	// The shape each marking run is clipped to, where it was drawn inside a
+	// ClipPath: part of what the mark is, exactly as a rectangle clip is.
+	var markingPaths []string
 	for i, op := range ops {
 		v, ok := op.(DrawText)
 		if !ok {
@@ -746,6 +795,7 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 			// a character that marks no paper — and skips them *by position*, so
 			// what is left still says where every visible glyph is.
 			marking = append(marking, v)
+			markingPaths = append(markingPaths, paths[i])
 			continue
 		}
 		if invisibleInk(v, under) {
@@ -783,10 +833,11 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 			continue
 		}
 		marking = append(marking, trimRunSpace(v))
+		markingPaths = append(markingPaths, paths[i])
 	}
 
 	var out []textMark
-	for _, v := range marking {
+	for mi, v := range marking {
 		shape := fmt.Sprintf("text in %s size %s", faceKey(v.Face), num(v.Size))
 		what := shape + " " + colourKey(v.Color)
 		if v.Clip.Active {
@@ -802,6 +853,13 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 			// "overflow: hidden" box. See DrawText.Clip.
 			what += " clipped to " + rectKey(v.Clip.Rect)
 			shape += " clipped to " + rectKey(v.Clip.Rect)
+		}
+		if p := markingPaths[mi]; p != "" {
+			// Cut by a curve, which is the same statement about a shape: the
+			// two documents agree only where they cut the same run by the same
+			// curve.
+			what += " clipped to path " + p
+			shape += " clipped to path " + p
 		}
 		out = append(out, glyphMarks(v, what, shape, v.Color.A >= 1)...)
 	}
@@ -1471,6 +1529,18 @@ func colourVaryingAt(fs []coloured, x, y style.Unit) (sample, bool) {
 		if x < f.r.X || x >= f.r.X.Add(f.r.W) || y < f.r.Y || y >= f.r.Y.Add(f.r.H) {
 			continue
 		}
+		if len(f.masks) > 0 {
+			varies = true
+			held := true
+			for _, m := range f.masks {
+				if held = m.holds(x, y); !held {
+					break
+				}
+			}
+			if !held {
+				continue
+			}
+		}
 		if f.shade != nil {
 			varies = true
 			f.c = f.shade.at(x.Px(), y.Px())
@@ -1809,4 +1879,29 @@ func coversNothingNew(under []coloured, r Rect, c style.RGBA) bool {
 		}
 	}
 	return true
+}
+
+// flattenGroups lays the operations inside every ClipPath out in paint order
+// among the rest, with, for each, the shapes it was clipped to written as a key
+// ("" for an operation inside none). It is what the text comparison reads: a run
+// is a run wherever it was drawn, and what the curve does to it goes into what
+// the mark is.
+func flattenGroups(ops []Op, within string) ([]Op, []string) {
+	var out []Op
+	var paths []string
+	for _, op := range ops {
+		if g, ok := op.(ClipPath); ok {
+			key := g.Path.String()
+			if within != "" {
+				key = within + " and " + key
+			}
+			inner, innerPaths := flattenGroups(g.Ops, key)
+			out = append(out, inner...)
+			paths = append(paths, innerPaths...)
+			continue
+		}
+		out = append(out, op)
+		paths = append(paths, within)
+	}
+	return out, paths
 }

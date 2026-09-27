@@ -186,6 +186,29 @@ func dimOps(ops []Op, at int, alpha float64) ([]Op, []groupMark) {
 			}
 			v.Gradient.Stops = stops
 			kept = append(kept, v)
+		case FillPath:
+			if len(v.Path) == 0 || v.Color.A == 0 {
+				kept = append(kept, op)
+				continue
+			}
+			marks = append(marks, groupMark{rect: v.Path.Bounds()})
+			if alpha == 0 {
+				continue
+			}
+			v.Color.A *= alpha
+			kept = append(kept, v)
+		case ClipPath:
+			// What the group holds is dimmed as it would have been outside it,
+			// and its marks are those of what it holds: the curve only takes
+			// ink away, so no two of them overlap inside it that did not
+			// outside.
+			inner, innerMarks := dimOps(append([]Op(nil), v.Ops...), 0, alpha)
+			marks = append(marks, innerMarks...)
+			if len(inner) == 0 {
+				continue
+			}
+			v.Ops = inner
+			kept = append(kept, v)
 		case DrawImage:
 			marks = append(marks, groupMark{rect: v.Rect, image: true})
 			if alpha == 0 {

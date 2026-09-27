@@ -38,9 +38,10 @@ import (
 // rather than a "border" primitive, because a backend that had to understand
 // border-collapse would be a second layout engine.
 //
-// There are six: FillRect, DrawText, DrawImage, TileImage and FillGradient,
-// which put ink on the page, and Link, which puts none and says where a
-// hyperlink is. A backend that switches over them must have a case for each, and
+// There are eight: FillRect, DrawText, DrawImage, TileImage, FillGradient and
+// FillPath, which put ink on the page; ClipPath, which holds operations and
+// clips what they put there to a shape; and Link, which puts none and says
+// where a hyperlink is. A backend that switches over them must have a case for each, and
 // one that only draws may skip Link. The set grows only by addition — an
 // operation's meaning, once stated, is not changed — so a backend that meets a
 // kind it has no case for has met something new, and should say so rather than
@@ -711,34 +712,46 @@ func (p *painter) backgroundImages(layers []bgPaint, who *Box) {
 		if l.Clip.Empty() || l.Tile.Empty() {
 			continue
 		}
-		if l.Solid != nil {
-			p.tiling(l, []bgBand{{Rect: Rect{W: l.Tile.W, H: l.Tile.H}, Color: *l.Solid}}, who)
+		if !l.Radii.IsZero() {
+			at := len(p.ops)
+			p.backgroundLayer(l, who)
+			var curve *roundClip
+			p.rounding(at, curve.with(l.Area, l.Radii))
 			continue
 		}
-		if len(l.Bands) > 0 {
-			p.tiling(l, l.Bands, who)
-			continue
-		}
-		if l.Gradient != nil {
-			// One operation however many tiles, as a picture is: the count
-			// was checked against maxBackgroundTiles when the tiling was
-			// resolved, and nothing here multiplies it.
-			p.emit(FillGradient{
-				Clip: l.Clip, Tile: l.Tile,
-				StepX: l.StepX, StepY: l.StepY,
-				Gradient: *l.Gradient,
-			})
-			continue
-		}
-		if l.Image == nil {
-			continue
-		}
-		p.emit(TileImage{
+		p.backgroundLayer(l, who)
+	}
+}
+
+// backgroundLayer emits one resolved layer.
+func (p *painter) backgroundLayer(l bgPaint, who *Box) {
+	if l.Solid != nil {
+		p.tiling(l, []bgBand{{Rect: Rect{W: l.Tile.W, H: l.Tile.H}, Color: *l.Solid}}, who)
+		return
+	}
+	if len(l.Bands) > 0 {
+		p.tiling(l, l.Bands, who)
+		return
+	}
+	if l.Gradient != nil {
+		// One operation however many tiles, as a picture is: the count
+		// was checked against maxBackgroundTiles when the tiling was
+		// resolved, and nothing here multiplies it.
+		p.emit(FillGradient{
 			Clip: l.Clip, Tile: l.Tile,
 			StepX: l.StepX, StepY: l.StepY,
-			Image: l.Image, Key: l.Key,
+			Gradient: *l.Gradient,
 		})
+		return
 	}
+	if l.Image == nil {
+		return
+	}
+	p.emit(TileImage{
+		Clip: l.Clip, Tile: l.Tile,
+		StepX: l.StepX, StepY: l.StepY,
+		Image: l.Image, Key: l.Key,
+	})
 }
 
 // emit appends operations a fragment paints for itself, charged to the
@@ -794,6 +807,8 @@ type painter struct {
 	lineLevels  map[*Fragment][]*inlineLevel
 	// orderPrefixes memoizes orderPrefix, per box.
 	orderPrefixes map[*Box][]orderStep
+	// reported is what reportOnce has said, per box.
+	reported map[any]bool
 	// joinRefused says the work budget refused the joining of an inline box's
 	// outline pieces once, so every outline after it is drawn a ring per
 	// piece rather than some joined and some not. See joinedOutline.
@@ -1335,6 +1350,15 @@ func (p *painter) clipping(c Clip, paint func()) {
 	p.ops = clipOps(p.ops, at, c)
 }
 
+// clippingRound is clipping, and then the curve of every rounded box in a
+// chain as well. The rectangle is cut first, so what the curves have left to do
+// is the corners; see roundOps.
+func (p *painter) clippingRound(c Clip, round *roundClip, paint func()) {
+	at := len(p.ops)
+	p.clipping(c, paint)
+	p.rounding(at, round)
+}
+
 // clipOps narrows every operation from index at onwards, dropping the ones that
 // no longer mark anything.
 func clipOps(ops []Op, at int, c Clip) []Op {
@@ -1383,6 +1407,29 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 				// different marks when they put the same ink on the page.
 				v.Clip = Clip{}
 			}
+			kept = append(kept, v)
+
+		case FillPath:
+			// A shape cannot be cut by arithmetic, so the clip travels with it
+			// as a picture's does, and only when it cuts.
+			b := v.Path.Bounds()
+			if c.hides(b) {
+				continue
+			}
+			if !c.admits(b) {
+				v.Clip = v.Clip.meet(c)
+			}
+			kept = append(kept, v)
+
+		case ClipPath:
+			// Clipping commutes: what is inside a curve and inside a
+			// rectangle is the same whichever cuts first, so the rectangle
+			// goes to what the group holds.
+			inner := clipOps(append([]Op(nil), v.Ops...), 0, c)
+			if len(inner) == 0 {
+				continue
+			}
+			v.Ops = inner
 			kept = append(kept, v)
 
 		case Link:
@@ -1613,13 +1660,13 @@ func (p *painter) decorationsIn(f *Fragment) {
 		}
 		if !f.bgSuppressed {
 			for _, band := range f.bgBands {
-				p.clipping(f.clipSelf.with(band), func() { p.paintBackground(f) })
+				p.clippingRound(f.clipSelf.with(band), f.roundSelf, func() { p.paintBackground(f) })
 			}
 		}
-		p.clipping(f.clipSelf, func() { p.borders(f) })
+		p.clippingRound(f.clipSelf, f.roundSelf, func() { p.borders(f) })
 		return
 	}
-	p.clipping(f.clipSelf, func() { p.paintDecorations(f) })
+	p.clippingRound(f.clipSelf, f.roundSelf, func() { p.paintDecorations(f) })
 }
 
 func (p *painter) paintDecorations(f *Fragment) {
@@ -1651,10 +1698,18 @@ func (p *painter) paintDecorations(f *Fragment) {
 // border-box means, and is why a dashed border shows the background through its
 // gaps rather than the page. It stops at the border box and never reaches the
 // margin, which is the space that is meant to show through.
+//
+// With rounded corners the colour is the rounded shape of that box and each
+// image is clipped to the curve of its own painting area: CSS Backgrounds 3
+// §4.3. With square ones they are what they always were.
 func (p *painter) paintBackground(f *Fragment) {
 	if bg, ok := p.color(f.Box, "background-color"); ok && bg.A > 0 {
 		if rect := f.bgColorRect; !rect.Empty() {
-			p.emit(FillRect{Rect: rect, Color: bg})
+			if f.bgColorRadii.IsZero() {
+				p.emit(FillRect{Rect: rect, Color: bg})
+			} else {
+				p.emit(FillPath{Path: roundedRect(rect, f.bgColorRadii), Color: bg})
+			}
 		}
 	}
 	p.backgroundImages(f.background, f.Box)
@@ -1680,7 +1735,7 @@ func (p *painter) content(f *Fragment) {
 	if f.clipContent.blocks() {
 		return
 	}
-	p.grouped(f, func() { p.clipping(f.clipContent, func() { p.paintContent(f) }) })
+	p.grouped(f, func() { p.clippingRound(f.clipContent, f.roundContent, func() { p.paintContent(f) }) })
 	p.lines(f)
 }
 
@@ -1700,7 +1755,11 @@ func (p *painter) paintContent(f *Fragment) {
 			// does when the picture is larger than the box it was put in.
 			fit, _ := objectFitOf(f.Box.Style.Get("object-fit"))
 			rect, clip := fitContent(box, naturalSizeOf(r), fit, objectPositionOf(f.Box))
-			p.clipping(clip, func() {
+			// CSS Backgrounds 3 §4.3: "replaced element content to the curved
+			// content edge", when the box's corners are rounded.
+			var curve *roundClip
+			curve = curve.with(box, f.contentRadii())
+			p.clippingRound(clip, curve, func() {
 				// Content that is one colour is a fill, not a picture stretched
 				// over the box. The two paint the same pixels and only one of
 				// them says on the page what the document said in its source —
@@ -1763,20 +1822,34 @@ func (p *painter) paintContent(f *Fragment) {
 // clip is the content clip of the block whose line the fragment is on: an
 // inline box clips nothing of its own, and what cuts it is what cuts the words
 // beside it. See resolveClips.
-func (p *painter) inlineDecorations(f *Fragment, clip Clip) {
+func (p *painter) inlineDecorations(f *Fragment, clip Clip, round *roundClip) {
 	if f.Box == nil {
 		return
 	}
 	at := len(p.ops)
-	p.grouped(f, func() { p.clipping(clip, func() { p.decorationsIn(f) }) })
-	for i := at; i < len(p.ops); i++ {
-		switch r := p.ops[i].(type) {
+	p.grouped(f, func() { p.clippingRound(clip, round, func() { p.decorationsIn(f) }) })
+	markOverhang(p.ops[at:])
+}
+
+// markOverhang marks every fill among ops as an overhang, including those a
+// rounded corner put inside a ClipPath.
+func markOverhang(ops []Op) {
+	for i, op := range ops {
+		switch r := op.(type) {
 		case FillRect:
 			r.Overhang = true
-			p.ops[i] = r
+			ops[i] = r
 		case FillGradient:
 			r.Overhang = true
-			p.ops[i] = r
+			ops[i] = r
+		case FillPath:
+			r.Overhang = true
+			ops[i] = r
+		case ClipPath:
+			inner := append([]Op(nil), r.Ops...)
+			markOverhang(inner)
+			r.Ops = inner
+			ops[i] = r
 		}
 	}
 }
@@ -1799,6 +1872,12 @@ func (p *painter) borders(f *Fragment) {
 		// losing candidate on the page after the winner — and would draw it at
 		// its full width over a line that is meant to be shared, which is the
 		// separated model showing through.
+		return
+	}
+	if !f.radii.IsZero() {
+		// Rounded corners: the border is drawn between two curves, and a
+		// rectangle is no longer a shape it is made of. See radius.go.
+		p.roundedBorders(f)
 		return
 	}
 	r := f.BorderRect
@@ -1881,7 +1960,7 @@ func (p *painter) outlineWalk(f *Fragment) {
 	if f.Box == nil {
 		return
 	}
-	p.grouped(f, func() { p.clipping(f.clipSelf, func() { p.outline(f) }) })
+	p.grouped(f, func() { p.clippingRound(f.clipSelf, f.roundSelf, func() { p.outline(f) }) })
 	p.lineOutlines(f, nil)
 	for _, c := range f.Children {
 		if c == nil || c.Box == nil || opensAContext(c) {
@@ -1933,7 +2012,9 @@ func (p *painter) outlinePieces(f *Fragment, boxes []*Fragment, want *inlineLeve
 	}
 	for _, b := range order {
 		ps := pieces[b]
-		p.grouped(ps[0], func() { p.clipping(f.clipContent, func() { p.joinedOutline(ps) }) })
+		p.grouped(ps[0], func() {
+			p.clippingRound(f.clipContent, f.roundContent, func() { p.joinedOutline(ps) })
+		})
 	}
 }
 
@@ -1995,6 +2076,20 @@ func (p *painter) joinedOutline(pieces []*Fragment) {
 		return
 	}
 	kind := parseBorderStyle(first.Box.Style.Get("outline-style"))
+	for _, piece := range pieces {
+		if !piece.radii.IsZero() {
+			// CSS UI 4 §5: an outline should follow the curve of a rounded
+			// border edge. This one is drawn square, and says so.
+			p.reportOnce(first.Box, "square-outline", Finding{
+				Rule:     RuleUnsupportedValue,
+				Source:   AtHTML(offsetOf(first.Box)),
+				Message:  "the outline of a box with rounded corners was drawn with square ones",
+				Path:     PathOf(first.Box.Element),
+				Property: "outline-style",
+			})
+			break
+		}
+	}
 
 	// paintEdge is the border's, and a border's fills are not Overhang because
 	// layout accounted for every one of them. These are marked afterwards rather
@@ -2154,7 +2249,7 @@ func (p *painter) lines(f *Fragment) {
 			if box == nil || p.innerLevelOf(box.Box) != nil {
 				continue
 			}
-			p.inlineDecorations(box, f.clipContent)
+			p.inlineDecorations(box, f.clipContent, f.roundContent)
 		}
 		for ri := range line.Runs {
 			if p.innerLevelOf(line.Runs[ri].Box) != nil {
@@ -2180,7 +2275,7 @@ func (p *painter) levelMarks(f *Fragment, marks []lineMark, l *inlineLevel) {
 		line := &f.Lines[m.line]
 		if m.box >= 0 {
 			if box := line.Boxes[m.box]; !l.owns(box.Box) {
-				p.inlineDecorations(box, f.clipContent)
+				p.inlineDecorations(box, f.clipContent, f.roundContent)
 			}
 			continue
 		}
@@ -2270,7 +2365,7 @@ func (p *painter) lineRun(f *Fragment, content Rect, around dim, line *LineFragm
 	// is the block's opacity and every translucent inline box it is inside,
 	// and the next run on the line may be inside none.
 	p.as(p.inlineDim(run.Box, around), func() {
-		p.clipping(f.clipContent, func() { p.paintRun(run, at, colour, turnOfLine(*line)) })
+		p.clippingRound(f.clipContent, f.roundContent, func() { p.paintRun(run, at, colour, turnOfLine(*line)) })
 	})
 }
 

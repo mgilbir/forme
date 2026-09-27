@@ -161,9 +161,6 @@ var inertValues = map[string]inertValue{
 	// neither box is turned and neither property changes anything, which is what
 	// the layout-time check asks before it says a word.
 
-	// CSS Backgrounds 3 §5.1: corners are square.
-	"border-radius": {produced: "0", because: "every corner is square"},
-
 	// The identities: CSS Filter Effects 1 §5 and CSS Transforms 2. CSS Color
 	// 4 §3's opacity was here and is not any more — it is implemented, and what
 	// it cannot express is reported at the box that asked for it rather than at
@@ -376,7 +373,7 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 		return true
 	}
 	// A length written as a bare zero and one written with a unit are the same
-	// length, and "border-radius: 0px" is as inert as "border-radius: 0".
+	// length, and "outline-offset: 0px" is as inert as "outline-offset: 0".
 	return entry.produced == "0" && isZeroLength(value)
 }
 

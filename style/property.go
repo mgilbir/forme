@@ -134,6 +134,14 @@ var properties = map[string]property{
 	"outline-style": {false, "none"},
 	"outline-color": {false, "invert"},
 
+	// CSS Backgrounds 3 §4.1: the four corners, each a horizontal and a
+	// vertical radius of a quarter ellipse. Neither inherits, and zero is a
+	// square corner. See layout/radius.go for what they round.
+	"border-top-left-radius":     {false, "0"},
+	"border-top-right-radius":    {false, "0"},
+	"border-bottom-right-radius": {false, "0"},
+	"border-bottom-left-radius":  {false, "0"},
+
 	"border-top-color":    {false, "currentcolor"},
 	"border-right-color":  {false, "currentcolor"},
 	"border-bottom-color": {false, "currentcolor"},
@@ -600,7 +608,10 @@ var shorthands = map[string]shorthand{
 		"border-bottom-style", "border-left-style"),
 	"border-color": boxShorthand("border-top-color", "border-right-color",
 		"border-bottom-color", "border-left-color"),
-	"overflow":  boxShorthand("overflow-x", "overflow-y"),
+	"overflow": boxShorthand("overflow-x", "overflow-y"),
+	// CSS Backgrounds 3 §4.1. See borderRadiusShorthand.
+	"border-radius": {borderRadiusShorthand, []string{"border-top-left-radius",
+		"border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"}},
 	"flex":      {flexShorthand, []string{"flex-grow", "flex-shrink", "flex-basis"}},
 	"flex-flow": {flexFlowShorthand, []string{"flex-direction", "flex-wrap"}},
 	// "gap" is Box Alignment §8.3, and it is the two-slot box shorthand: one

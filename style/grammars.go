@@ -54,6 +54,10 @@ func init() {
 	g["z-index"] = single(either(kw("auto"), num(integerSlot)))
 
 	// css-ui-4 §3: auto | <outline-line-style>, the border styles without hidden.
+	// css-backgrounds-3 §4.1: <length-percentage [0,∞]>{1,2}.
+	for _, corner := range []string{"top-left", "top-right", "bottom-right", "bottom-left"} {
+		g["border-"+corner+"-radius"] = repeated(lpNonNeg, 1, 2)
+	}
 	g["outline-width"] = single(lineWidth)
 	g["outline-style"] = single(kw("auto", "none", "dotted", "dashed", "solid",
 		"double", "groove", "ridge", "inset", "outset"))

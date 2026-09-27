@@ -114,6 +114,12 @@ type logicalLonghand struct {
 	// height. Empty for a side.
 	size   string
 	inline bool
+	// corner marks one of css-logical §4.6's four corners, which is named by a
+	// block side and an inline side: side is the block side and cornerInline
+	// the inline one, and pattern takes the physical corner — "top-left" —
+	// that the two meet at.
+	corner       bool
+	cornerInline flowSide
 }
 
 // logicalLonghands is every logical longhand this engine knows.
@@ -144,6 +150,22 @@ func buildLogicalLonghands() map[string]logicalLonghand {
 		} {
 			name := strings.Replace(family.logical, "%s", s.name, 1)
 			out[name] = logicalLonghand{pattern: family.physical, side: s.side}
+		}
+	}
+	// css-logical §4.6's corners: border-<block>-<inline>-radius, each the
+	// physical corner where the two flow-relative sides meet. The values are
+	// the physical property's, horizontal radius first.
+	for _, b := range []struct {
+		name string
+		side flowSide
+	}{{"start", blockStart}, {"end", blockEnd}} {
+		for _, i := range []struct {
+			name string
+			side flowSide
+		}{{"start", inlineStart}, {"end", inlineEnd}} {
+			out["border-"+b.name+"-"+i.name+"-radius"] = logicalLonghand{
+				pattern: "border-%s-radius", side: b.side, corner: true, cornerInline: i.side,
+			}
 		}
 	}
 	// css-sizing's logical sizes.
@@ -181,6 +203,17 @@ func physicalName(name, writingMode string, rtl bool) (string, bool) {
 			return strings.TrimSuffix(l.size, "width") + "height", true
 		}
 		return strings.TrimSuffix(l.size, "height") + "width", true
+	}
+	if l.corner {
+		// One of the two sides is top or bottom and the other left or right,
+		// whichever way the writing mode turns them, and a physical corner is
+		// named vertical side first.
+		a := physicalSide(l.side, writingMode, rtl)
+		b := physicalSide(l.cornerInline, writingMode, rtl)
+		if a == "left" || a == "right" {
+			a, b = b, a
+		}
+		return strings.Replace(l.pattern, "%s", a+"-"+b, 1), true
 	}
 	return strings.Replace(l.pattern, "%s", physicalSide(l.side, writingMode, rtl), 1), true
 }

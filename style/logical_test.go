@@ -1,6 +1,7 @@
 package style
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -60,7 +61,19 @@ func TestEveryLogicalLonghandSetsItsPhysicalOne(t *testing.T) {
 		for d, dir := range []string{"ltr", "rtl"} {
 			for logical := range logicalLonghands {
 				want := ""
+				if b, i, ok := logicalCorner(logical); ok {
+					// A corner: where the block side and the inline side
+					// meet, named vertical side first.
+					v, h := dirs[d][b], dirs[d][2+i]
+					if v == "left" || v == "right" {
+						v, h = h, v
+					}
+					want = "border-" + v + "-" + h + "-radius"
+				}
 				for e, edge := range edges {
+					if want != "" {
+						break
+					}
 					if strings.Contains(logical, edge) {
 						side := dirs[d][e]
 						want = strings.Replace(logical, edge, side, 1)
@@ -236,4 +249,18 @@ func TestALogicalNameIsNotAComputedProperty(t *testing.T) {
 			t.Errorf("%q is in the property registry", name)
 		}
 	}
+}
+
+// logicalCorner reads a css-logical corner's name, border-<block>-<inline>-radius,
+// as which of block-start and block-end (0 or 1) and which of inline-start and
+// inline-end (0 or 1) it names.
+func logicalCorner(name string) (block, inline int, ok bool) {
+	var b, i string
+	if n, _ := fmt.Sscanf(strings.NewReplacer("-", " ").Replace(name), "border %s %s radius", &b, &i); n != 2 {
+		return 0, 0, false
+	}
+	side := map[string]int{"start": 0, "end": 1}
+	bs, ok1 := side[b]
+	is, ok2 := side[i]
+	return bs, is, ok1 && ok2
 }

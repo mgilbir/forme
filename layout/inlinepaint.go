@@ -364,10 +364,11 @@ func (d *inlineDecor) finish(parent *Fragment) {
 		startsRight := beginsAtRight(b)
 		keepLeft := (!startsRight && i == c.start) || (startsRight && i == c.end)
 		keepRight := (startsRight && i == c.start) || (!startsRight && i == c.end)
-		if !keepLeft || noLeft {
+		slicedLeft, slicedRight := !keepLeft || noLeft, !keepRight || noRight
+		if slicedLeft {
 			margin.Left, border.Left, padding.Left = 0, 0, 0
 		}
-		if !keepRight || noRight {
+		if slicedRight {
 			margin.Right, border.Right, padding.Right = 0, 0, 0
 		}
 		// §8.3: margin-top and margin-bottom do not apply to a non-replaced
@@ -402,6 +403,9 @@ func (d *inlineDecor) finish(parent *Fragment) {
 			// background image is placed against the rectangle the box is drawn
 			// at and this is the only rectangle it has.
 			Offset: d.l.inlineOffsets[b],
+			// And its corners, which the same model rounds only at the ends of
+			// the box: see radius.go.
+			slicedLeft: slicedLeft, slicedRight: slicedRight,
 		}
 		if b.areaLink() != nil {
 			// The link's area on this line, which is this fragment's border

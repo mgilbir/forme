@@ -1681,3 +1681,61 @@ func slashParts(vals []css.ComponentValue, n int) ([][]css.ComponentValue, bool)
 	}
 	return parts, true
 }
+
+// borderRadiusShorthand expands "border-radius", CSS Backgrounds 3 §4.1: up to
+// four horizontal radii, and after a "/" up to four vertical ones, each list
+// completed the way "margin"'s is — top-left, top-right, bottom-right,
+// bottom-left, a missing bottom-left taken from top-right, a missing
+// bottom-right from top-left, and a missing top-right from top-left. With no
+// "/" the vertical radii are the horizontal ones.
+//
+// Each longhand is written with both of its radii, so "border-radius: 2em 1em
+// 4em / 0.5em 3em" sets "border-top-left-radius: 2em 0.5em" — the
+// specification's own example. Whether each radius is a non-negative
+// length-percentage is the longhands' grammar's to decide.
+func borderRadiusShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	parts := splitSlashes(splitOnWhitespace(vals))
+	var h, v [][]css.ComponentValue
+	slash := false
+	for _, part := range parts {
+		switch {
+		case isSlash(part):
+			if slash {
+				return nil, nil, false
+			}
+			slash = true
+		case slash:
+			v = append(v, part)
+		default:
+			h = append(h, part)
+		}
+	}
+	if len(h) == 0 || len(h) > 4 || (slash && (len(v) == 0 || len(v) > 4)) {
+		return nil, nil, false
+	}
+	if !slash {
+		v = h
+	}
+	corners := func(list [][]css.ComponentValue) [4][]css.ComponentValue {
+		tl := list[0]
+		tr, br := tl, tl
+		if len(list) > 1 {
+			tr = list[1]
+		}
+		if len(list) > 2 {
+			br = list[2]
+		}
+		bl := tr
+		if len(list) > 3 {
+			bl = list[3]
+		}
+		return [4][]css.ComponentValue{tl, tr, br, bl}
+	}
+	hs, vs := corners(h), corners(v)
+	out := make(map[string][]css.ComponentValue, 4)
+	for i, name := range []string{"border-top-left-radius", "border-top-right-radius",
+		"border-bottom-right-radius", "border-bottom-left-radius"} {
+		out[name] = joinParts(hs[i], vs[i])
+	}
+	return out, nil, true
+}

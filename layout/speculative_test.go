@@ -327,7 +327,8 @@ func TestFragmentClonerCopiesEveryField(t *testing.T) {
 		"Children": true, "Lines": true, "Marker": true, "collapsed": true,
 		"background": true, "bgBands": true, "canvasLayers": true,
 	}
-	shared := map[string]bool{"Box": true, "canvasColor": true}
+	shared := map[string]bool{"Box": true, "canvasColor": true,
+		"roundSelf": true, "roundContent": true}
 	ft := reflect.TypeOf(Fragment{})
 	for i := 0; i < ft.NumField(); i++ {
 		f := ft.Field(i)

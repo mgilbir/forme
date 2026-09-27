@@ -328,7 +328,7 @@ func (p *painter) paintLevel(l *inlineLevel) {
 				continue
 			}
 			if box := pt.frag.Lines[m.line].Boxes[m.box]; l.owns(box.Box) {
-				p.inlineDecorations(box, pt.frag.clipContent)
+				p.inlineDecorations(box, pt.frag.clipContent, pt.frag.roundContent)
 			}
 		}
 	}

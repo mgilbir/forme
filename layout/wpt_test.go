@@ -1441,7 +1441,16 @@ const wptEnv = "WPT_TESTS"
 // rectangles was keyed by character, so the run stayed text and did not match
 // the reference's square. It is keyed by glyph as well now. See
 // layout/blockglyph_test.go. wpt.fyi: all three browsers pass both.
-const wptCleanPassBaseline = 5987
+//
+// **5987 to 5988, for rounded corners** (issue #26). letter-spacing/letter-
+// spacing-trim-start-001 and its reference both draw six inline-blocks with a
+// two-pixel border and "border-radius: 5px", and the two pages matched while
+// border-radius was an unimplemented property: both had square corners, and
+// both carried the finding. The corners are drawn now — a ring between the
+// border edge's curve and the padding edge's, a FillPath — and the comparison
+// renders them, so the pair is compared as what it paints and passes clean.
+// wpt.fyi: all three browsers pass.
+const wptCleanPassBaseline = 5988
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -2049,6 +2058,7 @@ var suiteBlockFonts = map[string]*blockFont{}
 // overlap, and which no comparison of unordered marks can ever satisfy, because
 // the test has a red rectangle in it and the reference does not.
 func normaliseOps(ops []Op) string {
+	ops, _ = flattenGroups(ops, "")
 	lines := make([]string, 0, len(ops))
 	for _, op := range ops {
 		switch v := op.(type) {
@@ -2107,6 +2117,11 @@ func normaliseOps(ops []Op) string {
 			// drawing the same file draw the same key, and comparing decoded
 			// images pixel by pixel would make this a rasterizer.
 			lines = append(lines, fmt.Sprintf("image %s %s", v.Key, rectKey(v.Rect)))
+		case FillPath:
+			if len(v.Path) == 0 || v.Color.A == 0 {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("path %s %s", v.Path, v.Color))
 		case FillGradient:
 			// Only the blank-page check reads this too: a gradient that shows
 			// anywhere is something painted.

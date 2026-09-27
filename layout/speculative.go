@@ -629,7 +629,9 @@ func (c *layoutCache) unlink(e *layoutEntry) {
 // through: the children and the lines, each line's runs, inline boxes and
 // links, the marker, and the rectangle lists. What is shared is what nothing
 // writes to once made — the boxes, the faces, the images and a run's
-// decorations, which are memoized and shared across runs already.
+// decorations, which are memoized and shared across runs already, and the
+// chains of rounded clips, which resolveClips builds once the tree is final and
+// only ever extends by a new link at the head.
 //
 // A slice that was nil stays nil and one that was empty stays empty, so a copy
 // is indistinguishable from the original to anything that compares them.

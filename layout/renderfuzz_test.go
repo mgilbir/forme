@@ -169,12 +169,17 @@ func checkRender(t testing.TB, src, sheetSrc string) {
 // day this test starts failing for a reason that is not a difference in the page.
 func renderKey(ops []Op) string {
 	var b strings.Builder
+	writeRenderKey(&b, ops)
+	return b.String()
+}
+
+func writeRenderKey(b *strings.Builder, ops []Op) {
 	for _, op := range ops {
 		switch v := op.(type) {
 		case FillRect:
-			fmt.Fprintf(&b, "fill %v %v overhang=%v\n", v.Rect, v.Color, v.Overhang)
+			fmt.Fprintf(b, "fill %v %v overhang=%v\n", v.Rect, v.Color, v.Overhang)
 		case DrawText:
-			fmt.Fprintf(&b, "text %q at %v,%v %s %v %v rtl=%v sideways=%v "+
+			fmt.Fprintf(b, "text %q at %v,%v %s %v %v rtl=%v sideways=%v "+
 				"anticlockwise=%v upright=%v pre=%q post=%q merge=%q,%q "+
 				"kerns=%v spacing=%v features=%+v clip=%v\n",
 				v.Text, v.At.X, v.At.Y, faceName(v.Face), v.Size, v.Color,
@@ -182,19 +187,24 @@ func renderKey(ops []Op) string {
 				v.PreContext, v.PostContext, v.MergePre, v.MergePost,
 				v.ContextKerns, v.CharSpacing, v.Features, v.Clip)
 		case DrawImage:
-			fmt.Fprintf(&b, "image %v %q\n", v.Rect, v.Key)
+			fmt.Fprintf(b, "image %v %q\n", v.Rect, v.Key)
 		case TileImage:
-			fmt.Fprintf(&b, "tile %+v\n", tileKey(v))
+			fmt.Fprintf(b, "tile %+v\n", tileKey(v))
 		case FillGradient:
-			fmt.Fprintf(&b, "gradient %v %v %v %v overhang=%v %+v\n",
+			fmt.Fprintf(b, "gradient %v %v %v %v overhang=%v %+v\n",
 				v.Clip, v.Tile, v.StepX, v.StepY, v.Overhang, v.Gradient)
 		case Link:
-			fmt.Fprintf(&b, "link %v %q\n", v.Rects, v.Href)
+			fmt.Fprintf(b, "link %v %q\n", v.Rects, v.Href)
+		case FillPath:
+			fmt.Fprintf(b, "path %s %v clip=%v overhang=%v\n", v.Path, v.Color, v.Clip, v.Overhang)
+		case ClipPath:
+			fmt.Fprintf(b, "clip to %s {\n", v.Path)
+			writeRenderKey(b, v.Ops)
+			b.WriteString("}\n")
 		default:
-			fmt.Fprintf(&b, "op %T\n", op)
+			fmt.Fprintf(b, "op %T\n", op)
 		}
 	}
-	return b.String()
 }
 
 // faceName is a face's name, or a word for the absence of one.
