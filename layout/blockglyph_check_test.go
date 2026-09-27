@@ -205,6 +205,49 @@ func TestBlockFillsPlacesTheInk(t *testing.T) {
 	})
 }
 
+// TestBlockFillsKnowsTheGlyphAStandInDraws. Ahem has no U+2011 NON-BREAKING
+// HYPHEN and no U+2000 EN QUAD, and the page draws both anyway: the shaper sets
+// the hyphen with the face's U+2010, as HarfBuzz does, and the quad with its
+// canonical decomposition, U+2002 EN SPACE. The run is the glyphs those are, so
+// it is a square, a blank half em, and a square — which is what a browser draws
+// and what line-break-anywhere-overrides-uax-behavior-013's reference draws in
+// green. Keyed by character, the table had no entry for either, and the run was
+// compared as text.
+//
+// The arithmetic: 20px Ahem, baseline at 100, so a square is 20x20 with its top
+// at 84; the hyphen is an em after the first square and the quad half of one.
+func TestBlockFillsKnowsTheGlyphAStandInDraws(t *testing.T) {
+	face := ahemFace(t)
+	bf := ahemBlockFont(t)
+	for _, r := range []rune{0x2011, 0x2000} {
+		if _, ok := bf.rects[r]; ok {
+			t.Fatalf("Ahem has %U of its own, so this test proves nothing", r)
+		}
+	}
+	black := style.RGBA{A: 1}
+	run := DrawText{
+		At: Point{X: upx(t, 30), Y: upx(t, 100)}, Text: "X\u2011\u2000X",
+		Face: face, Size: upx(t, 20), Color: black,
+	}
+	assertOps(t, blockFills([]Op{run}), []Op{
+		FillRect{Rect: Rect{upx(t, 30), upx(t, 84), upx(t, 20), upx(t, 20)}, Color: black},
+		FillRect{Rect: Rect{upx(t, 50), upx(t, 84), upx(t, 20), upx(t, 20)}, Color: black},
+		FillRect{Rect: Rect{upx(t, 80), upx(t, 84), upx(t, 20), upx(t, 20)}, Color: black},
+	})
+
+	// And a character Ahem cannot draw at all is still refused: it shapes to
+	// .notdef, which is not in the table whatever its outline, so the run stays
+	// text and is compared as such.
+	run.Text = "X\u0627X"
+	got := blockFills([]Op{run})
+	if len(got) != 1 {
+		t.Fatalf("a run with a character Ahem lacks became %d ops, want the run", len(got))
+	}
+	if _, ok := got[0].(DrawText); !ok {
+		t.Errorf("a run with a character Ahem lacks became %T", got[0])
+	}
+}
+
 // TestBlockFillsLeavesTextAlone pins what the conversion refuses, which is the
 // half that keeps the oracle sharp.
 func TestBlockFillsLeavesTextAlone(t *testing.T) {

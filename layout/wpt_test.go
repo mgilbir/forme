@@ -1433,7 +1433,15 @@ const wptEnv = "WPT_TESTS"
 // §4.1.1 lets a collapsed space keep its own, so either box may allow it.
 // See layout/flatten.go's spaceRunWraps. wpt.fyi: Chrome and Firefox pass,
 // Safari fails.
-const wptCleanPassBaseline = 5985
+//
+// **5985 to 5987, for the glyph a stand-in draws**. The comparison, not the
+// engine. line-break/line-break-anywhere-overrides-uax-behavior-013 and -014
+// set U+2011 in Ahem, which has none; the shaper draws Ahem's U+2010 for it,
+// as HarfBuzz does, and that is an em square. The oracle's table of Ahem's
+// rectangles was keyed by character, so the run stayed text and did not match
+// the reference's square. It is keyed by glyph as well now. See
+// layout/blockglyph_test.go. wpt.fyi: all three browsers pass both.
+const wptCleanPassBaseline = 5987
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
