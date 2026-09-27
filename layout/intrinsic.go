@@ -288,6 +288,11 @@ func (l *layouter) measureWidths(b *Box) intrinsicWidths {
 	if b.IsText() {
 		return l.textWidths(b)
 	}
+	if b.Inner == InnerMath && !isMathToken(b) {
+		// A formula's inline sizes are its algorithm's: see mathlayout.go.
+		w := l.mathContentSize(b)
+		return intrinsicWidths{min: w.min, max: w.max}
+	}
 	// A table's two widths come from its grid rather than from stacking its
 	// children, and §17.4's wrapper is as wide as the table inside it. Both are
 	// next door in tablelayout.go, which is where the grid is.

@@ -164,7 +164,7 @@ func inputTypeOf(n *html.Node) string {
 
 // controlKindOf classifies an element.
 func controlKindOf(n *html.Node) controlKind {
-	if n == nil || n.Type != html.ElementNode {
+	if n == nil || n.Type != html.ElementNode || n.Namespace != html.NamespaceHTML {
 		return controlNone
 	}
 	switch ascii.Lower(n.Name) {

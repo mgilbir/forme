@@ -89,6 +89,12 @@ type Fragment struct {
 	// which of its cells took part in their alignment. See firstRowBaseline.
 	tableBaseline, tableRowTop style.Unit
 	hasTableBaseline           bool
+	// mathBaseline is a MathML box's alphabetic baseline, measured down its
+	// content box, and hasMathBaseline says it is one: the formula's own
+	// answer to where its baseline is, which the lines of the tokens inside it
+	// are not. See mathlayout.go.
+	mathBaseline    style.Unit
+	hasMathBaseline bool
 	// column is which column of its parent's pour this fragment was put in,
 	// counted from one, and nought where its parent was not poured — a box
 	// whose parent is not a multicol container, or is one that laid its
@@ -447,6 +453,18 @@ func (l *layouter) paintLengths() style.LengthContext {
 }
 
 type layouter struct {
+	// What laying out MathML keeps for the run: each face's MATH table, read
+	// once; each box's class as an embellished operator or a space-like
+	// element, and each core operator's properties, which every row asks of
+	// its children; each box's intrinsic sizes; the token whose text block
+	// layout is laying out as a line rather than as MathML. See mathlayout.go.
+	mathTables  map[*shape.Face]*shape.MathTable
+	mathClasses map[*Box]mathClass
+	mathOps     map[*Box]*mathOp
+	mathEnds    map[*Box]mathEnds
+	mathSizes   map[*Box]mathSize
+	mathTextBox *Box
+
 	// languageMemo answers the language questions each text box asks. See
 	// languageMemo.
 	languageMemo
@@ -1430,6 +1448,12 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 	topOpen, bottomOpen bool, origin flow) (height style.Unit,
 	hoistTop, hoistBottom marginRun, placed bool) {
 
+	if b.Inner == InnerMath && b != l.mathTextBox {
+		// A MathML box's children are not a flow either: its MathML Core
+		// algorithm places them. A <math> root, or any MathML box block
+		// layout reaches, lays its content out here. See mathlayout.go.
+		return l.mathBlockContent(b, parent, width, topOpen, bottomOpen, origin), marginRun{}, marginRun{}, true
+	}
 	if b.Inner == InnerTable {
 		// A table's children are not a flow at all: they are the grid, and §17.5
 		// places them from the columns and rows rather than by stacking them.

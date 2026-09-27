@@ -102,7 +102,7 @@ var linkSchemes = map[string]bool{"http": true, "https": true, "mailto": true}
 // href is refused — which is reported here, once per element, because this is
 // the one place every element passes through once.
 func (b *boxBuilder) hyperlinkOf(n *html.Node) *hyperlink {
-	if n == nil || n.Type != html.ElementNode || n.Name != "a" {
+	if n == nil || n.Type != html.ElementNode || n.Namespace != html.NamespaceHTML || n.Name != "a" {
 		return nil
 	}
 	href, ok := n.AttrExact("href")

@@ -51,7 +51,7 @@ import (
 // root, and the first test catches it.
 func isAtomicInline(b *Box) bool {
 	return b.Outer == OuterInline &&
-		(b.Inner == InnerFlowRoot || b.Inner == InnerFlex || b.Inner == InnerGrid)
+		(b.Inner == InnerFlowRoot || b.Inner == InnerFlex || b.Inner == InnerGrid || b.Inner == InnerMath)
 }
 
 // atomicItem lays out an atomic inline and makes the line item for it.
@@ -313,6 +313,11 @@ func containerFirstBaseline(f *Fragment) (style.Unit, bool) {
 // does an absolutely positioned caption hanging off it.
 func lastLineBaseline(f *Fragment) (style.Unit, bool) {
 	inset := f.Border.Top.Add(f.Padding.Top)
+	if f.hasMathBaseline {
+		// A formula's baseline is its alphabetic baseline, which its layout
+		// decided; the lines inside it are its tokens', each in its place.
+		return inset.Add(f.mathBaseline), true
+	}
 	for i := len(f.Children) - 1; i >= 0; i-- {
 		c := f.Children[i]
 		if c.Box == nil || c.Box.outOfFlow() {

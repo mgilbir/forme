@@ -885,3 +885,19 @@ func (m *MathTable) validAssembly(a MathGlyphAssembly) bool {
 	_, ok := m.connectors(a)
 	return ok
 }
+
+// ScriptOffsets is what the face's OS/2 table recommends a subscript and a
+// superscript be shifted by — ySubscriptYOffset, down from the baseline, and
+// ySuperscriptYOffset, up — in font units, and false where the face has no
+// OS/2 table long enough to say. MathML Core §5.1 falls back to them for
+// subscriptShiftDown and superscriptShiftUp where a font has no MATH table.
+func (f *Face) ScriptOffsets() (sub, super int, ok bool) {
+	if f == nil || f.data == nil {
+		return 0, 0, false
+	}
+	os2 := font.SFNTTables(f.data)["OS/2"]
+	if len(os2) < 26 {
+		return 0, 0, false
+	}
+	return signed16(font.Be16(os2, 16)), signed16(font.Be16(os2, 24)), true
+}

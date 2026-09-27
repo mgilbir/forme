@@ -459,6 +459,7 @@ func useFace(face *Face) {
 	for gid := 2; gid < min(face.NumGlyphs(), 64); gid++ {
 		_, _, _, _, _ = face.GlyphExtents(gid)
 	}
+	_, _, _ = face.ScriptOffsets()
 	// The MATH table, where the font has one: every question, for glyphs in
 	// range and out. See FuzzMathTable for a target on the table alone.
 	if m, err := face.MathTable(); err == nil && m != nil {

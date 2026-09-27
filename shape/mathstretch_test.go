@@ -373,3 +373,35 @@ func FuzzMathTable(f *testing.F) {
 		m.Limits()
 	})
 }
+
+// TestScriptOffsetsAreOS2s: ySubscriptYOffset and ySuperscriptYOffset, which
+// MathML Core falls back to where a face has no MATH table, and nothing where
+// the face has no OS/2 table long enough to state them.
+func TestScriptOffsetsAreOS2s(t *testing.T) {
+	os2 := make([]byte, 96)
+	binary.BigEndian.PutUint16(os2[16:], uint16(0xFF00)) // -256
+	binary.BigEndian.PutUint16(os2[24:], 300)
+	for _, tc := range []struct {
+		table    []byte
+		sub, sup int
+		ok       bool
+	}{
+		{os2, -256, 300, true},
+		{os2[:25], 0, 0, false},
+		{nil, 0, 0, false},
+	} {
+		extra := map[string][]byte{}
+		if tc.table != nil {
+			extra["OS/2"] = tc.table
+		}
+		f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{Glyphs: []fonttest.Glyph{{Rune: 'a', Advance: 500}}, Extra: extra}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sub, sup, ok := f.ScriptOffsets()
+		if sub != tc.sub || sup != tc.sup || ok != tc.ok {
+			t.Errorf("an OS/2 of %d bytes: ScriptOffsets() = %d, %d, %v; want %d, %d, %v",
+				len(tc.table), sub, sup, ok, tc.sub, tc.sup, tc.ok)
+		}
+	}
+}

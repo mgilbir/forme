@@ -139,6 +139,17 @@ const (
 	// It is still reported, and at Warn like the one above, because an author
 	// who asked for a face and did not get it wants to know either way.
 	RuleFontSubstituted Rule = "font-substituted"
+	// RuleMathFallback is a formula set in a face with no MATH table, which
+	// MathML Core §5 lays out by fallback constants — multiples of the rule
+	// thickness, fractions of the x-height, OS/2's script offsets — and in
+	// which no operator can be stretched.
+	//
+	// It is not an unsupported rule, for RuleFontSubstituted's reason: the
+	// fallbacks are the specification's own, and what is drawn is what it
+	// asks for. It is reported because §5 says in as many words that it is no
+	// guarantee of good rendering, and an author who meant a math font to set
+	// the formula wants to know it did not.
+	RuleMathFallback Rule = "math-fallback"
 	// RuleCapsSynthesised is small capitals this engine made out of the
 	// capitals, because the face declares none of its own.
 	//
@@ -339,6 +350,7 @@ var defaultSeverity = map[Rule]Severity{
 	RuleUnsupportedValue:    Warn,
 	RuleFontFallback:        Warn,
 	RuleFontSubstituted:     Warn,
+	RuleMathFallback:        Warn,
 	// Synthesised small capitals warn for the reason the rule's declaration
 	// gives: the page is what CSS asked for and is not what the author chose a
 	// face for, and it carries the uppercase text.

@@ -692,6 +692,11 @@ type firstLine struct {
 // baseline, and a caption above the grid is not the grid's first row.
 func firstLineIn(f *Fragment) (firstLine, bool) {
 	inset := f.Border.Top.Add(f.Padding.Top)
+	if f.hasMathBaseline {
+		// A formula's first baseline is its alphabetic baseline; see
+		// lastLineBaseline.
+		return firstLine{top: inset, baseline: inset.Add(f.mathBaseline)}, true
+	}
 	if f.hasTableBaseline {
 		return firstLine{top: inset.Add(f.tableRowTop), baseline: inset.Add(f.tableBaseline)}, true
 	}

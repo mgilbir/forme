@@ -290,12 +290,10 @@ func resolveReplaced(root *Box, res ResourceResolver, base documentBase, rec *Re
 
 func (l *replacedLoader) walk(b *Box) {
 	if b.Element != nil && b.Element.Namespace != html.NamespaceHTML {
-		// An <svg> is its source. A <math>'s content is MathML, which nothing
-		// here lays out: the element is the empty box it was when its content
-		// was kept as source too, and said so. Neither is an HTML element, and
-		// neither is any MathML element that shares a name with one.
-		if b.Element.Foreign != "" || b.Element.Namespace == html.NamespaceMathML &&
-			ascii.EqualFold(b.Element.Name, "math") {
+		// An <svg> is its source. It is not an HTML element, and neither is
+		// any MathML element that shares a name with one: a MathML <img> or
+		// <video> is laid out as MathML.
+		if b.Element.Foreign != "" {
 			l.foreign(b)
 		}
 		l.markerImage(b)
