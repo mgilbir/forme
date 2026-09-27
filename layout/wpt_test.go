@@ -1423,7 +1423,17 @@ const wptEnv = "WPT_TESTS"
 //
 // Where the browsers do not agree the engine keeps UAX #14 rather than pick
 // one of them, and the two are accepted failures.
-const wptCleanPassBaseline = 5984
+//
+// **5984 to 5985, for a space a nowrap box collapses**.
+// floats/floats-line-wrap-shifted-001 writes "1111 <nobr> 2222 ... 3333"
+// in a box twelve characters wide, and the line never broke after "1111":
+// the paragraph's space is kept and the nobr's collapses into it, and only
+// the nobr was asked whether a line may end after the run. CSS Text §5.1
+// gives an opportunity made by a space to the box the space is in, and
+// §4.1.1 lets a collapsed space keep its own, so either box may allow it.
+// See layout/flatten.go's spaceRunWraps. wpt.fyi: Chrome and Firefox pass,
+// Safari fails.
+const wptCleanPassBaseline = 5985
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

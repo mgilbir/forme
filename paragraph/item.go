@@ -794,6 +794,28 @@ type State struct {
 	//
 	// The caller resolves it, because the ancestry is the caller's tree.
 	AfterBox Ref
+	// AfterSpaceBox is the box of the space that §4.1.1 kept, while
+	// AfterCollapsibleSpace says a run of collapsible spaces is in progress: the
+	// first space of the run, which every later one collapsed into. AfterBox is
+	// the box of the run's *last* space, and the two differ exactly where the
+	// run crosses a box boundary.
+	//
+	// It is here for the same rule as AfterBox, read for a different kind of
+	// opportunity. CSS Text §5.1: "for soft wrap opportunities created by
+	// characters that disappear at the line break (e.g. U+0020 SPACE),
+	// properties on the box directly containing that character control the
+	// line breaking at that opportunity". The run's opportunity at its end is
+	// created by the space that is still there, and §4.1.1 lets each space that
+	// collapsed into it keep its own, "if any" — so a line may end after the
+	// run where either box lets it. "1111 <nobr> 2222</nobr>" keeps the
+	// paragraph's space and collapses the nobr's, and asking the nobr alone
+	// set it on one line.
+	//
+	// Nil at the start of a context, where §4.1.2 removes the space and there
+	// is none to have kept. It means nothing while AfterCollapsibleSpace is
+	// false, and is not cleared then: the next collapsible space is not
+	// collapsed into anything, so it is kept, and it sets this afresh.
+	AfterSpaceBox Ref
 }
 
 // StartOfContext is the state an inline formatting context begins in.

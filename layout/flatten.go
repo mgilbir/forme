@@ -391,9 +391,19 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// Item.NoWrap conflates the two: the rewind branch in the fill reads
 			// it and would decline to go back to the space before the span,
 			// where a break is perfectly legal.
+			//
+			// Except where the picture follows a run of collapsible spaces
+			// whose own opportunity a box lets a line take: then there are two
+			// opportunities at this one place, the picture's and the spaces',
+			// and §5.1 gives the second to the boxes the spaces are in. "1111
+			// <nobr> <img></nobr>" collapses the nobr's space into the
+			// paragraph's, and the paragraph's space may end the line in front
+			// of the picture whatever the nobr says about the boundary. See
+			// spaceRunWraps.
 			if prev, ok := state.AfterBox.(*Box); ok && item.BreakBefore {
 				if anc := commonAncestor(prev, child); anc != nil &&
-					!whiteSpaceFor(anc.Style).Wrap {
+					!whiteSpaceFor(anc.Style).Wrap &&
+					!(state.AfterCollapsibleSpace && spaceRunWraps(state)) {
 					item.BreakBefore = false
 				}
 			}
@@ -569,7 +579,13 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 				// before it is a different question and is left alone. §4.1.1's
 				// fourth rule collapses across an inline boundary, and a margin
 				// on the boundary does not make two spaces into one space each.
-				lead.BreakBefore = state.BreakOpportunity
+				//
+				// And the opportunity is still governed by white-space where it
+				// is taken, as it would have been at the first character: the
+				// margin moves where the line ends, not whether it may. "<nobr>a
+				// <span style='margin-left: 5px'>b</span></nobr>" broke in front
+				// of the margin, inside a box that says no line of it wraps.
+				lead.BreakBefore = state.BreakOpportunity && boundaryWraps(state, child)
 				state.BreakOpportunity = false
 				// And the boundary is spent: the text inside the box would
 				// otherwise ask UAX #14 about it again from AfterContext, and put
@@ -1023,6 +1039,13 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		pieceNoWrap := noWrap
 		if i == 0 {
 			pieceNoWrap = boundaryNoWrap
+		} else if noWrap && state.AfterCollapsibleSpace && boxWraps(state.AfterSpaceBox) {
+			// Inside the box, after a run of spaces that began in a box before
+			// it: the box's first piece was a space that collapsed into that
+			// one, and the kept space's opportunity is the paragraph's to allow
+			// even where this box refuses its own. See spaceRunWraps; the space
+			// that collapsed is this box's, so its answer is noWrap already.
+			pieceNoWrap = false
 		}
 		if p.Segment {
 			// A segment break that survived Phase I is a break the author
@@ -1188,8 +1211,17 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// and nothing else is the only place it could be read from.
 			continue
 		}
+		var keptSpace paragraph.Ref
+		if p.Collapsible {
+			// This space was not collapsed into one before it — the branch
+			// above skips those — so it is the one §4.1.1 keeps, and the box
+			// that decides whether a line may end after it. See
+			// State.AfterSpaceBox.
+			keptSpace = b
+		}
 		state = inlineState{
 			AfterCollapsibleSpace: p.Collapsible,
+			AfterSpaceBox:         keptSpace,
 			// Whether the piece ended on a character that would hold on to a
 			// picture after it. A piece is a run between two opportunities, so
 			// its last character is the one next to whatever comes next.
@@ -1230,6 +1262,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		AfterLetterUnit: state.AfterLetterUnit,
 		AfterBase:       state.AfterBase,
 		AfterBox:        b,
+		// Handed on as it stands: where this box's only pieces were spaces
+		// that collapsed into one before it, the space that was kept is still
+		// the one in the box before, and it is the run's whole opportunity.
+		AfterSpaceBox: state.AfterSpaceBox,
 	}
 }
 
@@ -1572,8 +1608,71 @@ func (l *layouter) boundaryWhiteSpace(b *Box, ws paragraph.WhiteSpace,
 			boundaryNoWrap = !whiteSpaceFor(gov.Style).Wrap
 			boundaryBreakSpaces = whiteSpaceFor(gov.Style).BreakSpaces
 		}
+		if in.AfterCollapsibleSpace {
+			// And the space in the box before is not always the one that made
+			// the opportunity. See spaceRunWraps.
+			boundaryNoWrap = !spaceRunWraps(in)
+		}
 	}
 	return boundaryNoWrap, boundaryBreakSpaces
+}
+
+// boundaryWraps reports whether white-space lets a line end at the boundary
+// in front of next, which is the box the state has just reached, for an
+// opportunity carried to it from the text before.
+//
+// CSS Text §5.1 has one rule for each kind of opportunity. One made by a run of
+// collapsible spaces belongs to the boxes the spaces are in — see
+// spaceRunWraps. Any other is "defined by the boundary between two characters
+// or atomic inlines", and "the white-space property on the nearest common
+// ancestor of the two characters controls breaking". A state that came from
+// nothing — the start of a context — has no boundary to govern, and nothing
+// is refused.
+func boundaryWraps(in inlineState, next *Box) bool {
+	prev, ok := in.AfterBox.(*Box)
+	if !ok || prev == nil {
+		return true
+	}
+	if in.AfterCollapsibleSpace {
+		return spaceRunWraps(in)
+	}
+	anc := commonAncestor(prev, next)
+	return anc == nil || whiteSpaceFor(anc.Style).Wrap
+}
+
+// spaceRunWraps reports whether white-space lets a line end after the run of
+// collapsible spaces the state is at the end of.
+//
+// CSS Text §5.1 gives an opportunity "created by characters that disappear at
+// the line break (e.g. U+0020 SPACE)" to "the box directly containing that
+// character", and a run of collapsible spaces that crosses a box boundary has
+// two such characters that matter. One is the space §4.1.1 kept, the first of
+// the run, in State.AfterSpaceBox. The other is the run's last space, in
+// State.AfterBox, which collapsed to nothing and "retains its soft wrap
+// opportunity, if any". Both opportunities fall at the same place, the end of
+// the run, and a line may end there where either box says it may.
+//
+// Asking only the last space's box was the defect: "1111 <nobr> 2222</nobr>"
+// keeps the paragraph's space, collapses the nobr's, and set "1111 2222" on one
+// line however narrow the paragraph — the nobr refused its own space's
+// opportunity and nothing asked about the paragraph's. Asking only the kept
+// space's box would be the mirror of it. The last row of
+// white-space-wrap-after-nowrap-001 writes
+// "<span class=normal><span class=nowrap>12345 </span> </span>67890" in a
+// nowrap div: the kept space is the nowrap span's, the collapsed one the
+// normal span's, and the reference breaks the line there.
+//
+// Where the run is all in one box the two are the same box and this is that
+// box's white-space. A state with neither — the start of a context, where
+// §4.1.2 removed the space — has no opportunity here to allow.
+func spaceRunWraps(in inlineState) bool {
+	return boxWraps(in.AfterBox) || boxWraps(in.AfterSpaceBox)
+}
+
+// boxWraps reports whether r is a box whose white-space lets its lines wrap.
+func boxWraps(r paragraph.Ref) bool {
+	b, ok := r.(*Box)
+	return ok && b != nil && whiteSpaceFor(b.Style).Wrap
 }
 
 // textAfter is the text that follows a box in its inline formatting context, up
