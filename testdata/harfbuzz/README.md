@@ -1,6 +1,6 @@
 # Shaping checked against HarfBuzz
 
-`shape/harfbuzz_test.go` shapes every line of six corpora, each with its own
+`shape/harfbuzz_test.go` shapes every line of seven corpora, each with its own
 font, and compares the result against what HarfBuzz answered for it.
 
 ## Why
@@ -67,14 +67,14 @@ needs a Go toolchain. This has to run on every change to the shaper, and an
 oracle that needs the right Python on the machine is one that quietly stops
 running.
 
-The six expectation files come to about 450 KB together, and the five extra
+The seven expectation files come to about 450 KB together, and the five extra
 fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 
 ## Files
 
 | file | what it is |
 | --- | --- |
-| `corpus.py`, `corpus_arabic.py`, `corpus_khmer.py`, `corpus_javanese.py`, `corpus_balinese.py`, `corpus_tibetan.py` | generate the six corpora |
+| `corpus.py`, `corpus_arabic.py`, `corpus_khmer.py`, `corpus_javanese.py`, `corpus_balinese.py`, `corpus_tibetan.py` | generate six of the seven corpora; the seventh, `ignorables.txt`, is written by hand |
 | `corpus.txt`, `arabic.txt`, `khmer.txt`, `javanese.txt`, `balinese.txt`, `tibetan.txt` | the strings, one per line |
 | `shape.py` | shapes one corpus with one font and writes its expectations |
 | `*.expected.txt` | glyph, advance and offset for each, in font units |
@@ -82,6 +82,13 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `difffuzz.py` | generates text instead of listing it — see below |
 | `vertical.py`, `vertical.txt`, `vertical_features.txt`, `vertical.expected.txt` | text set upright, top to bottom — see below |
 | `vertical_fixture.py`, `fonts/Vertical*.ttf` | the three faces that oracle needs and no foundry made |
+| `cffink.py`, `cffink.expected.txt` | the ink of CFF glyphs — see below |
+| `cffink_fixture.py`, `fonts/CFFInk.otf` | the face that oracle needs and no foundry made |
+| `verticalinstance.py`, `verticalinstance.expected.txt` | a variable face set upright off its default, and a kern table's vertical subtables — see below |
+| `verticalinstance_fixture.py`, `fonts/VerticalVariable*.ttf`, `fonts/VerticalKern*.ttf` | the faces that oracle needs and no foundry made |
+| `colrink.py`, `colrink.expected.txt` | the ink of colour glyphs, painted from COLR or read from CBDT — see below |
+| `colrink_fixture.py`, `fonts/ColourInk*.ttf`, `fonts/BitmapInk.ttf` | the faces that oracle needs and no foundry made |
+| `ignorables_fixture.py`, `fonts/Ignorables.ttf`, `ignorables.txt`, `ignorables.expected.txt` | a corpus of the characters nothing is drawn for, shaped by `shape.py` in the face it needs — see below |
 
 Each corpus is weighted towards the places shaping decides something rather than
 towards realistic prose. Prose exercises one path many times; a grid exercises
@@ -116,6 +123,8 @@ many paths once.
   and the mark glyph sets that were not read at all. The first two were silent,
   because a lookup is named by index and cutting the list breaks every reference
   past the cut.
+- **Ignorables** — the characters nothing is drawn for, in a face built for
+  them whose rules name some and not others: see below.
 
 ## The default model
 
@@ -147,12 +156,94 @@ that moves glyphs down the page, the marks and spaces of a face with no vertical
 metrics and no positioning. They are generated, carry no licence of their own,
 and rebuild to the same bytes.
 
-One exception is listed, in `inkUnread`: a CFF face with no VORG is hung by its
-ink in HarfBuzz, and this package does not read a CFF glyph's ink, so Unifont's
-origins are asserted to be its ascender instead. Everything else about its
-glyphs is compared. The exception fails if it stops being needed.
+There used to be one exception, Unifont: a CFF face with no VORG is hung by its
+ink, and this package did not read a CFF glyph's ink, so its origins were
+asserted to be its ascender instead. It reads it now (below), and Unifont's
+origins are held to HarfBuzz's like every other face's.
 
 `make hbvertical` regenerates it.
+
+## The ink of a CFF glyph
+
+A CFF glyph's box is not written down anywhere: the only way to know where it
+draws is to run its charstring, and `shape/cffink.go` runs it as HarfBuzz's
+extents do. `cffink.py` asks HarfBuzz for the extents of every glyph of
+`fonts/CFFInk.otf` and of a sample of every CFF face in the corpora — the six
+Noto CJK faces and the two Unifonts — and shapes a few strings in the fixture
+across the page and down it, where HarfBuzz places the marks and hangs the
+glyphs by their ink. `shape/cffink_test.go` holds the package to all of it.
+
+`CFFInk.otf` is built by `cffink_fixture.py`: a glyph for each thing a
+charstring can say that the real faces do not — every path operator at every
+argument count, the flex operators, widths, hint masks, numbers on a half and
+past 2^24, subroutines nested to the limit and past it, seac in each of its
+cases, the ways a charstring fails, and a glyph of 199,999 operators beside one
+of 200,000, HarfBuzz's cap. It is generated, carries no licence of its own, and
+rebuilds to the same bytes.
+
+The whole of every corpus face — 252,617 glyphs — was compared out of tree when
+the reader was written, and every one agrees; the file holds a sample so that
+it stays small.
+
+`make hbcffink` regenerates it.
+
+## Upright text away from the default instance
+
+A face from `LoadInstance` is a static font cut at one location, and a glyph
+set upright in it has to advance and hang where HarfBuzz advances and hangs it
+at that location: by VVAR where the face has it, by the vertical phantom
+points gvar moves where it does not, and from its top phantom point either
+way. `verticalinstance.py` asks HarfBuzz for those, at four weights each, of
+`fonts/VerticalVariable.ttf` and `fonts/VerticalVariableNoVVAR.ttf` — one
+face with VVAR and without, built by `verticalinstance_fixture.py` — and of
+Noto Sans JP's variable face (`make noto-fonts`), and shapes a few strings in
+each top to bottom. It also shapes `fonts/VerticalKern.ttf`, whose kern table
+kerns along a horizontal line, down a vertical one and across it, with and
+without 'vkrn' and with kerning turned off, and the same face without 'vkrn' in
+its layout tables and with a mark attached in GPOS,
+`fonts/VerticalKernNoVkrn.ttf`. `shape/verticalinstance_test.go` holds the package to all of
+it.
+
+A composite that takes its metrics from a component is given the
+component's phantom points by HarfBuzz off the default instance, and its own
+by fontTools' instancer. This package follows HarfBuzz, by the user's choice;
+`takesComponentMetrics` names the glyphs that hold the case, and
+`testdata/varinstance`'s `followsHarfBuzz` the two advances in Noto Sans at
+weight 700 where it departs from fontTools there.
+
+`make hbverticalinstance` regenerates it.
+
+## The ink of a colour glyph
+
+A colour glyph's box is where it paints, and HarfBuzz measures it by painting
+it: a COLRv1 glyph through its paint graph — every transform, clip, group and
+composite — and a COLRv0 glyph as the union of its layers, unless the table
+states a clip box, and a CBDT glyph by the metrics in front of its image in the
+largest strike. `shape/colrink.go` and `shape/bitmapink.go` do the same.
+`colrink.py` asks HarfBuzz for the extents of every glyph of
+`fonts/ColourInk.ttf` — at its default and at three weights, since its
+variable paints move — of `fonts/ColourInkStatic.ttf`, the same face not
+varying with a composite LoadInstance cannot instance, and of
+`fonts/BitmapInk.ttf`, all built by `colrink_fixture.py`, and shapes a few
+strings in the first across the page and down it, where HarfBuzz places the
+marks and hangs the glyphs by their painted boxes. `shape/colrink_test.go` holds the package to all of it.
+
+Every glyph of the 24 colour faces in the Google Fonts tree was compared out of
+tree when the readers were written, and every one agrees; the fixtures cover
+the paint formats and the cases those faces do not reach.
+
+`make hbcolrink` regenerates it.
+
+## The characters nothing is drawn for
+
+`ignorables.txt` is shaped by `shape.py` like the other corpora, in
+`fonts/Ignorables.ttf`, which `ignorables_fixture.py` builds: a face whose
+rules name the combining grapheme joiner, the joiners, the tag characters and
+the other characters nothing is drawn for, and put a mark on a ligature built
+from a multiple substitution. Each string is a place where HarfBuzz decides
+whether a rule steps over such a character, matches it, or is stopped by it —
+the last shaping differences the Google Fonts sweep found, each in one face. It
+is regenerated by `make hbshaping`.
 
 ## Why two scripts for one engine
 
@@ -163,7 +254,7 @@ overfitted to it, and the defect that found was in code five years older than th
 engine: a vowel sign written as one character and drawn as two marks on opposite
 sides of the letter was being taken apart and then put back together.
 
-All six corpora must now agree exactly. The ratchet the test still supports was
+All seven corpora must now agree exactly. The ratchet the test still supports was
 used while the engine was being written and is documented there for the next time
 something lands in pieces.
 

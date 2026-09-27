@@ -479,17 +479,18 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 // nextNotIgnored is the next position a lookup with these flags looks at while
 // matching its input.
 //
-// want is the glyph the caller is about to compare against. A join control
-// standing in the way is stepped over — unless the lookup names that very glyph,
-// in which case it is what the lookup was looking for and is matched rather than
-// skipped. A face that declares a ligature over a joiner means it.
+// want is the glyph the caller is about to compare against. A character nothing
+// is drawn for standing in the way is stepped over where stepsOver allows —
+// unless the lookup names that very glyph, in which case it is what the lookup
+// was looking for and is matched rather than skipped. A face that declares a
+// ligature over a joiner means it.
 func (sh shaper) nextNotIgnored(buf []Glyph, from, flags, want int) int {
 	end := sh.end(buf)
 	for i := from; i < end; i++ {
 		if sh.ignores(flags, buf[i]) {
 			continue
 		}
-		if buf[i].GID != want && sh.stepsOverJoiner(i, false) {
+		if sh.stepsOver(buf[i], i, false) && (buf[i].GID != want || !sh.maskAllows(buf[i])) {
 			continue
 		}
 		return i
@@ -523,13 +524,10 @@ type ruleInput [maxContextLength]int
 //
 // An input longer than maxContextLength does not match, as in HarfBuzz.
 //
-// Unlike the ligature walk above this cannot tell whether a joiner in the way is
-// the glyph the rule wanted: the rule's items are compared by the caller, and
-// may be classes rather than glyphs. A joiner the feature allows to be stepped
-// over is therefore always stepped over here, never matched. It costs a font's
-// contextual rule that names a joiner explicitly *and* is declared under a
-// feature that steps over joiners, which is a combination that contradicts
-// itself.
+// A character nothing is drawn for in the way is stepped over where stepsOver
+// allows, unless it is what the rule's item there matches: the item is asked
+// first, as HarfBuzz asks it, and a joiner a rule names — by glyph or by class
+// — is matched rather than stepped over.
 func (sh shaper) matchInput(buf []Glyph, at, count, flags int, out *ruleInput,
 	match func(k, pos int) bool) bool {
 
@@ -544,7 +542,10 @@ func (sh shaper) matchInput(buf []Glyph, at, count, flags int, out *ruleInput,
 			if pos >= end {
 				return false
 			}
-			if !sh.ignores(flags, buf[pos]) && !sh.stepsOverJoiner(pos, false) {
+			// The first glyph is the one the lookup is being applied at, and is
+			// compared whatever it is.
+			if !sh.ignores(flags, buf[pos]) && (k == 0 ||
+				!(sh.stepsOver(buf[pos], pos, false) && !(sh.maskAllows(buf[pos]) && match(k, pos)))) {
 				break
 			}
 			pos++
@@ -626,7 +627,7 @@ func (sh shaper) sameLigaturePart(buf []Glyph, at, pos, flags int, base *ligbase
 }
 
 // matchLookahead is matchInput for the part of a rule that says what must
-// *follow* what it replaces, which steps over joiners in every case and whose
+// *follow* what it replaces, which is context — see stepsOver — and whose
 // positions nothing needs afterwards.
 func (sh shaper) matchLookahead(buf []Glyph, from, count, flags int, match func(k int, g Glyph) bool) bool {
 	end := sh.end(buf)
@@ -636,7 +637,7 @@ func (sh shaper) matchLookahead(buf []Glyph, from, count, flags int, match func(
 			if pos >= end {
 				return false
 			}
-			if !sh.ignores(flags, buf[pos]) && !sh.stepsOverJoiner(pos, true) {
+			if !sh.ignores(flags, buf[pos]) && !(sh.stepsOver(buf[pos], pos, true) && !match(k, buf[pos])) {
 				break
 			}
 			pos++
@@ -650,8 +651,8 @@ func (sh shaper) matchLookahead(buf []Glyph, from, count, flags int, match func(
 }
 
 // matchBacktrack compares the glyphs before a position, nearest first, which
-// is the order the format stores a backtrack sequence in. It is context, so it
-// steps over joiners.
+// is the order the format stores a backtrack sequence in. It is context; see
+// stepsOver.
 //
 // A position may be negative, which is a glyph the pass has already settled and
 // so is behind the ones the lookup was given: a rule at the front of what is
@@ -667,7 +668,7 @@ func (sh shaper) matchBacktrack(buf []Glyph, before, count, flags int, match fun
 			if pos < low {
 				return false
 			}
-			if !sh.ignores(flags, sh.glyphAt(buf, pos)) && !sh.stepsOverJoiner(pos, true) {
+			if g := sh.glyphAt(buf, pos); !sh.ignores(flags, g) && !(sh.stepsOver(g, pos, true) && !match(k, g)) {
 				break
 			}
 			pos--

@@ -25,6 +25,15 @@ import "github.com/mgilbir/forme/font"
 // instead, and each glyph after it rises with it: HarfBuzz chains the whole run
 // together as a cursive joint would, and the heights accumulate.
 //
+// A subtable is for a horizontal line or a vertical one, and applies only to
+// a run of its own direction: down the page the halves go on the advances and
+// the offsets along it, and one that kerns across it moves the glyph sideways.
+// HarfBuzz applies the vertical ones where 'vkrn' is asked for — its feature,
+// as 'kern' is the horizontal one's — and only where the feature is somewhere
+// in the face's layout tables, since unlike 'kern' it has no fallback of its
+// own; which, beside a GPOS that does not offer it, makes a face that lists
+// 'vkrn' in its GSUB the one that kerns down the page by this table.
+//
 // Only format 0, the list of pairs, is read, in either version of the table.
 // Format 2's class arrays and Apple's state-machine formats are not: a face
 // stating one is kerned by its format 0 subtables and no others, where
@@ -45,11 +54,13 @@ type legacyKern struct {
 }
 
 // legacyKernSubtable is one format 0 subtable: its pairs, sorted as the
-// format requires, and whether it kerns across the line.
+// format requires, whether it kerns across the line, and whether it is for a
+// vertical one.
 type legacyKernSubtable struct {
-	pairs []byte
-	n     int
-	cross bool
+	pairs    []byte
+	n        int
+	cross    bool
+	vertical bool
 }
 
 // present reports whether the table is one HarfBuzz applies.
@@ -119,11 +130,12 @@ func (k *legacyKern) add(sub []byte, format byte, horizontal, cross bool) {
 	if cross {
 		k.crossStream = true
 	}
-	if format != 0 || !horizontal || len(sub) < 8 {
+	if format != 0 || len(sub) < 8 {
 		return
 	}
 	n := min(font.Be16(sub, 0), (len(sub)-8)/6)
-	k.subtables = append(k.subtables, legacyKernSubtable{pairs: sub[8 : 8+6*n], n: n, cross: cross})
+	k.subtables = append(k.subtables, legacyKernSubtable{pairs: sub[8 : 8+6*n], n: n, cross: cross,
+		vertical: !horizontal})
 }
 
 // value is what the subtable states for a pair, or zero: the pairs are sorted
@@ -146,24 +158,44 @@ func (st *legacyKernSubtable) value(left, right int) int {
 	return 0
 }
 
-// applyLegacyKern applies the kern table over a run, subtable by subtable.
-// HarfBuzz's hb_kern_machine_t: each glyph is paired with the next one that is
-// not a mark, and the walk moves on to that one.
+// applyLegacyKern applies the kern table over a run, subtable by subtable,
+// each subtable of the run's direction. HarfBuzz's hb_kern_machine_t: each
+// glyph is paired with the next one that is not a mark, and the walk moves on
+// to that one.
 //
 // The table's pairs are left and right as they are drawn, not first and second
 // as they are written, so a right-to-left run is walked from its end — as
 // HarfBuzz walks it, having turned the buffer round for the table. The glyph
 // on the left takes the first half and the one on the right the second.
-func (sh shaper) applyLegacyKern(buf []Glyph) {
+//
+// pairs says the kerning feature is on. Where it is off no pair is kerned, but
+// a subtable that kerns across the line still ties the run together, as
+// HarfBuzz ties it before it asks any glyph's mask: which matters where
+// something was attached before, since the tie replaces the attachment.
+func (sh shaper) applyLegacyKern(buf []Glyph, pairs bool) {
+	vertical := sh.features.Vertical
 	at := func(k int) int {
 		if sh.rtl {
 			return len(buf) - 1 - k
 		}
 		return k
 	}
-	chained := false
+	chained, crossed := false, false
+	// Whether anything hangs from anything yet: HarfBuzz propagates offsets
+	// down the chains only where an attachment asked for it, which the chain
+	// below does not by itself do. See the end of this function.
+	attached := false
+	for _, c := range sh.gp.chain {
+		if c != 0 {
+			attached = true
+			break
+		}
+	}
 	for s := range sh.l.legacyKern.subtables {
 		st := &sh.l.legacyKern.subtables[s]
+		if st.vertical != vertical {
+			continue
+		}
 		if st.cross && !chained {
 			// The first subtable that kerns across the line ties the run into
 			// one chain, so that a glyph raised carries every glyph after it.
@@ -177,7 +209,7 @@ func (sh shaper) applyLegacyKern(buf []Glyph) {
 				}
 			}
 		}
-		for k := 0; k < len(buf); {
+		for k := 0; pairs && k < len(buf); {
 			n := k + 1
 			for n < len(buf) && sh.l.isMark(buf[at(n)]) {
 				n++
@@ -187,17 +219,38 @@ func (sh shaper) applyLegacyKern(buf []Glyph) {
 			}
 			i, j := at(k), at(n)
 			if v := st.value(buf[i].GID, buf[j].GID); v != 0 {
-				if st.cross {
+				first := v >> 1
+				second := v - first
+				switch {
+				case st.cross && !vertical:
 					buf[j].YOffset = sh.f.scale(v)
-				} else {
-					first := v >> 1
-					second := v - first
+					crossed = true
+				case st.cross:
+					buf[j].XOffset = sh.f.scale(v)
+					crossed = true
+				case !vertical:
 					buf[i].XAdvance += sh.f.scale(first)
 					buf[j].XAdvance += sh.f.scale(second)
 					buf[j].XOffset += sh.f.scale(second)
+				default:
+					buf[i].YAdvance += sh.f.scale(first)
+					buf[j].YAdvance += sh.f.scale(second)
+					buf[j].YOffset += sh.f.scale(second)
 				}
 			}
 			k = n
+		}
+	}
+	// The chain carries an offset only once a pair has been kerned across the
+	// line, or something was attached before: HarfBuzz ties the run together
+	// without saying that anything is attached, and so propagates nothing
+	// where no cross-stream pair applied. Down the page that is visible,
+	// since each glyph's offset across it is where it is hung, and a mark
+	// chained to its base would be hung from the base's hanging point as well
+	// as its own.
+	if chained && !crossed && !attached {
+		for i := range buf {
+			sh.gp.kind[i], sh.gp.chain[i] = 0, 0
 		}
 	}
 }

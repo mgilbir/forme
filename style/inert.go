@@ -88,8 +88,8 @@ type inertValue struct {
 	also string
 	// always marks a property whose *every* value asks for the page that is
 	// already there, so that there is nothing to compare. It is a different
-	// claim from produced and a rarer one — see text-orientation, which is the
-	// only entry that makes it.
+	// claim from produced and a rarer one — see transform-origin and
+	// backface-visibility, the two entries that make it.
 	always bool
 	// initial is the property's initial value, when it differs from produced.
 	// Empty means the two are the same.
@@ -168,10 +168,24 @@ var inertValues = map[string]inertValue{
 	// 4 §3's opacity was here and is not any more — it is implemented, and what
 	// it cannot express is reported at the box that asked for it rather than at
 	// the declaration. See layout/opacity.go.
-	"filter":              {produced: "none", because: "nothing is filtered"},
-	"transform":           {produced: "none", because: "nothing is transformed"},
-	"transform-style":     {produced: "flat", because: "there is no 3D rendering context"},
-	"backface-visibility": {produced: "visible", because: "nothing is rotated away from the viewer"},
+	"filter":          {produced: "none", because: "nothing is filtered"},
+	"transform":       {produced: "none", because: "nothing is transformed"},
+	"transform-style": {produced: "flat", because: "there is no 3D rendering context"},
+	// backface-visibility is the second property whose every value is inert,
+	// and for transform-origin's reason (below). It says whether a box is drawn
+	// when it faces away from the viewer, and CSS Transforms 2 makes a box face
+	// away only when its accumulated 3D transformation turns it round. So
+	// a document declaring "hidden" either declares a transform too — which is
+	// reported, at that declaration — or asks for a box that is never
+	// back-facing to be hidden when it is. It is not a grouping property and
+	// makes no stacking context, so there is nothing else in it to lose. It was
+	// listed with "visible" produced, so "hidden" was reported on documents
+	// with no transform anywhere: the suite's
+	// opacity-change-parent-stacking-context pair writes it on a box that is
+	// never turned. If transform is ever implemented, this entry has to change
+	// with it.
+	"backface-visibility": {always: true,
+		because: "nothing is transformed, so no box ever faces away from the viewer"},
 
 	// CSS Text Decoration 4 §2.6. Decorations are drawn straight through, which
 	// is a choice "auto" permits and "none" asks for outright — so both are
@@ -238,8 +252,9 @@ var inertValues = map[string]inertValue{
 	// above says so — and a perspective with nothing to see through it is the
 	// same fact again.
 	//
-	// transform-origin is the one property here whose *every* value is inert, and
-	// it is inert for a reason rather than by luck: the property does not do
+	// transform-origin is one of two properties here whose *every* value is
+	// inert (backface-visibility, above, is the other), and it is inert for a
+	// reason rather than by luck: the property does not do
 	// anything on its own. It names the point a transform turns about, so a
 	// document that declares it either declares a transform too — which is
 	// reported, at the declaration, by the entry above — or declares an origin for

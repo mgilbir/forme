@@ -210,15 +210,19 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	// came from, because the bounds it applies are on the document: two loaders
 	// were two budgets, and the caller's sheets and the document's own could
 	// each spend a whole one.
-	importer := &sheetLoader{res: in.Resources, rec: rec, media: asked, failed: map[string]bool{}}
+	// The document's base URL, which every reference in its markup and in its
+	// own stylesheets is relative to. See base.go.
+	base := documentBaseOf(doc)
+	importer := &sheetLoader{res: in.Resources, rec: rec, base: base, media: asked,
+		failed: map[string]bool{}}
 	if in.UserCSS != "" && importer.admit(in.UserCSS, "the user stylesheet", NoSource, "") {
 		// Through the importer like every other author-supplied sheet. A user
 		// stylesheet is CSS a person wrote, and an @import in one is the same
 		// request it is anywhere else — left unexpanded it was reported as an
 		// at-rule this engine does not apply, which is not what happens to the
 		// identical line in the document's own sheet.
-		for _, e := range importer.expandImports(authorSheet{name: "user", source: in.UserCSS}) {
-			sheets = append(sheets, parseSheet(rec, style.OriginUser, e.name, e.source))
+		for _, e := range importer.expandImports(authorSheet{name: "user", base: "user", source: in.UserCSS}) {
+			sheets = append(sheets, parseSheet(rec, style.OriginUser, e.name, e.base, e.source))
 		}
 	}
 	// A <style> element and a <link rel=stylesheet> are both author stylesheets,
@@ -228,7 +232,7 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	// interleaved in document order for that reason; see stylesheet.go for what
 	// a linked one is allowed to be read from.
 	for _, s := range documentStylesheets(doc, importer) {
-		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.source))
+		sheets = append(sheets, parseSheet(rec, style.OriginAuthor, s.name, s.base, s.source))
 	}
 	// A caller's own sheets go through the same expansion as the document's, so
 	// that "@import" means the same thing whichever side it was written on.
@@ -240,8 +244,11 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 		if !importer.admit(s.Source, what, NoSource, "") {
 			continue
 		}
-		for _, e := range importer.expandImports(authorSheet{name: s.Name, source: s.Source}) {
-			sheets = append(sheets, parseSheet(rec, style.OriginAuthor, e.name, e.source))
+		// Relative to the name the caller gave it, and not to the document's
+		// <base>: a <base> is the document's word about its own references,
+		// and a sheet the caller passed is not one of them.
+		for _, e := range importer.expandImports(authorSheet{name: s.Name, base: s.Name, source: s.Source}) {
+			sheets = append(sheets, parseSheet(rec, style.OriginAuthor, e.name, e.base, e.source))
 		}
 	}
 
@@ -253,11 +260,11 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	// disagree with this one about which blocks are live. See style.Prepared.
 	prepared := style.Prepare(sheets, asked)
 
-	base := in.Fonts
-	if base == nil {
-		base = StandardFonts()
+	fonts := in.Fonts
+	if fonts == nil {
+		fonts = StandardFonts()
 	}
-	fontSet := loadFontFaces(fontFacesOf(prepared.FontFaces), in.Resources, base, rec)
+	fontSet := loadFontFaces(fontFacesOf(prepared.FontFaces), in.Resources, fonts, rec)
 
 	// The sheet the document asked for, settled before it is styled. It
 	// changes no media query's answer — see asked — but the page has to be
@@ -270,7 +277,8 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	// property (lengthContext); a font-size in vw is resolved in the cascade,
 	// because it is inherited as a number, so the cascade is told the same page.
 	area := page.Content()
-	styled := prepared.ApplyOnPage(doc, fontMetrics{fontSet}, style.Media{Width: area.W, Height: area.H})
+	styled := prepared.ApplyOnPageWith(doc, fontMetrics{fontSet}, style.Media{Width: area.W, Height: area.H},
+		base.inlineURLs(rec))
 	for _, f := range styled.Findings {
 		rec.ReportDetail(Finding{
 			Rule:     ruleForStyleFinding(f),
@@ -284,12 +292,12 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 			"selector matching stopped early, so some rules did not apply")
 	}
 
-	root := BuildBoxes(doc, styled, rec)
+	root := buildBoxes(doc, styled, base, rec)
 	// The one stage that reads anything from outside the two strings the caller
 	// handed in. It runs after the box tree exists because whether an element
 	// is replaced changes only how its box is sized, never whether there is
 	// one — and it runs before layout because a size is what layout needs.
-	resolveReplaced(root, in.Resources, rec)
+	resolveReplaced(root, in.Resources, base, rec)
 	reportUnsupportedDisplays(doc, styled.Styles, styled.Pseudo, rec)
 
 	return Built{
@@ -309,11 +317,12 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 // Its @font-face and @page rules stay in it: the cascade's walk hands them
 // over, from wherever in the sheet they are live. See style.Prepared.
 //
-// Every url() in it is resolved against its name here, which is what a
-// relative reference in a stylesheet is relative to. See resolveSheetURLs.
-func parseSheet(rec *Recorder, origin style.Origin, name, src string) style.Sheet {
+// Every url() in it is resolved against its base here, which is what a
+// relative reference in a stylesheet is relative to: its own name, or the
+// document's base URL for a <style> element. See resolveSheetURLs.
+func parseSheet(rec *Recorder, origin style.Origin, name, base, src string) style.Sheet {
 	p := readSheet(origin, name, src)
-	resolveSheetURLs(p.rules, name, rec)
+	resolveSheetURLs(p.rules, base, name, rec)
 	return p.handOver(rec, origin, name)
 }
 

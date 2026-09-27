@@ -18,7 +18,9 @@ import "testing"
 // line-break-loose-018 writes its prefix in an element of its own so that it can
 // be coloured, which is what a test for a *character* does.
 func TestAnOpportunityAtTheEndOfANodeIsHandedOn(t *testing.T) {
-	loose := LineBreak{Loose: true}
+	// In Japanese, which is what §5.3's rule about prefixes is conditioned on,
+	// and what line-break-loose-018 is written in.
+	loose := LineBreak{Loose: true, ChineseOrJapanese: true}
 	for _, tc := range []struct {
 		text string
 		lb   LineBreak

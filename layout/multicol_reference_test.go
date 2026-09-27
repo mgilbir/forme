@@ -30,7 +30,8 @@ func splitAtByCopy(f *Fragment, y style.Unit) (top, bottom *Fragment, ok bool) {
 		default:
 			// A line box straddling the cut. A line is not divisible — it is
 			// the unit fragmentation works in — so this is not a height the
-			// caller may cut at, and columnBreaks is what stops it choosing one.
+			// caller may cut at, and columnBreaks and clearOfLinesByScan are
+			// what stop it choosing one.
 			return nil, nil, false
 		}
 	}
@@ -75,8 +76,11 @@ func fillColumnsByCopy(f *Fragment, c columns, height style.Unit) bool {
 	}
 	bands := make([]*Fragment, 0, c.n)
 	rest := f
+	start := style.Unit(0)
 	for i := 0; i < c.n && rest != nil; i++ {
-		top, bottom, ok := splitAtByCopy(rest, height)
+		cut := clearOfLinesByScan(f, start, start.Add(height))
+		top, bottom, ok := splitAtByCopy(rest, cut.Sub(start))
+		start = cut
 		if !ok {
 			return false
 		}
@@ -150,6 +154,9 @@ func fillColumnsByCopyWith(f *Fragment, c columns, height style.Unit,
 				}
 			}
 		}
+		if !ended && breaks == nil {
+			cut = clearOfLinesByScan(f, start, cut)
+		}
 		top, bottom, ok := splitAtByCopy(rest, cut.Sub(start))
 		if !ok {
 			return false
@@ -180,6 +187,71 @@ func fillColumnsByCopyWith(f *Fragment, c columns, height style.Unit,
 		}
 	}
 	return true
+}
+
+// clearOfLinesByScan is clearOfLines found the long way. While some line
+// straddles the cut, the cut moves to the highest top among the lines that
+// do, and the lines are looked at again. That is a fixed point rather than
+// clearOfLines' merged bands, so the two agreeing is a check on the merging.
+//
+// Where that reaches the column's start or above it, the answer depends on
+// the line the original cut was inside. If it is the only line there, and no
+// other line overlaps it, it is taller than the column and overflows it: the
+// column ends at its bottom. Otherwise the cut is left where it was, and the
+// split refuses it.
+//
+// It is asked of the tree as it was before the pour, in the coordinates the
+// cuts are made in, as clearOfLines is: where the lines were is a fact about
+// the content and not about the pour. The two coincide for anything a layout
+// makes. They part only for the generator's boxes shorter than their own top
+// edge, which get that edge back in every column the pour cuts them across.
+func clearOfLinesByScan(f *Fragment, start, y style.Unit) style.Unit {
+	var lines [][2]style.Unit
+	var walk func(g *Fragment, at style.Unit)
+	walk = func(g *Fragment, at style.Unit) {
+		for _, line := range g.Lines {
+			lines = append(lines, [2]style.Unit{at.Add(line.Rect.Y), at.Add(line.Rect.Bottom())})
+		}
+		for _, c := range g.Children {
+			walk(c, at.Add(c.ContentRect().Y))
+		}
+	}
+	walk(f, 0)
+	straddles := func(l [2]style.Unit, cut style.Unit) bool { return l[0] < cut && cut < l[1] }
+
+	cut := y
+	for {
+		top, straddled := cut, false
+		for _, l := range lines {
+			if straddles(l, cut) && l[0] < top {
+				top, straddled = l[0], true
+			}
+		}
+		if !straddled {
+			return cut
+		}
+		if top > start {
+			cut = top
+			continue
+		}
+		// The line the original cut is inside, if it is alone.
+		var only [2]style.Unit
+		count := 0
+		for _, l := range lines {
+			if straddles(l, y) {
+				only, count = l, count+1
+			}
+		}
+		if count != 1 {
+			return y
+		}
+		for _, l := range lines {
+			if l != only && l[1] > l[0] && l[0] < only[1] && only[0] < l[1] {
+				return y
+			}
+		}
+		return only[1]
+	}
 }
 
 // balancedHeightByScan is the shortest height the content fits in, found by

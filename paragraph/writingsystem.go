@@ -108,7 +108,10 @@ func writingSystemOfScript(script string) WritingSystem {
 	switch script {
 	case "hani", "hans", "hant":
 		return WritingSystemChinese
-	case "jpan", "hira", "kana":
+	case "jpan", "hira", "kana", "hrkt":
+		// Hrkt is "Japanese syllabaries", hiragana and katakana together —
+		// writing-system-line-break-002 tags its text en-Hrkt and asks for it to
+		// be broken as Japanese.
 		return WritingSystemJapanese
 	case "yiii":
 		return WritingSystemYi

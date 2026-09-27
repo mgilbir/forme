@@ -73,20 +73,20 @@ func TestEachUnappliedFeatureValueIsReported(t *testing.T) {
 	built := Build(Input{
 		HTML: `<p><span class="a">a</span><span class="b">b</span></p>`,
 		CSS: []Stylesheet{{Source: `.a { font-feature-settings: "smcp" }
-			.b { font-feature-settings: "liga" 0 }`}},
+			.b { font-feature-settings: "ss01" }`}},
 	})
 	Layout(built.Root, A4.Content(), nil, rec)
 	said := map[string]bool{}
 	for _, f := range rec.Findings() {
 		if f.Property == "font-feature-settings" {
-			for _, v := range []string{`smcp`, `liga`} {
+			for _, v := range []string{`smcp`, `ss01`} {
 				if strings.Contains(f.Message, v) {
 					said[v] = true
 				}
 			}
 		}
 	}
-	for _, v := range []string{`smcp`, `liga`} {
+	for _, v := range []string{`smcp`, `ss01`} {
 		if !said[v] {
 			t.Errorf("font-feature-settings naming %q was not reported: %v", v, rec.Findings())
 		}

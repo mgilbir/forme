@@ -55,6 +55,16 @@ import (
 // none of it by more than one unit — and where the floor is zero, which is five
 // of the eight cases, it demands exact agreement on every number.
 //
+// # Where HarfBuzz is followed over fontTools
+//
+// The file's values are fontTools', and one of them this package does not
+// follow, by the user's choice: a composite that takes its metrics from a
+// component (USE_MY_METRICS) is given the component's phantom points, as
+// HarfBuzz gives them, where fontTools' instancer gives it its own. In Noto
+// Sans at weight 700 with no HVAR that moves two advances. They are named in
+// the case's followsHarfBuzz, held to HarfBuzz's values, and required still to
+// differ from the file's.
+//
 // # Why a checked-in file
 //
 // Regenerating it needs Python, fontTools and uharfbuzz (make varinstance);
@@ -76,6 +86,12 @@ var varInstanceCases = []struct {
 	// why says what the allowance is for. A bare number is a number nobody can
 	// judge.
 	why string
+	// followsHarfBuzz are the values where this package takes HarfBuzz's
+	// answer over fontTools', whose the file is: each is compared with
+	// HarfBuzz's and not counted against the allowance, and each has to
+	// differ from the file, so that an entry cannot outlive the disagreement
+	// it records.
+	followsHarfBuzz []harfBuzzOverFontTools
 }{
 	// Every axis at its own default. The stored outlines already are this
 	// instance, so nothing may move at all — which makes this the one case that
@@ -98,12 +114,30 @@ var varInstanceCases = []struct {
 	{name: "noto-bold-nohvar", allow: 62,
 		why: "the same location as noto-bold, so the same solver difference, plus\n" +
 			"the advances — which here come from the phantom points, HVAR having\n" +
-			"been taken out of the font."},
+			"been taken out of the font.",
+		// Two composites that take their metrics from a component
+		// (USE_MY_METRICS). HarfBuzz gives them the component's phantom
+		// points and fontTools' instancer their own, which gvar moved
+		// differently; the user chose HarfBuzz's, which is what the face is
+		// shaped with. See the note at the top of instance.go.
+		followsHarfBuzz: []harfBuzzOverFontTools{
+			{gid: 3248, what: "its advance", harfBuzz: 867, fontTools: 875},
+			{gid: 3360, what: "its advance", harfBuzz: 594, fontTools: 592},
+		}},
 	{name: "arabic-black"},
 	{name: "tibetan-light"},
 	{name: "khmer-light-condensed", allow: 2,
 		why: "two axes off their defaults; the file's noise-sampled header measures\n" +
 			"the same two values."},
+}
+
+// harfBuzzOverFontTools is one value where fontTools, whose answer an
+// expectation file records, and HarfBuzz disagree, and this package follows
+// HarfBuzz.
+type harfBuzzOverFontTools struct {
+	gid                 int
+	what                string
+	harfBuzz, fontTools int
 }
 
 // TestInstancingAgreesWithFontToolsAndHarfBuzz compares every glyph of every
@@ -139,10 +173,43 @@ func TestInstancingAgreesWithFontToolsAndHarfBuzz(t *testing.T) {
 			advances, bearings := instancedMetrics(t, f, numGlyphs)
 
 			var differing, reported int
+			exception := map[[2]any]harfBuzzOverFontTools{}
+			for _, e := range tc.followsHarfBuzz {
+				exception[[2]any{e.gid, e.what}] = e
+			}
 			for _, w := range want {
 				got := readGlyphOutline(t, glyf, loca, w.gid)
 				got.advance, got.bearing = advances[w.gid], bearings[w.gid]
-				for _, d := range compareGlyphs(w, got) {
+				diffs := compareGlyphs(w, got)
+				for key, e := range exception {
+					if key[0] != w.gid {
+						continue
+					}
+					delete(exception, key)
+					var d *outlineDiff
+					for i := range diffs {
+						if diffs[i].what == e.what {
+							d = &diffs[i]
+						}
+					}
+					switch {
+					case d == nil:
+						t.Errorf("glyph %d: %s agrees with the file, which followsHarfBuzz says is fontTools' %d "+
+							"and not HarfBuzz's %d; regenerate the entry or remove it", e.gid, e.what, e.fontTools, e.harfBuzz)
+					case d.want != e.fontTools:
+						t.Errorf("glyph %d: the file says %s is %d, and followsHarfBuzz records fontTools' as %d",
+							e.gid, e.what, d.want, e.fontTools)
+					case d.got != e.harfBuzz:
+						t.Errorf("glyph %d: %s is %d, and HarfBuzz's is %d", e.gid, e.what, d.got, e.harfBuzz)
+					}
+					if d != nil {
+						d.what = ""
+					}
+				}
+				for _, d := range diffs {
+					if d.what == "" {
+						continue
+					}
 					differing++
 					if d.by > worst {
 						t.Errorf("glyph %d: %s is %d and the oracle says %d", w.gid, d.what, d.got, d.want)
@@ -154,8 +221,12 @@ func TestInstancingAgreesWithFontToolsAndHarfBuzz(t *testing.T) {
 					}
 				}
 			}
-			t.Logf("%d glyphs, %d values differ (allowance %d, oracle's own noise %d)",
-				len(want), differing, tc.allow, atoiHeader(t, header, "noise-sampled"))
+			for _, e := range exception {
+				t.Errorf("followsHarfBuzz names glyph %d, which the file does not list", e.gid)
+			}
+			t.Logf("%d glyphs, %d values differ (allowance %d, oracle's own noise %d), "+
+				"%d more where HarfBuzz is followed over fontTools",
+				len(want), differing, tc.allow, atoiHeader(t, header, "noise-sampled"), len(tc.followsHarfBuzz))
 			if differing > tc.allow {
 				t.Errorf("%d values differ and the allowance is %d.\n%s", differing, tc.allow, tc.why)
 			}

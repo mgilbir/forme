@@ -1374,7 +1374,56 @@ const wptEnv = "WPT_TESTS"
 // the whole declaration was dropped as unreadable and the boxes were bare. The
 // slots now ask the value grammar's colour term, which is what the colour
 // longhands were already judged by.
-const wptCleanPassBaseline = 5983
+//
+// **5983 to 5984, for an indent on a right-to-left line**.
+// text-indent/text-indent-with-absolute-pos-child writes its eleven cases twice,
+// the second time in a dir=rtl block, and that half needed two fixes. The
+// first is the static position of an inline-written absolutely positioned
+// box, which was found as though every right-to-left line began at the block's
+// right edge (it moved no reftest on its own). The second is this one: an
+// indent is a margin on the start edge, and the rule that keeps an overfull
+// line out of it was the left-to-right rule on both sides, so it pushed a word
+// too wide for an indented right-to-left line back across the indent.
+// wpt.fyi: Chrome and Safari pass, Firefox fails.
+//
+// **5984 to 5985, for a caption laid over its table**. box-display/root-box-002
+// makes the root element a table and hangs an "html::before" caption over the
+// table's red top border with a negative margin, the caption's white meant to
+// hide it. Two faults stood in the way. The caption was taken for the root
+// element when §2.11.2 looked through the wrapper (fixed below this and moving
+// nothing alone), so its white went to the canvas; and a caption above the
+// grid was painted before the table's own background and border, the order
+// the anonymous wrapper holds them in rather than the element tree's, so the
+// red border was drawn over it. wpt.fyi: all three browsers pass.
+//
+// **5985 to 5986, for a table's baseline**. floats-clear/margin-collapse-134's
+// reference sets three inline-tables of empty 1em cells, and the second line
+// sat a strut's descent low: a table's baseline was found by walking into it
+// for the first line box anywhere, and a first row of empty cells has none, so
+// the inline-table fell back to its bottom margin edge. css-tables-3 and CSS Box
+// Alignment 3 §9.1 make it the first row's, synthesized from the lowest cell
+// content edge when no cell has one. wpt.fyi: Chrome and Firefox pass, Safari
+// fails.
+//
+// **5986 to 5984, for UAX #14 in full**, and it was the user's decision to take
+// it. The line breaker ran a subset of UAX #14 and disagreed with
+// LineBreakTest.txt at 5,478 positions no rule of CSS Text accounts for; it
+// now runs all of it, with CSS Text 3's cited tailorings on top (see
+// paragraph/uax14.go and paragraph/linebreakconformance_test.go). Two
+// documents go red, and neither has three browsers behind it. wpt.fyi's stable
+// runs at revision 59e94f7725:
+//
+//   - word-break/word-break-break-all-023 — Chrome passes, Firefox and Safari
+//     fail. It asks for no break after a backslash (class PR); UAX #14 has
+//     none of that, PR ÷ PR is LB31.
+//   - white-space/white-space-pre-wrap-justify-004 — Chrome and Safari pass,
+//     Firefox fails. Its reference breaks between a space and "!", which
+//     UAX #14's LB13 ("× EX", an earlier rule than LB18's "SP ÷") forbids, and
+//     Firefox follows LB13.
+//
+// Where the browsers do not agree the engine keeps UAX #14 rather than pick
+// one of them, and the two are accepted failures.
+const wptCleanPassBaseline = 5984
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

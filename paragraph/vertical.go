@@ -69,10 +69,11 @@ func OrientationMix(text string) (upright, rotated bool) {
 }
 
 // UprightUnits counts the characters of a run that take an advance when the run
-// is set upright.
+// is set upright in a face that states no vertical metrics.
 //
-// One em each, and the count is what the width is made of — see
-// Breaker.MeasureSpacedInContext. What is left out is what takes no room in any
+// One em each, and the count is what the width is made of — CSS Writing Modes
+// §4.4's synthesis, see Breaker.MeasureSpacedInContext. A face that states them
+// is measured by them instead (shape.Face.StatesVerticalMetrics). What is left out is what takes no room in any
 // mode: a character nothing is drawn for, and a combining mark, which is drawn
 // on the character in front of it rather than after it.
 //

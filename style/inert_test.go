@@ -123,6 +123,12 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		"transform-origin: center",
 		"transform-origin: top left",
 		"transform-origin: 0 0",
+		// And the second, for the same reason: a box faces away from the viewer
+		// only when a transform turns it round, and nothing is transformed.
+		// "hidden" was reported, on documents with no transform anywhere.
+		"backface-visibility: hidden",
+		"backface-visibility: visible",
+		"backface-visibility: HIDDEN",
 		// The hyphens case again, found this time by looking for it rather than
 		// by being caught out: what this engine produces is "none", because it
 		// applies no variation to a face at all. The initial value is "auto",
@@ -462,19 +468,21 @@ func TestAPropertyInBothTablesStillReportsItsOtherValues(t *testing.T) {
 	}
 }
 
-// TestNothingIsTransformed is to transform-origin what TestNothingIsFragmented
-// is to the break properties, and it guards a stronger claim: that entry says
-// *every* value of transform-origin is inert, which is only true while there is
-// no transformation for an origin to belong to.
+// TestNothingIsTransformed is to transform-origin and backface-visibility what
+// TestNothingIsFragmented is to the break properties, and it guards a stronger
+// claim: those entries say *every* value of either is inert, which is only true
+// while there is no transformation for an origin to belong to or for a box to
+// be turned away from the viewer by.
 //
 // The day any of these is registered and read, an origin decides where a box
-// ends up and the entry has to come out with the same change.
+// ends up, "hidden" decides whether a turned box is drawn, and both entries
+// have to come out with the same change.
 func TestNothingIsTransformed(t *testing.T) {
 	for _, name := range []string{"transform", "rotate", "scale", "translate", "perspective"} {
 		if _, ok := properties[name]; ok {
 			t.Errorf("%q is in the registry now, so something reads it; the "+
-				"transform-origin entry claims every origin is inert because "+
-				"nothing is transformed", name)
+				"transform-origin and backface-visibility entries claim every "+
+				"value is inert because nothing is transformed", name)
 		}
 	}
 }

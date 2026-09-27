@@ -94,7 +94,7 @@ type Glyph struct {
 	// made it from several, or taken it apart. It is HarfBuzz's SUBSTITUTED
 	// glyph property, and what it decides is whether a character nothing is
 	// drawn for is still one once the font has had its say — see
-	// dropUnsubstitutedIgnorables.
+	// dropUnsubstituted.
 	substituted bool
 
 	// multiplied says the glyph is one of several a multiple substitution
@@ -107,6 +107,11 @@ type Glyph struct {
 	// the one reader that asks the character rather than the font: placing
 	// the marks of a face that places none of its own. See fallback.go.
 	umark unicodeMark
+
+	// ignorable is what the character this glyph came from is to the font's
+	// rules if it is one nothing is drawn for: stepped over unless a rule
+	// names it, not stepped over, or a join control. See ignorable.go.
+	ignorable ignorableKind
 
 	// space says the glyph is the face's space standing in for a space
 	// separator it has no glyph for, and which one, so that it can be given
@@ -533,32 +538,16 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		hebrew: model == modelHebrew, hebrewForms: model == modelHebrew && !l.hasMarkFeature(),
 		none: model == modelHangul,
 	})
-	// Which jamo feature each character is for, read before the characters
-	// nothing is drawn for are taken out, since a joiner between two jamo
-	// keeps them apart. See hangulFeatures.
+	// Which jamo feature each character is for, which a joiner between two
+	// jamo decides by keeping them apart. See hangulFeatures.
 	var jamo []uint8
 	if model == modelHangul {
 		jamo = hangulFeatures(runes)
 	}
-	// The characters nothing is drawn for, for every run but a syllabic one.
-	//
-	// Removing them here means no rule of the font is ever asked about a glyph
-	// that will not be there, and for a script whose rules are lookups that is
-	// the same answer as keeping them and having every lookup step over them,
-	// which is what HarfBuzz does. Measurement agrees: Latin, Greek, Cyrillic
-	// and Arabic differ in nothing either way.
-	//
-	// A syllable model is not a lookup and cannot step over anything. Whether
-	// such a character breaks a syllable is a question the model has to be
-	// allowed to answer, and it can only answer it if it is given the character
-	// — so a syllabic run keeps them, and the shaper that gets them drops them
-	// once they have said which cluster they broke. See ignorable.go.
-	if !model.syllabic() {
-		if jamo != nil {
-			jamo = keepShown(jamo, runes)
-		}
-		runes, offsets = dropHiddenCharacters(runes, offsets)
-	}
+	// What each character nothing is drawn for is to the font's rules. They are
+	// all kept, as HarfBuzz keeps them, until the substitutions have run: a
+	// rule may name one, and some are not stepped over. See ignorable.go.
+	ignorables := ignorableKinds(runes)
 	if len(runes) == 0 {
 		return nil, 0
 	}
@@ -577,12 +566,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		if !ok {
 			// A character nothing draws is not one the face is missing.
 			//
-			// The join controls reach here because the joining scan has to see
-			// them — dropHiddenCharacters keeps them back for exactly that —
-			// and the shaper takes them out again before any rule or any pen
-			// sees the buffer: hideJoiners on the path that chooses cursive
-			// forms, the syllable model's own pass on the other. Counting them
-			// was counting a glyph that was never going to be asked for.
+			// Every one of them reaches here, since the font's rules may name
+			// them, and the shaper takes the ones no rule touched out again
+			// before any pen sees the buffer: dropIgnorables on the general
+			// path, the syllable model's own pass on the other. Counting them
+			// was counting a glyph that was never going to be drawn.
 			//
 			// It decides which face sets a word. A caller's fallback asks "can
 			// this face set the whole of this text" and reads the answer here,
@@ -607,11 +595,15 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 			}
 			gid = 0
 		}
-		buf = append(buf, Glyph{
+		g := Glyph{
 			GID: gid, Cluster: offsets[i], XAdvance: f.advanceGID(gid),
 			class: classOfRune(runes[i]), umark: unicodeMarkOf(runes[i]),
 			space: space, word: isStchWord(runes[i]),
-		})
+		}
+		if ignorables != nil {
+			g.ignorable = ignorables[i]
+		}
+		buf = append(buf, g)
 	}
 	if len(buf) == 0 {
 		return nil, missing
@@ -649,17 +641,14 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	} else {
 		// Which form each letter takes is decided now, while the glyphs still
 		// correspond to the characters it is decided from, and recorded on the
-		// glyphs so that it survives what follows. The join controls have said
-		// all they have to say once that is done, and are taken out before any
-		// substitution can see them — see ignorable.go.
+		// glyphs so that it survives what follows.
 		if model == modelArabic {
-			markJoiningForms(buf, runes, before, after)
+			markJoiningForms(buf, runes, before, after, scriptSelects(script, "mong"))
 		}
 		if model == modelHangul {
 			markJamo(buf, runes, jamo)
 			markToneCircles(buf, runes, offsets)
 		}
-		buf = hideJoiners(buf, runes)
 		for i, stage := range p.stages {
 			buf = sh.applyStage(buf, stage)
 			if p.stch && i == p.stchAfter {
@@ -669,6 +658,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 				buf = sh.applyArabicFallback(buf, p.arabicFallback)
 			}
 		}
+		// The characters nothing is drawn for have said all they have to say
+		// once the substitutions are done. See ignorable.go.
+		buf = dropIgnorables(buf)
 	}
 	if model == modelHebrew {
 		sh.gposScript = f.chosenPositioningTag(script, lang)
@@ -678,7 +670,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// cannot see because the glyph on the far side of it is not in this buffer.
 	// See boundarykern.go. Not for a run set upright, which is not kerned:
 	// the pairs are the 'kern' feature's, and a vertical run applies none.
-	if len(sh.l.kern) > 0 && ctx.kerns && !ctx.features.NoKerning && !vertical {
+	if len(sh.l.kern) > 0 && ctx.kerns && !ctx.features.kerningOff() && !vertical {
 		kctx := ctx
 		if ctx.cutBefore {
 			kctx.before = ""

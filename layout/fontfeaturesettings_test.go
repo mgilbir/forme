@@ -1,8 +1,12 @@
 package layout
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/fonttest"
+	"github.com/mgilbir/forme/shape"
 )
 
 // TestFontFeatureSettingsAsksTheFaceForTheTag is the property a real document
@@ -66,13 +70,12 @@ func TestFontFeatureSettingsAsksTheFaceForTheTag(t *testing.T) {
 // TestFontFeatureSettingsReportsWhatItCannotDo is the other half, and it is
 // what keeps the half above from being a claim that everything works.
 //
-// Two things in this property are still not carried out, and they are different
-// from each other. A tag turned *off* asks for a feature not to be applied, and
-// the features this engine applies without being asked have switches of their
-// own — font-variant-ligatures and font-kerning — so the tag is not the way to
-// reach them. And a tag turned on that the face has not got is carried out and
-// changes nothing, which is what reportCaps says about a face with no small
-// capitals.
+// One thing in this property is not carried out: a tag turned on that the face
+// has not got changes nothing, which is what reportCaps says about a face with
+// no small capitals. A tag turned *off* is carried out — CSS Fonts 4 §7.2 puts
+// this property above font-variant-ligatures and font-kerning — and so is not
+// reported, whether or not the face has the feature: turning off what is not
+// there asks for the page that is already there.
 func TestFontFeatureSettingsReportsWhatItCannotDo(t *testing.T) {
 	set := numericFontSet(t)
 	findings := func(decl string) []Finding {
@@ -100,20 +103,15 @@ func TestFontFeatureSettingsReportsWhatItCannotDo(t *testing.T) {
 			`face for a feature it has not got changes no glyph and the page ` +
 			`does not show that it was asked`)
 	}
-	// A tag turned off: not what this property can do.
+	// A tag turned off: applied, whether the face has it or not.
 	for _, decl := range []string{
 		`font-feature-settings: "liga" 0`,
 		`font-feature-settings: "liga" off`,
+		`font-feature-settings: "zzzz" 0`,
+		`font-kerning: none; font-feature-settings: "kern" 1`,
 	} {
-		got := findings(decl)
-		if len(got) == 0 {
-			t.Errorf("%s said nothing; a feature is turned off through "+
-				"font-variant-ligatures rather than by tag", decl)
-			continue
-		}
-		if !strings.Contains(got[0].Message, "turned off") {
-			t.Errorf("%s reported %q, which does not say what was not done",
-				decl, got[0].Message)
+		if got := findings(decl); len(got) != 0 {
+			t.Errorf("%s reported %q; it is applied", decl, got[0].Message)
 		}
 	}
 }
@@ -138,5 +136,114 @@ func TestFontFeatureSettingsSettlesTheOrderOfItsTags(t *testing.T) {
 	// And a tag named twice is one tag.
 	if once, _ := featureSettingsOf(`"onum", "onum"`); once != "onum" {
 		t.Errorf(`"onum" twice came out as %q, want "onum"`, once)
+	}
+	// And a tag given two settings takes the last, in either direction, so a
+	// tag is never both turned on and turned off.
+	for _, c := range []struct {
+		value, on string
+		off       []string
+	}{
+		{`"liga" 0, "liga" 1`, "liga", nil},
+		{`"liga" 1, "liga" 0`, "", []string{"liga"}},
+		{`"kern" 0, "onum", "kern" on, "liga" off`, "kern,onum", []string{"liga"}},
+		{`"liga" 0, "calt" 0, "liga" 0`, "", []string{"calt", "liga"}},
+	} {
+		on, off := featureSettingsOf(c.value)
+		if on != c.on || !slices.Equal(off, c.off) {
+			t.Errorf("%s came out as on %q, off %q; want on %q, off %q",
+				c.value, on, off, c.on, c.off)
+		}
+	}
+}
+
+// TestAPositioningFeatureIsNotReportedAsMissing: a tag the face offers through
+// positioning alone is applied, and is not reported as one the face has not got.
+//
+// 'halt' is how the suite's text-spacing-trim references draw a trimmed
+// bracket, and every CJK face states it in GPOS and nowhere in GSUB. The
+// shaping plan applied it; the check beside it asked the face for its
+// substitution features only, so eleven references were each reported as
+// asking for something the face did not have, over a page drawn as asked.
+//
+// The fixture is a face whose 'halt' takes half the advance off 'a'. That the
+// width changes is what makes the silence a claim and not an omission: the
+// feature reached the glyphs.
+func TestAPositioningFeatureIsNotReportedAsMissing(t *testing.T) {
+	data := fonttest.SFNT(fonttest.SFNTOptions{
+		Name: "Halt",
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'a', Advance: 1000, HasShape: true},
+			{Rune: ' ', Advance: 250},
+			{Rune: '（', Advance: 1000, HasShape: true},
+		},
+		Extra: map[string][]byte{
+			"GPOS": fonttest.GPOSLookups([]fonttest.Lookup{
+				{Type: 1, Subtables: [][]byte{fonttest.SinglePosSubtable(1, -500, 0, -500)}},
+				{Type: 1, Subtables: [][]byte{fonttest.SinglePosSubtable(3, -500, 0, -500)}},
+			}, map[string][]int{"halt": {0, 1}}),
+		},
+	})
+	face, err := shape.Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := namedFaceSet{family: "Halt", face: face, standard: StandardFonts()}
+	runIn := func(set FontSet, family, text, decl string) (float64, []Finding) {
+		t.Helper()
+		frag, got := layoutWith(t, set, `<div id="d">`+text+`</div>`,
+			`body{margin:0} #d{font-family:`+family+`; font-size:20px; float:left; `+decl+`}`)
+		var out []Finding
+		for _, f := range got {
+			if f.Property == "font-feature-settings" {
+				out = append(out, f)
+			}
+		}
+		return find(t, frag, "d").BorderRect.W.Px(), out
+	}
+	run := func(decl string) (float64, []Finding) {
+		t.Helper()
+		return runIn(set, "Halt", "aa", decl)
+	}
+
+	plain, _ := run("")
+	halted, findings := run(`font-feature-settings: "halt" 1`)
+	if plain != 40 || halted != 20 {
+		t.Fatalf("the run is %gpx plain and %gpx with 'halt', want 40 and 20; the "+
+			"fixture is not reaching the face's positioning feature", plain, halted)
+	}
+	if len(findings) != 0 {
+		t.Errorf(`"halt" on a face that positions with it reported %q; it was applied`,
+			findings[0].Message)
+	}
+	// The same face asked for something it has not got still says so, which
+	// keeps the silence above from being a check that stopped looking.
+	// The message quotes the declaration first, so what it names as missing is
+	// what follows "asks for".
+	_, findings = run(`font-feature-settings: "halt" 1, "zzzz" 1`)
+	if len(findings) == 0 {
+		t.Fatal(`"halt" and "zzzz" together said nothing; the face has no "zzzz"`)
+	}
+	msg := findings[0].Message
+	named := msg[strings.Index(msg, "asks for")+1:]
+	if !strings.Contains(named, `"zzzz"`) || strings.Contains(named, `"halt"`) {
+		t.Errorf(`"halt" and "zzzz" together reported %q; want "zzzz" named as `+
+			`missing and "halt" not`, msg)
+	}
+
+	// And the face asked is the one that sets the text. Helvetica has no
+	// full-width bracket, so the brackets are set in the fallback face, which
+	// applies 'halt' to them. The question was asked of Helvetica, which set
+	// none of the text, and the feature that was carried out was reported as
+	// missing.
+	fallback := oneFaceSet{fallback: face, standard: StandardFonts()}
+	plain, _ = runIn(fallback, "Helvetica", "（（", "")
+	halted, findings = runIn(fallback, "Helvetica", "（（", `font-feature-settings: "halt" 1`)
+	if plain != 40 || halted != 20 {
+		t.Fatalf("the brackets are %gpx plain and %gpx with 'halt', want 40 and 20; "+
+			"the fixture is not setting them in the fallback face", plain, halted)
+	}
+	if len(findings) != 0 {
+		t.Errorf(`"halt" carried out by the family that set the text reported %q`,
+			findings[0].Message)
 	}
 }

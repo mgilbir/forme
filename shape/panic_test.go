@@ -431,11 +431,13 @@ func useFace(face *Face) {
 	_, _ = face.EmbeddingPermissions()
 	_ = face.Program()
 	_ = face.GlyphAdvances()
+	_ = face.StatesVerticalMetrics()
 
 	// Per glyph, past the end of the table as well: a count a font states and a
 	// table that does not hold it is the shape of the bug this is looking for.
 	for _, gid := range []int{-1, 0, 1, face.NumGlyphs(), face.NumGlyphs() + 1} {
 		_ = face.GlyphAdvance(gid)
+		_, _, _ = face.GlyphVerticalMetrics(gid)
 		_ = face.GlyphCode(gid)
 		_, _, _ = face.HalfWidthTrim(gid)
 	}

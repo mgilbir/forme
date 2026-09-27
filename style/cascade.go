@@ -149,6 +149,9 @@ type Styler struct {
 	// file of. What they can be pointed at is the element that carries it, so
 	// that is what a finding raised from in here says instead.
 	attrOffset int
+	// inlineURLs is what the caller of ApplyOnPageWith handed in, nil
+	// otherwise. See InlineURLs.
+	inlineURLs InlineURLs
 	// seen suppresses repeat reports of the same unsupported property. A
 	// stylesheet using "flex-wrap" forty times is one thing an author needs to
 	// be told, not forty.
@@ -293,7 +296,7 @@ func applyIn(doc *html.Node, sheets []Sheet, m Metrics, media Media) (Styled, *S
 			Property:    "@font-face",
 		})
 	}
-	return p.apply(doc, m, media)
+	return p.apply(doc, m, media, nil)
 }
 
 // AtRule is an @page or @font-face rule the cascade's walk reached: one whose
@@ -358,7 +361,7 @@ func Prepare(sheets []Sheet, media Media) *Prepared {
 // sheets. It may be called more than once, for more than one document: it
 // changes nothing it was given.
 func (p *Prepared) Apply(doc *html.Node, m Metrics) Styled {
-	out, _ := p.apply(doc, m, Media{})
+	out, _ := p.apply(doc, m, Media{}, nil)
 	return out
 }
 
@@ -375,14 +378,33 @@ func (p *Prepared) Apply(doc *html.Node, m Metrics) Styled {
 // set at the inherited size (audit C157) — although the pipeline had decided
 // the page before it styled anything.
 func (p *Prepared) ApplyOnPage(doc *html.Node, m Metrics, area Media) Styled {
-	out, _ := p.apply(doc, m, area)
+	out, _ := p.apply(doc, m, area, nil)
 	return out
 }
 
-func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media) (Styled, *Styler) {
+// InlineURLs is handed the component values of each declaration in an
+// element's style attribute, before they are read, and may rewrite the url()s
+// in them in place.
+//
+// It exists for the one base a url() can have that this package cannot know. A
+// url() in a stylesheet is resolved by whoever read the sheet, against the
+// sheet, before the sheet is prepared — the values here are the resolved ones.
+// A style attribute is read here, per element, and its base is the document's
+// base URL (CSS Values 4 §4.5.1), which HTML's <base> element sets and which is
+// the caller's business: layout reads it, and hands this in.
+type InlineURLs func(n *html.Node, values []css.ComponentValue)
+
+// ApplyOnPageWith is ApplyOnPage with the url()s in style attributes handed to
+// urls first. A nil urls is ApplyOnPage.
+func (p *Prepared) ApplyOnPageWith(doc *html.Node, m Metrics, area Media, urls InlineURLs) Styled {
+	out, _ := p.apply(doc, m, area, urls)
+	return out
+}
+
+func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media, urls InlineURLs) (Styled, *Styler) {
 	s := &Styler{matcher: NewMatcher(doc), media: p.media, viewport: viewport,
 		seen:     maps.Clone(p.seen),
-		findings: append([]Finding(nil), p.findings...), attrOffset: -1}
+		findings: append([]Finding(nil), p.findings...), attrOffset: -1, inlineURLs: urls}
 
 	// Shorthands were expanded and what the engine does not implement dropped
 	// once for the whole run, in Prepare, rather than once per element — the
@@ -2610,6 +2632,11 @@ func (s *Styler) inlineDeclarations(n *html.Node) map[string]preparedDecl {
 			Message:     "in a style attribute: " + e.Message,
 			Unsupported: e.Unsupported,
 		})
+	}
+	if s.inlineURLs != nil {
+		for i := range decls {
+			s.inlineURLs(n, decls[i].Value)
+		}
 	}
 
 	// Everything expanded from here on is in the attribute, and says so.

@@ -527,10 +527,19 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 			// static", which is an indent in from the start edge. So the indent
 			// is the starting answer and the placement below replaces it with
 			// what the line really took, on the lines that have one.
-			lineShift := style.Unit(0)
-			if !lineBaseIsRTL(b, nil) {
-				lineShift = lineIndent
-			}
+			//
+			// It is measured from the line's *start* edge, which is its right
+			// edge on a right-to-left line, and lineRTL says which that is. It
+			// used to be kept for a left-to-right line only, on the reasoning
+			// that a right-to-left pen position is counted from the right edge
+			// anyway — which is true of the line box's edge and not of where its
+			// content starts: a box written at the start of an indented
+			// right-to-left first line stood at the block's right edge while the
+			// words began an indent further in, and one after the words stood an
+			// indent to the right of where they ended. text-indent-with-absolute-
+			// pos-child writes each of those in its dir=rtl half.
+			lineRTL := lineBaseIsRTL(b, nil)
+			lineShift := lineIndent
 			// The room the ellipsis needs on this line, which is the last one the
 			// clamp allows and nothing before it.
 			ending := l.clampEndingHere()
@@ -930,7 +939,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 				// pre-wrap-align tests measure. It is invisible in a left-to-right
 				// document, where the hang follows the content and moves nothing.
 				shift := l.alignLine(b, align, rtl, avail, used)
-				if lineIndent > 0 && shift < 0 {
+				if lineIndent > 0 {
 					// §7.1 makes the indent "a margin applied to the start edge
 					// of the line box", and content is not pulled back into a
 					// margin. An indent that takes the whole width leaves the
@@ -943,7 +952,21 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// hundred pixels set a fifty-pixel box at 150, which is
 					// where no indent at all would have put it, and the suite
 					// writes that document as text-indent-overflow.
-					shift = 0
+					//
+					// The margin is on the start side, which on a right-to-left
+					// line is the right: there the content may end no further
+					// right than avail, and an overfull line runs off to the
+					// left. The left-to-right rule used to be applied to both,
+					// and on this side it reads the wrong sign — a negative
+					// shift is the line correctly overflowing leftwards, and
+					// zeroing it drew a word too wide for an indented
+					// right-to-left first line from the left edge rightwards,
+					// across the indent.
+					if rtl {
+						shift = style.Min(shift, avail.Sub(used))
+					} else {
+						shift = style.Max(shift, 0)
+					}
 				}
 				if !rtl {
 					// §16.1's indent is measured from the line's *start* edge,
@@ -981,7 +1004,15 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// really is at the end, was correct glyph for glyph.
 					shift = shift.Sub(total.Sub(used).Sub(lineTracking))
 				}
+				// On a right-to-left line the content starts at its right-hand
+				// end: the runs span shift to shift+total from the line's left
+				// edge, so what lies between their right end and the line's is
+				// the distance from the start edge.
+				lineRTL = rtl
 				lineShift = shift
+				if rtl {
+					lineShift = lineWidth.Sub(shift).Sub(total)
+				}
 				if shift != 0 {
 					for k := range line.Runs {
 						line.Runs[k].X = line.Runs[k].X.Add(shift)
@@ -1101,15 +1132,19 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 					// The suite writes it as
 					// text-indent/text-indent-with-absolute-pos-child.
 					//
-					// Only the left-hand answer takes it. The right-hand one is
-					// measured from the block's content right edge for a
-					// right-to-left containing block, and on such a line the
-					// alignment has already been applied to the room the line had
-					// — see the note on shift above, where the indent is added
-					// for a left-to-right line and not for the other.
+					// Both answers are one point, the pen, read from the two
+					// edges of the block. The pen is found from the line's start
+					// edge — the left on a left-to-right line and the right on a
+					// right-to-left one, where f.used counts leftwards — and it is
+					// the same point whichever edge §10.3.7 then measures it from,
+					// because a box among the words is not as wide as its block.
+					pen := left.Sub(lo).Add(lineShift).Add(f.Used)
+					if lineRTL {
+						pen = right.Sub(lo).Sub(lineShift).Sub(f.Used)
+					}
 					l.deferAbsolute(abs, parent,
-						left.Sub(lo).Add(lineShift).Add(f.Used).Add(f.Offset.X), y.Add(f.Offset.Y),
-						width.Sub(right.Sub(lo).Sub(f.Used)).Sub(f.Offset.X), 0)
+						pen.Add(f.Offset.X), y.Add(f.Offset.Y),
+						width.Sub(pen).Sub(f.Offset.X), 0)
 				}
 			}
 

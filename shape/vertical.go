@@ -48,15 +48,15 @@ import "github.com/mgilbir/forme/font"
 //     line has to spare above the ink.
 //   - And where the ink cannot be had, the ascender.
 //
-// # What is not here
-//
-// The ink of a CFF glyph is in its charstrings, which this package does not
-// interpret for their bounds (see fallback.go, which has the same gap). So a
-// CFF face with no VORG takes the last of the four rather than the third, and
-// HarfBuzz — which does interpret them — centres the ink. A CFF face set in
+// The ink is the glyph header's box for a TrueType glyph and the box its
+// charstring draws for a CFF one (cffink.go), so a CFF face with no VORG —
+// Unifont — has its ink centred as HarfBuzz centres it. A CFF face set in
 // vertical text states VORG almost without exception; the Noto CJK faces all
-// do. A face from LoadInstance keeps its default instance's vertical metrics:
-// VVAR and the phantom points gvar moves are not read (see instance.go).
+// do.
+//
+// A face from LoadInstance has the vertical metrics of the location it was cut
+// at: instance.go rewrites vmtx from VVAR or the vertical phantom points gvar
+// moves, as HarfBuzz reads them there.
 
 // verticalTables is what a face keeps of the tables its vertical metrics are
 // read from, each checked once at load so that a glyph's metrics are a few
@@ -280,7 +280,7 @@ func (v *verticalTables) resolveComposites(budget *font.Budget) {
 		if !placed || len(g) < 10 || signed16(font.Be16(g, 0)) >= 0 || !usesComponentMetrics(g) {
 			continue
 		}
-		w := phantomWalk{budget: budget, tortoise: -1}
+		w := phantomWalk{budget: budget, decycler: decycler{tortoise: -1}}
 		top, ok, spent := v.topPhantomAt(gid, 0, &w)
 		if spent {
 			return
@@ -344,20 +344,28 @@ func eachComponent(g []byte, fn func(flags, gid int) bool) {
 // phantomWalk is what one walk for a glyph's top phantom point keeps as it
 // goes: how many glyphs it has visited, the font's budget it is charged to,
 // and HarfBuzz's decycler over the composites it is inside.
-//
-// The decycler is HarfBuzz's own, and not a set of the glyphs on the path,
-// because the two answer differently for a font whose components name each
-// other and the answer is compared unit for unit. HarfBuzz keeps one node per
-// composite it is inside, each holding the component it is visiting, and
-// checks a component only against the node halfway up the stack — a
-// tortoise that moves down one node for every two a walk goes in — which
-// finds every cycle, a little later than a set would.
 type phantomWalk struct {
 	edges  int
 	budget *font.Budget
-	// visiting is each node's component, from the outermost composite in;
-	// tortoise is the node a component is checked against, and awake
-	// whether it moves on the next node in or out.
+	decycler
+}
+
+// decycler is HarfBuzz's hb_decycler_t, for a walk through a structure a font
+// can make cyclic: a composite's components, a colour glyph's layers and the
+// colour glyphs it paints.
+//
+// It is HarfBuzz's own, and not a set of what is on the path, because the two
+// answer differently for a font whose parts name each other and the answer is
+// compared unit for unit. HarfBuzz keeps one node per level the walk is inside,
+// each holding what it is visiting, and checks a visit only against the node
+// halfway up the stack — a tortoise that moves down one node for every two a
+// walk goes in — which finds every cycle, a little later than a set would. A
+// walk that goes round a cycle before it is found does whatever the cycle does
+// that many times, and HarfBuzz's answer is the one that does.
+type decycler struct {
+	// visiting is each node's value, from the outermost level in; tortoise is
+	// the node a visit is checked against, and awake whether it moves on the
+	// next node in or out.
 	visiting []int
 	tortoise int
 	awake    bool
@@ -365,31 +373,31 @@ type phantomWalk struct {
 
 // enter and leave are a node's construction and destruction in HarfBuzz's
 // hb_decycler_node_t.
-func (w *phantomWalk) enter() {
-	w.awake = !w.awake
-	if len(w.visiting) == 0 {
-		w.tortoise = 0
-	} else if w.awake {
-		w.tortoise++
+func (d *decycler) enter() {
+	d.awake = !d.awake
+	if len(d.visiting) == 0 {
+		d.tortoise = 0
+	} else if d.awake {
+		d.tortoise++
 	}
-	w.visiting = append(w.visiting, -1)
+	d.visiting = append(d.visiting, -1)
 }
 
-func (w *phantomWalk) leave() {
-	w.visiting = w.visiting[:len(w.visiting)-1]
-	if w.awake {
-		w.tortoise--
+func (d *decycler) leave() {
+	d.visiting = d.visiting[:len(d.visiting)-1]
+	if d.awake {
+		d.tortoise--
 	}
-	w.awake = !w.awake
+	d.awake = !d.awake
 }
 
-// visit records that the innermost node is visiting a component, and reports
+// visit records that the innermost node is visiting a value, and reports
 // whether it may: false where the tortoise is visiting the same one, which is
 // a cycle.
-func (w *phantomWalk) visit(gid int) bool {
-	me := len(w.visiting) - 1
-	w.visiting[me] = gid
-	return w.tortoise == me || w.visiting[w.tortoise] != gid
+func (d *decycler) visit(v int) bool {
+	me := len(d.visiting) - 1
+	d.visiting[me] = v
+	return d.tortoise == me || d.visiting[d.tortoise] != v
 }
 
 // topPhantomAt is one level of glyfTopPhantom's walk, which w — nil for a
@@ -466,6 +474,50 @@ func (v *verticalTables) topPhantomAt(gid, depth int, w *phantomWalk) (top int, 
 		return 0, false, spent
 	}
 	return top, true, false
+}
+
+// StatesVerticalMetrics reports whether the face states its glyphs' vertical
+// advances: a 'vmtx' whose records 'vhea' says carry advances.
+//
+// Shaping gives an upright glyph a vertical advance either way — HarfBuzz's
+// synthesis, the height of the face's line, where the face states none — and
+// that synthesis is not CSS's. CSS Writing Modes §4.4 has a UA synthesize the
+// vertical metrics a face does not state, with the em box, and a caller laying
+// text out by CSS asks this to know which of the two applies. A face set by
+// character code (the standard fonts) states none.
+func (f *Face) StatesVerticalMetrics() bool {
+	return f != nil && f.std == nil && f.vert.longMetrics > 0
+}
+
+// GlyphVerticalMetrics is a glyph's own vertical metrics, in thousandths of an
+// em as GlyphAdvance's advance is: how far the pen moves along a line set
+// upright after the glyph, and where the glyph is hung from, measured from its
+// horizontal origin.
+//
+// They are what a writer states for a glyph of vertical text — in PDF the
+// glyph's /W2 entry, [w1y vx vy] (ISO 32000-2 §9.7.4.3), which is the three
+// numbers in this order — and they are the numbers a run set upright starts
+// from: Glyph.YAdvance, VOriginX and VOriginY, before any feature moves a
+// glyph. A mark's advance is taken away by shaping, and 'vkrn' and 'vpal'
+// move the pen where a document asks for them, so a run's advances are not
+// always these; a glyph's own metrics are, and the font's /W2 describes the
+// glyph. The advance is negative, as YAdvance and /W2 state it: up is
+// positive and the pen moves down.
+//
+// The answers are sought in the order the top of this file gives, which is
+// HarfBuzz's: vmtx and VORG where the face has them; where it has no VORG, a
+// TrueType glyph's top phantom point, or else the glyph's ink — a CFF glyph's
+// charstring's, a colour glyph's painted box — centred in the face's line;
+// where it has no vmtx, the line's height for the advance. A face from
+// LoadInstance answers at its instance, from VVAR and the phantom points gvar
+// moves. A glyph index the face does not have answers zero, as GlyphAdvance
+// does, and so does every index of a standard face, which has none.
+func (f *Face) GlyphVerticalMetrics(gid int) (advance, originX, originY float64) {
+	if f == nil || gid < 0 || gid >= f.NumGlyphs() {
+		return 0, 0, 0
+	}
+	a, x, y := f.verticalUnits(gid)
+	return -f.scale(a), f.scale(x), f.scale(y)
 }
 
 // fontExtentsUnits is the face's ascender and descender as HarfBuzz reads them

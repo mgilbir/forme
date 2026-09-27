@@ -683,14 +683,32 @@ type firstLine struct {
 // A *descendant's* marker is another matter: a nested list item with no content
 // still has a marker on a line box, and firstBaseline's reason for counting it is
 // this function's too.
+//
+// A table is not a block container and is not walked into. Its first baseline
+// is its first row's, which the table layout recorded — see firstRowBaseline —
+// and which is a line box only when that row happens to have one. And of a
+// table's wrapper only the table itself is asked, never a caption: css-tables-3
+// uses "the table-root box (not the table-wrapper box)" for an inline-table's
+// baseline, and a caption above the grid is not the grid's first row.
 func firstLineIn(f *Fragment) (firstLine, bool) {
 	inset := f.Border.Top.Add(f.Padding.Top)
+	if f.hasTableBaseline {
+		return firstLine{top: inset.Add(f.tableRowTop), baseline: inset.Add(f.tableBaseline)}, true
+	}
+	if f.Box != nil && f.Box.Inner == InnerTable {
+		// A table with no row has no first baseline to give.
+		return firstLine{}, false
+	}
+	wrapper := f.Box != nil && f.Box.TableWrapper
 	if len(f.Lines) > 0 {
 		top := inset.Add(f.Lines[0].Rect.Y)
 		return firstLine{top: top, baseline: top.Add(f.Lines[0].Baseline)}, true
 	}
 	for _, c := range f.Children {
 		if c.Box != nil && c.Box.outOfFlow() {
+			continue
+		}
+		if wrapper && (c.Box == nil || c.Box.Inner != InnerTable) {
 			continue
 		}
 		at := inset.Add(c.BorderRect.Y)

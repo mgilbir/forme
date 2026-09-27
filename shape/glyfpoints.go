@@ -317,14 +317,44 @@ func (g *varGlyph) setPhantoms(xMin, lsb, advance int) {
 	g.x[n-1], g.y[n-1] = 0, 0
 }
 
-// advance is what the phantom points say the glyph's advance is, which after
-// deltas have been applied is its advance in this instance.
-func (g *varGlyph) advance() (left, adv float64) {
+// setVerticalPhantoms puts the vertical pair where vmtx says they are: the top
+// one at the top of the glyph's box plus its top side bearing, and the bottom
+// one a vertical advance below it, both at x zero — HarfBuzz's phantom points,
+// which gvar then moves.
+func (g *varGlyph) setVerticalPhantoms(top, advance int) {
 	n := len(g.x)
 	if n < 4 {
-		return 0, 0
+		return
 	}
-	return g.x[n-4], g.x[n-3] - g.x[n-4]
+	g.x[n-2], g.y[n-2] = 0, float64(top)
+	g.x[n-1], g.y[n-1] = 0, float64(top-advance)
+}
+
+// metricsComponent is the component a composite takes its metrics from — the
+// last one flagged USE_MY_METRICS, as HarfBuzz takes them — and -1 for a glyph
+// that takes its own.
+func (g *varGlyph) metricsComponent() int {
+	use := -1
+	for _, c := range g.comps {
+		if c.flags&compUseMyMetrics != 0 {
+			use = c.glyph
+		}
+	}
+	return use
+}
+
+// phantoms are the four phantom points, left, right, top and bottom, as x and
+// y.
+func (g *varGlyph) phantoms() [4][2]float64 {
+	var out [4][2]float64
+	n := len(g.x)
+	if n < 4 {
+		return out
+	}
+	for i := range out {
+		out[i] = [2]float64{g.x[n-4+i], g.y[n-4+i]}
+	}
+	return out
 }
 
 // otRound rounds a coordinate the way the format's own tools do: halves go up,

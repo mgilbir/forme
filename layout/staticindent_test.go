@@ -54,3 +54,63 @@ func TestABlockStaticPositionDoesNotTakeTheIndent(t *testing.T) {
 	px(t, "the static position of a box written as a block",
 		staticX(t, `#c { text-indent: 20px } #a { display: block }`, `<div id="a"></div>`), 0)
 }
+
+// The same three questions right to left, where the line starts at its right
+// edge and so does the indent. §10.3.7 then anchors "right" rather than "left",
+// and the static position it anchors is the pen read from the right-hand edge.
+//
+// Both halves were missing the indent there: the line walk recorded the pen as
+// though every right-to-left line began at the block's right edge, and the
+// block walk took the indent for a left-to-right line only. The dir=rtl half of
+// text-indent/text-indent-with-absolute-pos-child is these cases.
+
+// staticXRTL is staticX in a right-to-left block. #c is 300 wide at the page's
+// left edge, so its content right edge is at 300 and a 20px box whose right edge
+// is on the pen is at the pen less 20.
+func staticXRTL(t *testing.T, css, content string) style.Unit {
+	t.Helper()
+	return staticX(t, `#c { direction: rtl } `+css, content)
+}
+
+// TestAnInlineStaticPositionTakesTheIndentRightToLeft, on a line that exists.
+func TestAnInlineStaticPositionTakesTheIndentRightToLeft(t *testing.T) {
+	px(t, "the static position on an indented right-to-left first line",
+		staticXRTL(t, `#c { text-indent: 20px }`, `<span id="a"></span>xx`), 260)
+	px(t, "the same block with no indent",
+		staticXRTL(t, ``, `<span id="a"></span>xx`), 280)
+}
+
+// TestAnInlineStaticPositionTakesTheIndentWithNoLineRightToLeft: the block walk's
+// half, where the box is the block's only content and there is no line box.
+func TestAnInlineStaticPositionTakesTheIndentWithNoLineRightToLeft(t *testing.T) {
+	px(t, "the static position where a right-to-left block made no line",
+		staticXRTL(t, `#c { text-indent: 20px }`, `<span id="a"></span>`), 260)
+	px(t, "the same block with no indent",
+		staticXRTL(t, ``, `<span id="a"></span>`), 280)
+	px(t, "a box written as a block, which the indent does not reach",
+		staticXRTL(t, `#c { text-indent: 20px } #a { display: block }`, `<div id="a"></div>`), 280)
+	// Inside an empty inline, or before a space that collapses away, the box is
+	// met by the line walk and not the block walk, and the line it is met on has
+	// nothing on it: no runs, no alignment, and so only the indent to say where
+	// its content would have started.
+	for _, content := range []string{`<b><span id="a"></span></b>`, `<span id="a"></span> `} {
+		px(t, "an empty right-to-left line: "+content,
+			staticXRTL(t, `#c { text-indent: 20px }`, content), 260)
+		px(t, "an empty left-to-right line: "+content,
+			staticX(t, `#c { text-indent: 20px }`, content), 20)
+	}
+}
+
+// TestAnInlineStaticPositionFollowsTheAlignmentRightToLeft: the pen is where the
+// content ended up, and "text-align: left" puts a right-to-left line's content
+// at the left. A 60px inline-block comes first, so it spans 0 to 60 and the box
+// written after it — logically after, so visually to its left — has its right
+// edge at 0. Counting the pen from the block's right edge put it at 240, as
+// though the line had been start-aligned.
+func TestAnInlineStaticPositionFollowsTheAlignmentRightToLeft(t *testing.T) {
+	const pre = `#pre { display: inline-block; width: 60px; height: 10px }`
+	px(t, "after a left-aligned right-to-left line's content",
+		staticXRTL(t, `#c { text-align: left } `+pre, `<span id="pre"></span><span id="a"></span>`), -20)
+	px(t, "and start-aligned, where the content is at the right",
+		staticXRTL(t, pre, `<span id="pre"></span><span id="a"></span>`), 220)
+}

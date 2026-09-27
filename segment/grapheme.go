@@ -293,9 +293,20 @@ func (s *scanner) advance(cur props) {
 //
 // The zero Scanner is ready to use and is positioned before the first character.
 // One Scanner reads one string: reset it by assigning Scanner{}.
+//
+// A string is what the caller says it is, and it may arrive in parts. A Scanner
+// is a value, so a caller that has read one part hands the Scanner on and the
+// next part is read as the rest of the same string — which is how a line
+// breaker reads text written across several boxes: the rules that look further
+// back than one character (GB9c's conjuncts, GB11's emoji sequences, GB12 and
+// GB13's pairs of regional indicators) see the whole of it.
 type Scanner struct {
 	sc scanner
 }
+
+// Started reports whether the Scanner has read a character, which is whether
+// the next one can continue a cluster at all.
+func (s Scanner) Started() bool { return s.sc.set }
 
 // Boundary reports whether a grapheme cluster boundary falls immediately before
 // r, and advances past r.

@@ -60,10 +60,11 @@ import (
 //     font's rules match text written either way. See normalize.go.
 //   - GDEF glyph classes and the lookup flags that use them, so that a lookup
 //     declaring it ignores marks does.
-//   - The zero-width joiner and non-joiner: obeyed where they are written about,
-//     stepped over by every rule that is not about them, and removed before
-//     anything is positioned or drawn. See ignorable.go, which also says which
-//     of Unicode's other default-ignorable characters are *not* handled.
+//   - The zero-width joiner and non-joiner, and every other character Unicode
+//     says is drawn as nothing: kept while the substitutions run, matched
+//     where a rule names them and otherwise stepped over as HarfBuzz steps
+//     over each, and removed before anything is positioned or drawn. See
+//     ignorable.go.
 //   - Reordering for every syllabic model this engine sets: Devanagari and its
 //     eight relatives (indic.go), Khmer (khmer.go), Myanmar (myanmar.go) and
 //     the Universal Shaping Engine (use.go), which covers Tibetan, Javanese,

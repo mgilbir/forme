@@ -82,23 +82,30 @@ func TestALineMayNotEndAfterAPrefix(t *testing.T) {
 // way round: under loose a line may end after a currency sign, because a
 // newspaper column is narrow enough to need it.
 //
-// It is here to say that break-all does not take that away, and not to pin
-// anything in gluedPair — the exemption lives in SplitAtBreaks, in a branch that
-// flushes the piece itself, and gluedPair was written with a matching "!Loose"
-// that could not be made to fail. See the note there.
+// It is here to say that break-all does not take that away. The sign is a
+// fullwidth one and the text is Japanese, because that is what the rule names:
+// "breaks after prefixes: Characters with the Unicode line breaking class PR
+// ... and the East Asian Width property Ambiguous, Fullwidth, or Wide", allowed
+// "if the writing system is Chinese or Japanese". A backslash is none of those,
+// and loose leaves it where UAX #14 has it.
 func TestLooseLetsBreakAllEndALineAfterAPrefix(t *testing.T) {
 	ba := breakAllValue(t)
 	loose := LineBreakOf("loose")
-	got := splitsWith(t, "ab\\cd", ba, loose)
-	if want := "a|b|\\|c|d"; got != want {
+	loose.ChineseOrJapanese = true
+	got := splitsWith(t, "ab￥cd", ba, loose)
+	if want := "a|b|￥|c|d"; got != want {
 		t.Errorf("under loose: %q, want %q — the break after a prefix is loose's "+
 			"to allow, and break-all does not take it back", got, want)
+	}
+	if got := splitsWith(t, "ab\\cd", ba, loose); got != "a|b|\\c|d" {
+		t.Errorf("under loose, a backslash: %q, want %q", got, "a|b|\\c|d")
 	}
 	// And no other value allows it, so the exception is the exception.
 	for _, value := range []string{"normal", "strict", "auto"} {
 		lb := LineBreakOf(value)
-		if got := splitsWith(t, "ab\\cd", ba, lb); got != "a|b|\\c|d" {
-			t.Errorf("under %s: %q, want %q", value, got, "a|b|\\c|d")
+		lb.ChineseOrJapanese = true
+		if got := splitsWith(t, "ab￥cd", ba, lb); got != "a|b|￥c|d" {
+			t.Errorf("under %s: %q, want %q", value, got, "a|b|￥c|d")
 		}
 	}
 }

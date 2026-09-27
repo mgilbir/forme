@@ -243,16 +243,39 @@ func joinForms(runes, before, after []rune) []uint8 {
 // lookups go through the lookup list rather than a flattened table of single
 // substitutions, because a font may state a form as anything a lookup can be —
 // a contextual rule, or a ligature that joins a letter to the one before it.
-func markJoiningForms(buf []Glyph, runes, before, after []rune) {
+func markJoiningForms(buf []Glyph, runes, before, after []rune, mongolian bool) {
 	if len(runes) != len(buf) {
 		// Nothing has been substituted yet where this is called, so this cannot
 		// happen; the guard is here so that moving the call fails visibly rather
 		// than assigning forms to the wrong glyphs.
 		return
 	}
-	for i, form := range joinForms(runes, before, after) {
+	forms := joinForms(runes, before, after)
+	if mongolian {
+		mongolianVariationForms(forms, runes)
+	}
+	for i, form := range forms {
 		if form != formNone {
 			buf[i].mask |= formMasks[form]
+		}
+	}
+}
+
+// mongolianVariationForms gives each Mongolian free variation selector the
+// form of the character before it, as HarfBuzz does in a Mongolian run — which
+// the universal model shapes (use.go), marking its forms through this file as
+// HarfBuzz's universal shaper marks them through its Arabic one.
+//
+// A selector is transparent to joining, so it takes no form of its own; and
+// it is not stepped over by a substitution (see ignorable.go), because a
+// Mongolian font's rules name it — a letter's initial form followed by the
+// first selector is the variant the selector asks for. A rule for the initial
+// forms is for the glyphs carrying that form, so the selector has to carry it
+// as well as the letter, or the rule never sees the pair.
+func mongolianVariationForms(forms []uint8, runes []rune) {
+	for i := 1; i < len(runes); i++ {
+		if r := runes[i]; r >= 0x180B && r <= 0x180D || r == 0x180F {
+			forms[i] = forms[i-1]
 		}
 	}
 }

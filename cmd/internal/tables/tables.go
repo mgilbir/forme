@@ -97,7 +97,8 @@ var Manifest = []Table{
 
 	// The paragraph's tables.
 	{Out: "paragraph/linebreaktable.go", Generator: "genlinebreak", Target: "linebreak",
-		Args: []string{ucdVersion, "${UCD}/LineBreak.txt"}},
+		Args: []string{ucdVersion, "${UCD}/LineBreak.txt", "${UCD}/emoji/emoji-data.txt",
+			"${UCD}/UnicodeData.txt"}},
 	{Out: "paragraph/casingtable.go", Generator: "gencasing", Target: "casing",
 		Args: []string{ucdVersion, "${UCD}/UnicodeData.txt", "${UCD}/SpecialCasing.txt",
 			"${UCD}/CaseFolding.txt"}},

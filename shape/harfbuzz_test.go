@@ -96,6 +96,12 @@ var harfbuzzCases = []struct {
 	// silent truncations were found.
 	{name: "tibetan", font: "fonts/NotoSerifTibetan.ttf",
 		corpus: "tibetan.txt", expected: "tibetan.expected.txt"},
+	// A face built for the rules a font writes about the characters nothing
+	// is drawn for — which a substitution steps over, which it does not, and
+	// which it matches where a rule names them — and about marks on a ligature
+	// made of part of a multiple substitution. See ignorables_fixture.py.
+	{name: "ignorables", font: "fonts/Ignorables.ttf",
+		corpus: "ignorables.txt", expected: "ignorables.expected.txt"},
 }
 
 // TestShapingAgreesWithHarfBuzz compares every case in every corpus.

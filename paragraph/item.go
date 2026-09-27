@@ -3,6 +3,7 @@ package paragraph
 import (
 	"unicode/utf8"
 
+	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -380,15 +381,16 @@ type Item struct {
 	ContextKerns bool
 	// Upright says the run is set upright on a line of vertical text: each of
 	// its characters stands the way it does in the code charts, and the pen
-	// moves one em to the next one whatever the face's horizontal advance for
-	// it happens to be.
+	// moves down to the next by the glyph's vertical advance, whatever its
+	// horizontal advance happens to be.
 	//
 	// It is a fact about the *measurement* as much as about the drawing, which
-	// is why it travels on the item. CSS Writing Modes §4.4 has the UA
-	// synthesize vertical metrics where a face states none, and the synthesis is
-	// the em box — so the width of an upright run is a count of its characters
-	// and not a sum of its advances, and a line filled with the second and drawn
-	// with the first would be filled to a width the page does not have.
+	// is why it travels on the item. A face that states vertical metrics is
+	// measured by them, as shaping with shape.Features.Vertical reports them —
+	// the advances a backend steps its pen by. One that states none is measured
+	// by CSS Writing Modes §4.4's synthesis, the em box: a count of its
+	// characters, one em each. A line filled with one and drawn with another
+	// would be filled to a width the page does not have.
 	Upright bool
 	// HyphenLastResort says a line may be sent back to the opportunity in front
 	// of this item only when there is no other — because the opportunity is one
@@ -718,27 +720,33 @@ type State struct {
 	// same reason the rest of this does: "a&#8288;<span>b</span>" puts the word
 	// joiner and the box in different text nodes.
 	AfterBinding bool
-	// AfterDeferred says the opportunity being carried is one an *ideograph*
-	// offered rather than one a space did, and it is the difference between two
-	// prohibitions that read alike.
+	// AfterDeferred says the opportunity being carried is UAX #14's, which the
+	// next box's first character decides from AfterContext — as against one
+	// CSS gives whatever that character is, an atomic inline's or a <wbr>'s.
+	// See paragraph.Trailing.Deferred.
 	//
-	// UAX #14's "a line may not begin with this character" is applied inside a
-	// run only to the opportunities SplitAtBreaks defers — the ones between two
-	// ideographs — and not to the one after a space: "AA )BB" breaks after the
-	// space and always has. An opportunity crossing a box boundary has to be
-	// held to the same rule as one that did not cross it, or "中中<span>〜</span>文"
-	// and "中中〜文" answer differently about the same text.
+	// An opportunity crossing a box boundary has to be held to the same rules
+	// as one that did not cross it, or "中中<span>〜</span>文" and "中中〜文"
+	// answer differently about the same text.
 	AfterDeferred bool
-	// AfterHeld says that opportunity was offered and then *moved* rather than
-	// refused: the character in front of it is one a line may not begin with,
-	// so the break belongs after it instead.
-	//
-	// It is kept apart from AfterDeferred because word-break has already had
-	// its say over a held one and does not get a second on the far side of the
-	// character that displaced it. Folding the two together is what broke
-	// word-break-keep-all-006, whose four ideographs around a comma set as
-	// three and one rather than two and two.
+	// AfterHeld is never set by SplitAtBreaks any more: it said an opportunity
+	// had been moved past a character a line may not begin with, which was how
+	// the pair rules were approximated before they were run. See
+	// paragraph.Trailing.Held.
 	AfterHeld bool
+	// AfterContext is what UAX #14's rules need of everything before the next
+	// box: the unit in front of the boundary, the one in front of a run of
+	// spaces, a number in progress, a count of regional indicators. See
+	// paragraph.BreakContext, which it is, and Carried.Context, which it
+	// becomes.
+	AfterContext BreakContext
+	// AfterClusters is the grapheme cluster scan at the end of what has been
+	// emitted, which the next box continues. See Carried.Clusters.
+	AfterClusters segment.Scanner
+	// AfterDecided says the boundary in front of the next character has
+	// already been given to an inline box's margin edge, and the next box is
+	// not to offer it again. See Carried.Decided.
+	AfterDecided bool
 	// AfterText is the run of text in front of the next box that a dictionary
 	// would segment together with it: everything back to the last character of
 	// another script, or of none, and then forward to the last word boundary in
@@ -749,9 +757,10 @@ type State struct {
 	// before the next box, which the model reads across the boundary. See
 	// paragraph.Carried.PhraseBefore.
 	AfterPhrase string
-	// AfterTaken says the opportunity the box left is one its text *took*,
-	// which is not the absence of the two above: a box can leave a taken break
-	// and a hold at the same offset. See paragraph.Trailing.Taken.
+	// AfterTaken says the opportunity the box left is one CSS gives whatever
+	// the rules say of the next character, which is not the absence of the two
+	// above: a box can leave both at the same offset. See
+	// paragraph.Trailing.Taken.
 	AfterTaken bool
 	// AfterRune is the last character emitted, which the next box needs for the
 	// pair rules and to know it is not at the start of the paragraph.
@@ -760,10 +769,10 @@ type State struct {
 	// which is one rule out of the several that read it. See paragraph.Carried.
 	AfterRune rune
 	// AfterLetterUnit says the last character emitted was a typographic letter
-	// unit that is not itself an ideograph, which is what decides whether an
-	// ideograph beginning the next box may be broken away from it. It travels
-	// for the reason the rest of this does: the two characters of that boundary
-	// are in different text nodes, and neither box can see both.
+	// unit that is not itself an ideograph. It decided, once, whether an
+	// ideograph beginning the next box could be broken away from it; that
+	// boundary is UAX #14's now, decided from AfterContext like every other,
+	// and this is kept for the callers that read it.
 	AfterLetterUnit bool
 	// AfterBase is the last base character emitted — the last character that
 	// is not a mark or an invisible — which the next box's scan needs where the
@@ -1038,6 +1047,17 @@ func mergedText(pre, run, post, group string) string {
 // items came out a sixty-fourth different, and they were the list markers, and
 // the answer that changed was the one that had been right. It is measured the
 // way it is for a reason.
+// uprightRun is the run an upright item is a stretch of, with its context:
+// the run it was cut from where it was cut, its own text otherwise. It is
+// group without the merge, which an upright run does not take part in; see
+// uprightKey.
+func (it Item) uprightRun() (whole string, base int, before, after string) {
+	if c := it.Cut; c != nil {
+		return c.Text, it.CutAt, c.Before, c.After
+	}
+	return it.Text, 0, it.PreContext, it.PostContext
+}
+
 func (it Item) group() (whole string, base int, before, after string, kerns bool) {
 	whole, base = it.Text, 0
 	before, after, kerns = it.PreContext, it.PostContext, it.ContextKerns

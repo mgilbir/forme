@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"slices"
+
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -73,6 +75,95 @@ type LineFragment struct {
 	// line box's *left* edge, because the glyphs' own up points left after this
 	// turn, and each run's X is a distance upwards from the line box's foot.
 	Anticlockwise bool
+}
+
+// A line box carries two kinds of position, and everything that moves a line
+// after it was laid out has to know which is which.
+//
+// Rect is the line box in the block's content coordinates, and what is on the
+// line *along* it — each run's X, its Shift and Offset, the Baseline — is
+// measured from the line box, so moving Rect moves all of that for free. The
+// fragments hanging off the line are not: an inline box's background and border
+// fragment, and a link's area, are rectangles in the block's content
+// coordinates exactly as the line box is, because they are painted and hit as
+// rectangles and a rectangle measured from a line would have to be turned into
+// one at every reader. So a line that moves leaves them behind unless they are
+// moved with it.
+//
+// That is a fault that was made more than once. A table cell's vertical-align
+// and a multi-column pour each moved the line box and the links on it and left
+// the inline boxes' backgrounds where the line had first been laid out: a span's
+// highlight in a middle-aligned cell, or in the second column of a pour, was
+// drawn hundreds of pixels from its words. The cure is that no caller lists the
+// fields: placed names them once, and move, detached, absolutise, the quarter
+// turn and the layout cache's copy all go through it.
+// TestEveryLineFieldIsPlacedOrRelative is what keeps the list whole when a
+// field is added.
+
+// placed is every list of fragments on the line that is positioned in the
+// block's content coordinates rather than along the line.
+func (l *LineFragment) placed() [2]*[]*Fragment {
+	return [2]*[]*Fragment{&l.Boxes, &l.links}
+}
+
+// move translates the line and everything on it by dx and dy, in place.
+//
+// In place is what the one caller that owns the line wants: a table cell's
+// vertical-align moves lines no one else holds, and a positioned inline box's
+// fragments are recorded by identity for §10.1's containing block (see
+// inlineContainingBlock), so a copy would move the drawing and leave the
+// containing block behind. A caller that copied the line out of a fragment it
+// may copy again takes detached first.
+func (l *LineFragment) move(dx, dy style.Unit) {
+	if dx == 0 && dy == 0 {
+		return
+	}
+	l.Rect.X = l.Rect.X.Add(dx)
+	l.Rect.Y = l.Rect.Y.Add(dy)
+	for _, list := range l.placed() {
+		for _, f := range *list {
+			translate(f, dx, dy)
+		}
+	}
+}
+
+// detached is the line with its own copies of the fragments hanging off it, so
+// that moving it does not move the line it was copied from.
+//
+// A multi-column pour needs it: the line it copies out of the block it is
+// dividing is the original's, and the pour may divide that block again at
+// another height, so a fragment moved where it stands would be moved once per
+// attempt. Only the fragments themselves are copied, with the one list of
+// rectangles translate writes to. Anything below one would be measured from its
+// content box and so is shared, as the line's runs are, because nothing a move
+// writes reaches it.
+func (l LineFragment) detached() LineFragment {
+	for _, list := range l.placed() {
+		if len(*list) == 0 {
+			continue
+		}
+		out := make([]*Fragment, len(*list))
+		for i, f := range *list {
+			c := *f
+			c.bgBands = slices.Clone(f.bgBands)
+			out[i] = &c
+		}
+		*list = out
+	}
+	return l
+}
+
+// translate moves one fragment's own rectangles by dx and dy: its border box
+// and the bands its background is painted in, which are in the same
+// coordinates. What is inside it is measured from its content box and comes
+// along without being touched.
+func translate(f *Fragment, dx, dy style.Unit) {
+	f.BorderRect.X = f.BorderRect.X.Add(dx)
+	f.BorderRect.Y = f.BorderRect.Y.Add(dy)
+	for i := range f.bgBands {
+		f.bgBands[i].X = f.bgBands[i].X.Add(dx)
+		f.bgBands[i].Y = f.bgBands[i].Y.Add(dy)
+	}
 }
 
 // TextRun is a piece of text on a line, set in one face at one size.

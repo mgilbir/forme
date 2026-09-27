@@ -544,9 +544,11 @@ func trimRunSpace(v DrawText) DrawText {
 	if lead := v.Text[:strings.Index(v.Text, trimmed)]; lead != "" {
 		w, _ := style.FromPx(v.Face.Measure(lead, v.Size.Px()))
 		if v.Upright {
-			// One em per character, which is what the run was placed with. See
-			// DrawText.Upright.
-			w = v.Size.Mul(float64(uprightUnits(lead)))
+			// What the run was placed with: the face's vertical advances, or
+			// one em a character where it states none. See DrawText.Upright.
+			lv := v
+			lv.Text, lv.PostContext = lead, v.Text[len(lead):]
+			w, _, _ = uprightExtent(lv)
 		}
 		w = w.Add(v.CharSpacing.Mul(float64(len([]rune(lead)))))
 		// Past the space the run starts with, in whichever direction the run
@@ -854,6 +856,16 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 	}
 	text := ShapedText(v)
 	glyphs, _ := ShapedGlyphs(v)
+	// An upright run in a face that states vertical metrics is drawn as a
+	// backend following DrawText.Upright draws it: shaped with
+	// shape.Features.Vertical, the pen stepping down by each glyph's
+	// YAdvance.
+	vertical := v.Upright && v.Face.StatesVerticalMetrics()
+	if vertical {
+		off := v.Features
+		off.Vertical = true
+		glyphs, _ = v.Face.ShapeGlyphsInContext(text, v.PreContext, v.PostContext, off)
+	}
 	var out []textMark
 	// How far along the run each glyph is. Along, and not "x": a sideways run
 	// advances down the page, so the pen moves in y and the baseline's x is
@@ -869,7 +881,9 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 	spaceAfter := spacingAfterGlyph(v, text, glyphs)
 	for i, g := range glyphs {
 		adv, _ := style.FromPx(g.XAdvance * v.Size.Px() / 1000)
-		if v.Upright {
+		if vertical {
+			adv, _ = style.FromPx(-g.YAdvance * v.Size.Px() / 1000)
+		} else if v.Upright {
 			// One em per character, whatever the face's horizontal advance
 			// for it is, and nothing for a mark that is drawn on the character
 			// in front of it. See DrawText.Upright and paragraph.UprightUnits,
@@ -1294,10 +1308,13 @@ func runAdvance(v DrawText) style.Unit {
 	// the same picture from markup.
 	text := inkOnly(v.Text)
 	if v.Upright {
-		// One em per character rather than the face's advances, which is what
-		// the run was measured and placed with. See DrawText.Upright.
-		return v.Size.Mul(float64(uprightUnits(text))).
-			Add(v.CharSpacing.Mul(float64(spacedUnits(text))))
+		// What the run was measured and placed with: the face's vertical
+		// advances, or one em a character where it states none. See
+		// DrawText.Upright.
+		uv := v
+		uv.Text = text
+		along, _, _ := uprightExtent(uv)
+		return along.Add(v.CharSpacing.Mul(float64(spacedUnits(text))))
 	}
 	w, _ := style.FromPx(v.Face.Measure(text, v.Size.Px()))
 	// Units and not runes: §8.2's spacing goes after each typographic character

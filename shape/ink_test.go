@@ -160,11 +160,13 @@ func TestInkExtentReadsAGlyfFontsOwnHeaders(t *testing.T) {
 
 // TestInkExtentSaysSoWhenItCannotAnswer.
 //
-// The extents of a CFF-flavoured font's glyphs are in its charstrings and
-// cannot be had without interpreting them. Answering with the face's ascent and
-// descent instead would be a plausible number that is not what was asked for,
-// and a caller cannot tell one from the other — so it does not answer, and the
-// caller falls back knowingly.
+// A face with no glyph headers to read and no charstrings to run has no
+// glyph extents to give. Answering with the face's ascent and descent instead
+// would be a plausible number that is not what was asked for, and a caller
+// cannot tell one from the other — so it does not answer, and the caller falls
+// back knowingly. A CFF face used to be such a face; it runs its charstrings
+// now (TestInkExtentReadsACFFFacesGlyphs), and one of its glyphs that cannot be
+// run is this case again.
 func TestInkExtentSaysSoWhenItCannotAnswer(t *testing.T) {
 	f, err := NotoSans()
 	if err != nil {
@@ -173,8 +175,8 @@ func TestInkExtentSaysSoWhenItCannotAnswer(t *testing.T) {
 	if f.prog == nil || f.prog.GlyphBBox == nil {
 		t.Skip("the bundled face has no glyf table to remove")
 	}
-	// The same face with the table taken away, which is the shape a CFF font
-	// arrives in.
+	// The same face with the table taken away, so that it can measure
+	// nothing.
 	blind := *f
 	prog := *f.prog
 	prog.GlyphBBox = nil

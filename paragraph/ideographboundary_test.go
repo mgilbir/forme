@@ -214,22 +214,21 @@ func TestAnInvisibleDoesNotDeleteTheOpportunityBeforeAnIdeograph(t *testing.T) {
 			t.Errorf("%s: %s, want %s", tc.what, got, tc.want)
 		}
 	}
-	// The containment half, and both of these would be broken by stepping over
-	// every invisible rather than the ones LB9 is about.
+	// The containment half.
 	//
 	// A zero width joiner is not stepped over: LB8a forbids a break after one
-	// outright, which is the whole of what an author writes it for. And an
-	// invisible with nothing in front of it leaves the rule with no base to
-	// judge, which is the same answer as a text that begins with the ideograph.
+	// outright, which is the whole of what an author writes it for.
+	//
+	// An invisible with nothing in front of it is LB10's: a mark with no base is
+	// a letter of its own, class AL, and a line may end between a letter and an
+	// ideograph. And between two ideographs the invisible belongs to the first
+	// (LB9), so the one opportunity there is after it — which is where it was
+	// not while the opportunity was deferred from the first ideograph and taken
+	// at the next character, whatever that was.
 	for _, tc := range []struct{ text, want, what string }{
 		{"0‍永", "0‍永", "a zero width joiner, which LB8a binds"},
-		{"‏永", "‏永", "an invisible with nothing in front of it"},
-		// Between two ideographs the opportunity is the deferred one the first of
-		// them left, and it lands in front of the invisible rather than in front
-		// of the second ideograph. One opportunity and not two, which is what this
-		// case holds: a second at the same place costs 63 clean passes, as the
-		// test above records.
-		{"永‏永", "永|‏永", "between two ideographs, where the deferred one already is"},
+		{"‏永", "‏|永", "an invisible with nothing in front of it"},
+		{"永‏永", "永‏|永", "between two ideographs, with the invisible on the first"},
 	} {
 		if got := barred(t, tc.text, WordBreak{}); got != tc.want {
 			t.Errorf("%s: %s, want %s", tc.what, got, tc.want)

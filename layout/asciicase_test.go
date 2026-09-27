@@ -33,15 +33,16 @@ func TestAnSVGsNamesAndKeywordsAreFoldedAsASCII(t *testing.T) {
 	}
 }
 
-// TestAFeatureTagIsCaseSensitive is the other direction. CSS Fonts 4 §6.12
-// makes an <opentype-tag> case-sensitive, so "KERN" is not "kern" but some
-// other feature, and the one thing this can say about kerning on a face with
-// none is not said about it. It was compared with strings.EqualFold.
+// TestAFeatureTagIsCaseSensitive is the other direction. CSS Fonts 4 makes an
+// <opentype-tag> case-sensitive, so "KERN" is not "kern" but some other
+// feature, and the one thing this knows about kerning — whether the face has
+// any — says nothing about it. It was compared with strings.EqualFold.
 func TestAFeatureTagIsCaseSensitive(t *testing.T) {
-	if got := unappliedFontFeatures(`"kern" 0`, nil); got != "" {
-		t.Errorf(`"kern" 0 on a face with no kerning was reported: %s`, got)
+	face := kerningFallbackFace(t)
+	if got := unappliedFontFeatures(`"kern" 1`, face); got != "" {
+		t.Errorf(`"kern" 1 on a face that kerns was reported: %s`, got)
 	}
-	if got := unappliedFontFeatures(`"KERN" 0`, nil); !strings.Contains(got, "KERN") {
-		t.Errorf(`"KERN" 0 was taken for "kern": the report is %q`, got)
+	if got := unappliedFontFeatures(`"KERN" 1`, face); !strings.Contains(got, "KERN") {
+		t.Errorf(`"KERN" 1 was taken for "kern": the report is %q`, got)
 	}
 }

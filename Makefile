@@ -1,4 +1,4 @@
-.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink hbcolrink hbverticalinstance test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -185,7 +185,7 @@ hbenv:
 # indiccategories.expected.txt — are read from a source checkout of the same
 # release: HarfBuzz's own generators, and its own source; see
 # usecategories.py, usescripts.py and indiccategories.py.
-hboracles: hbshaping hbvertical hblanguages varinstance
+hboracles: hbshaping hbvertical hbcffink hbcolrink hbverticalinstance hblanguages varinstance
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
@@ -206,6 +206,9 @@ hbshaping:
 		$(HARFBUZZ_DIR)/balinese.txt $(HARFBUZZ_DIR)/balinese.expected.txt
 	$(PYTHON) $(HARFBUZZ_DIR)/shape.py $(HARFBUZZ_DIR)/fonts/NotoSerifTibetan.ttf \
 		$(HARFBUZZ_DIR)/tibetan.txt $(HARFBUZZ_DIR)/tibetan.expected.txt
+	$(PYTHON) $(HARFBUZZ_DIR)/ignorables_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/shape.py $(HARFBUZZ_DIR)/fonts/Ignorables.ttf \
+		$(HARFBUZZ_DIR)/ignorables.txt $(HARFBUZZ_DIR)/ignorables.expected.txt
 	$(PYTHON) $(HARFBUZZ_DIR)/shapefeatures.py fonts/notosans/NotoSans-Variable.ttf \
 		$(HARFBUZZ_DIR)/features.txt $(HARFBUZZ_DIR)/features.expected.txt
 	$(PYTHON) $(HARFBUZZ_DIR)/shape.py $(HARFBUZZ_DIR)/fonts/NotoSansJavanese.ttf \
@@ -234,8 +237,50 @@ hbvertical:
 		VerticalFallbacks.ttf=$(HARFBUZZ_DIR)/fonts/VerticalFallbacks.ttf \
 		VerticalHhea.ttf=$(HARFBUZZ_DIR)/fonts/VerticalHhea.ttf
 
+# The ink of CFF glyphs, which is read by running their charstrings: every
+# glyph of a face built here for each thing a charstring can say (see
+# cffink_fixture.py), and a sample of every CFF face in the corpora, so this
+# needs `make notocjk noto-fonts` first. See cffink.py.
+hbcffink:
+	$(PYTHON) $(HARFBUZZ_DIR)/cffink_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/cffink.py $(HARFBUZZ_DIR)/cffink.expected.txt \
+		CFFInk.otf=$(HARFBUZZ_DIR)/fonts/CFFInk.otf \
+		Unifont-Regular.otf=$(NOTO_DIR)/Unifont-Regular.otf \
+		UnifontUpper-Regular.otf=$(NOTO_DIR)/UnifontUpper-Regular.otf \
+		NotoSansJP-Regular.otf=$(CJK_DIR)/NotoSansJP-Regular.otf \
+		NotoSansKR-Regular.otf=$(CJK_DIR)/NotoSansKR-Regular.otf \
+		NotoSansSC-Regular.otf=$(CJK_DIR)/NotoSansSC-Regular.otf \
+		NotoSansTC-Regular.otf=$(CJK_DIR)/NotoSansTC-Regular.otf \
+		NotoSansHK-Regular.otf=$(CJK_DIR)/NotoSansHK-Regular.otf \
+		NotoSerifJP-Regular.otf=$(CJK_DIR)/NotoSerifJP-Regular.otf
+
+# The ink of colour glyphs, painted from COLR or read from a CBDT bitmap's
+# metrics: every glyph of two faces built here for each thing painting can do
+# to a box and each thing the bitmap tables say (see colrink_fixture.py). See
+# colrink.py.
+hbcolrink:
+	$(PYTHON) $(HARFBUZZ_DIR)/colrink_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/colrink.py $(HARFBUZZ_DIR)/colrink.expected.txt \
+		ColourInk.ttf=$(HARFBUZZ_DIR)/fonts/ColourInk.ttf \
+		ColourInkStatic.ttf=$(HARFBUZZ_DIR)/fonts/ColourInkStatic.ttf \
+		BitmapInk.ttf=$(HARFBUZZ_DIR)/fonts/BitmapInk.ttf
+
+# A variable face set upright away from its default instance, and a kern
+# table's vertical subtables: two faces built here with VVAR and without, and
+# one with a kern table that kerns down the page (see
+# verticalinstance_fixture.py), and Noto Sans JP's variable face from the
+# corpora, so this needs `make noto-fonts` first. See verticalinstance.py.
+hbverticalinstance:
+	$(PYTHON) $(HARFBUZZ_DIR)/verticalinstance_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/verticalinstance.py $(HARFBUZZ_DIR)/verticalinstance.expected.txt \
+		VerticalVariable.ttf=$(HARFBUZZ_DIR)/fonts/VerticalVariable.ttf \
+		VerticalVariableNoVVAR.ttf=$(HARFBUZZ_DIR)/fonts/VerticalVariableNoVVAR.ttf \
+		NotoSansJP-VF.ttf=$(NOTO_DIR)/NotoSansJP-VF.ttf \
+		VerticalKern.ttf=$(HARFBUZZ_DIR)/fonts/VerticalKern.ttf \
+		VerticalKernNoVkrn.ttf=$(HARFBUZZ_DIR)/fonts/VerticalKernNoVkrn.ttf
+
 test-hbshaping:
-	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth|TestFeatureShapingAgreesWithHarfBuzz|TestTheFeatureOracleHasTeeth|TestTheDefaultModelAgreesWithHarfBuzz|TestUprightShapingAgreesWithHarfBuzz|TestSidewaysRunsAreShapedAsBefore|TestVerticalMetricsAgreeWithHarfBuzz|TestTheVerticalOracleHasTeeth' -count=1 -timeout $(TEST_TIMEOUT) ./shape
+	go test -v -run 'TestShapingAgreesWithHarfBuzz|TestTheHarfBuzzOracleHasTeeth|TestFeatureShapingAgreesWithHarfBuzz|TestTheFeatureOracleHasTeeth|TestTheDefaultModelAgreesWithHarfBuzz|TestUprightShapingAgreesWithHarfBuzz|TestSidewaysRunsAreShapedAsBefore|TestVerticalMetricsAgreeWithHarfBuzz|TestTheVerticalOracleHasTeeth|TestCFFInkAgreesWithHarfBuzz|TestCFFInkPlacesTheFixturesMarksAsHarfBuzzDoes|TestInstancedVerticalMetricsAgreeWithHarfBuzz|TestVerticalKernAgreesWithHarfBuzz|TestColourInkAgreesWithHarfBuzz|TestColourInkPlacesMarksAsHarfBuzzDoes' -count=1 -timeout $(TEST_TIMEOUT) ./shape
 
 # Instancing checked against fontTools and HarfBuzz, over four faces and eight
 # locations. Needs the same Python as hbshaping.
@@ -288,10 +333,16 @@ UCD ?= $(UCD_DIR)
 # argument lists had drifted, and nothing was in a position to notice. See
 # cmd/regenerate_test.go, which now runs every one of them.
 #
-# The twenty files that are read, rather than UCD.zip: the archive is an
+# The twenty-one files that are read, rather than UCD.zip: the archive is an
 # order of magnitude larger than the files taken from it, unzip is one more
 # thing to have installed, and a file that moves in a new release fails here by
 # name instead of as a "no such file" from inside a generator.
+#
+# One of them is read by a test rather than a generator: LineBreakTest.txt is
+# UAX #14's conformance suite, and paragraph/linebreakconformance_test.go runs
+# every case of it through the line breaker. It is here rather than in a set of
+# its own, as GraphemeBreakTest.txt is, because it is held to the release
+# linebreaktable.go was generated from, and that release is this set's.
 #
 # The layout is the database's own, subdirectories and all, so that a caller who
 # already has one unpacked can point UCD at it and every target works.
@@ -314,6 +365,7 @@ UCD_FILES := \
 	UnicodeData.txt \
 	VerticalOrientation.txt \
 	auxiliary/GraphemeBreakProperty.txt \
+	auxiliary/LineBreakTest.txt \
 	emoji/emoji-data.txt \
 	extracted/DerivedBidiClass.txt
 

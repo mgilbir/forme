@@ -46,18 +46,25 @@ func TestALineStillDoesNotEndInTheMiddleOfAWord(t *testing.T) {
 	}
 }
 
-// TestTheOpportunityAfterOneIsStillRefusedWhereARuleSaysSo. It is deferred to
-// the next boundary rather than taken where it is offered, which is what runs
-// the prohibitions over it: LB13 says a line may not begin with a closing
-// bracket, and that is true after a danda as much as after an ideograph.
+// TestTheOpportunityAfterOneIsStillRefusedWhereARuleSaysSo. It is the pair rules
+// that decide it, at the next boundary: LB13 says a line may not begin with a
+// closing bracket or an exclamation mark, and that is true after a danda as much
+// as after an ideograph.
+//
+// It used to be *moved* past the character a line may not begin with, and
+// broke "एक।)|दो". UAX #14 does not move an opportunity: it decides each
+// boundary, and the one after the bracket is LB30's — "CP × AL" for a bracket
+// that is not East Asian — and the one after the exclamation mark is CSS Text's
+// note, which keeps "!" with the letter after it. A fullwidth bracket is the
+// row where the next boundary is an opportunity: LB30 is about the narrow ones.
 func TestTheOpportunityAfterOneIsStillRefusedWhereARuleSaysSo(t *testing.T) {
-	for _, tc := range []struct{ text, want string }{
-		{"एक।)दो", "एक।)|दो"},
-		{"एक।!दो", "एक।!|दो"},
+	for _, tc := range []struct{ text, want, why string }{
+		{"एक।)दो", "एक।)दो", "LB13, then LB30"},
+		{"एक।!दो", "एक।!दो", "LB13, then CSS Text's note on U+0021"},
+		{"एक।」दो", "एक।」|दो", "LB13, then LB31"},
 	} {
 		if got := marks(t, tc.text, WordBreak{}, LineBreak{}); got != tc.want {
-			t.Errorf("%q breaks as %q, want %q — the opportunity moves past the "+
-				"character a line may not begin with", tc.text, got, tc.want)
+			t.Errorf("%q breaks as %q, want %q (%s)", tc.text, got, tc.want, tc.why)
 		}
 	}
 }

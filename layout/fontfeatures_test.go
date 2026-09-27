@@ -292,6 +292,13 @@ func TestTheRunCarriesWhatWasTurnedOff(t *testing.T) {
 		{"ligatures off", "font-variant-ligatures: none",
 			shape.Features{NoOptionalLigatures: true, NoContextualAlternates: true}},
 		{"kerning off", "font-kerning: none", shape.Features{NoKerning: true}},
+		// And what font-feature-settings turns on and off, which the backend
+		// resolves above the two switches as the measuring did (CSS Fonts 4
+		// §7.2).
+		{"a tag turned off", "font-feature-settings: 'liga' 0",
+			shape.Features{TagsOff: "liga"}},
+		{"kerning turned back on", "font-kerning: none; font-feature-settings: 'kern' 1",
+			shape.Features{NoKerning: true, Tags: "kern"}},
 	} {
 		var got shape.Features
 		var found bool

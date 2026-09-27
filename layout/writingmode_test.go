@@ -422,10 +422,11 @@ func TestAFloatedVerticalBlockIsTurnedLikeAnyOther(t *testing.T) {
 // The other typesetting mode a vertical line has: "text-orientation: upright".
 //
 // It is not a rotation, which is why it needs anything at all. Every character
-// stands the way it does in the code charts and the pen moves one em to the
-// next one — CSS Writing Modes §4.4's synthesized vertical metrics, since no
-// face this engine reads states any — so an upright run's *width* is a count of
-// its characters and not a sum of its advances.
+// stands the way it does in the code charts and the pen moves down by its
+// vertical advance. Courier states none, so here the advance is CSS Writing
+// Modes §4.4's synthesized one, an em — an upright run's *width* is a count of
+// its characters and not a sum of its horizontal advances. A face that states
+// vertical metrics is measured by them; see uprightmetrics_test.go.
 
 const uprightCSS = `body { margin: 0 }
 	#d { font-family: Courier; font-size: 20px; line-height: 20px;

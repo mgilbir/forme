@@ -24,24 +24,18 @@ import (
 //
 // # What this is not
 //
-// It is not UAX #14. The algorithm is thirty pair rules over a class table, and
-// most of them depend on what came *before* the break as well as after it: a
-// quotation mark may or may not begin a line depending on what quoted it, and a
-// numeric separator depends on whether a number surrounds it. Those cannot be
-// answered by looking at one character, and this does not pretend to.
+// It is not UAX #14, which is uax14.go and is what SplitAtBreaks runs. The
+// algorithm is thirty-odd pair rules over a class table, and most of them
+// depend on what came *before* the break as well as after it: a quotation mark
+// may or may not begin a line depending on what quoted it, and a numeric
+// separator depends on whether a number surrounds it. Those cannot be answered
+// by looking at one character, and this does not pretend to.
 //
 // What it is, is the subset that can: the rules written "× X" with nothing on
-// the left. Everything else CSS Text needs is elsewhere in this package, where
-// the characters it concerns — the spaces, the segment breaks, the tabs — are
-// already handled one at a time.
-//
-// # Why the opposite question needs no table
-//
-// A line may not *end* with an opening bracket either, which is UAX #14's LB14.
-// There is nothing here for it, and nothing is missing: the opportunity after an
-// ideograph is deferred until the following character is known, so a break after
-// an opening bracket is one that was never offered rather than one withdrawn.
-// A bracket is not an ideograph, so it defers nothing.
+// the left, with line-break's tailoring of them. This package once offered its
+// opportunities through it and nothing else; now it answers MayNotBeginLine, for
+// a caller that has a character and no context — and that answer is an
+// approximation of what the line breaker decides, which needs the context.
 func noBreakBefore(r rune, lb LineBreak) bool {
 	// Below the first range and the common case for Latin text, which is worth
 	// a comparison to avoid a search.
@@ -95,49 +89,6 @@ func noBreakBefore(r rune, lb LineBreak) bool {
 // line starts with a hyphen" and line-break-normal-hyphens-001, over the same
 // text, says it "ends with a hyphen".
 
-// breaksAfter reports whether a line may end after a character, whatever
-// follows it: UAX #14's class BA.
-//
-// It is where every writing system that divides its words with a mark rather
-// than with a space keeps that mark — the Ethiopic wordspace, the Tibetan
-// tsheg, the Devanagari danda, the Khmer, Mongolian and Myanmar punctuation.
-// Without it a paragraph of any of them is one unbreakable run: the engine
-// offers an opportunity at a space, at an ideograph and at a hyphen, and a
-// script that uses none of the three has nowhere to wrap.
-//
-// The spaces and the hyphens of the class do not reach it: SplitAtBreaks has an
-// arm for each of them earlier, because both need something this cannot say —
-// a space is trimmed or hangs at the end of a line, and a hyphen decides what a
-// line may *begin* with as well.
-//
-// The soft hyphen is class BA and is taken out here, which is the one exception
-// and is a CSS rule rather than a Unicode one. §6.1 makes the opportunity a
-// soft hyphen offers conditional on the hyphens property — "hyphens: none"
-// suppresses it — and SplitAtBreaks has an arm that asks. Left in, this table
-// answered first and broke fourteen of the suite's hyphens tests, every one of
-// them a document that said not to break there.
-func breaksAfter(r rune) bool {
-	return r != 0x00AD && inLineBreakRanges(r, breakAfterRanges[:])
-}
-
-// isAksara reports whether a character may begin a Brahmic cluster: UAX #14's
-// classes AK and AS.
-//
-// LB28a is four prohibitions *inside* a cluster and says nothing against a
-// break between two of them, where LB31's "ALL ÷ ALL" allows one. The scripts
-// these classes cover — Balinese, Batak, Brahmi, Cham, Dives Akuru, Grantha,
-// Javanese, Kawi, Tulu-Tigalari — write without spaces, so that boundary is the
-// only opportunity their text has. Without it a paragraph of any of them is one
-// unbreakable run and overflows its box, which CSS Text §5.1 forbids outright:
-// "some form of fallback line breaking must occur... overflowing is not
-// allowed". The suite's line-breaking-023 is a Javanese paragraph in six ems
-// beside a reference it must *not* match.
-//
-// The prohibitions inside a cluster need nothing here. SplitAtBreaks takes an
-// opportunity only at a grapheme cluster boundary, and Unicode 15.1's GB9c
-// keeps a conjunct together — which is the virama half of LB28a.
-func isAksara(r rune) bool { return inLineBreakRanges(r, aksaraRanges[:]) }
-
 // NeedsDictionaryBreaking reports whether a character belongs to a script whose
 // words are found by lexical analysis: UAX #14's class SA.
 //
@@ -183,16 +134,12 @@ func isEastAsianHyphen(r rune) bool { return r == 0x301C || r == 0x30A0 }
 // MayNotBeginLine reports whether the first character of a run is one a line may
 // not begin with.
 //
-// It exists because a break opportunity can arrive from *outside* the run. Inside
-// one, SplitAtBreaks withholds an opportunity in front of such a character as it
-// meets it; an opportunity carried in from the box before — an ideograph at the
-// end of the previous text node offers one, and the next node may be a <span> —
-// has no character in that box to be tested against. So the box that receives it
-// asks here.
-//
-// "中中<span>〜</span>文" is the shape, and the suite has a page of them: the
-// character a line may not begin with is written in an element of its own, which
-// is exactly what a test that wants to colour it does.
+// It was how a box that received an opportunity from the box before asked about
+// its own first character — "中中<span>〜</span>文", where the character a line
+// may not begin with is written in an element of its own. SplitAtBreaksAfter
+// decides that boundary itself now, from the BreakContext the box before left,
+// by all of UAX #14's rules rather than the ones written "× X"; this is the
+// one-character answer, for a caller that has no context to give.
 func MayNotBeginLine(text string, lb LineBreak) bool {
 	if text == "" {
 		return false
@@ -219,12 +166,13 @@ func BreaksAfterUnderLoose(r rune) bool {
 // it is a pair because the rules are: LB11 is "× WJ" *and* "WJ ×", LB12 is
 // "GL ×", and neither can be answered by looking at one side.
 //
-// It matters only where an opportunity was manufactured. Ordinary text offers
-// one at a space and after an ideograph, and the characters here are neither, so
-// nothing asks. word-break: break-all offers one at every character boundary in
-// a word, and then the question is real at every one of them: §5.2 allows
-// breaking "between typographic character units", and UAX #14 still says which
-// of those boundaries are not there.
+// It is what break-all's opportunities were checked against before SplitAtBreaks
+// ran UAX #14 in full: word-break: break-all offers one at every character
+// boundary in a word, §5.2 allows breaking "between typographic character
+// units", and UAX #14 still says which of those boundaries are not there. The
+// scan asks uax14.go now, which treats the letters as ideographs as §5.2 says
+// and runs every rule over them; this is the two-character answer GluedPair
+// gives a caller with no context.
 //
 // The suite's word-break-break-all-018, -021 and -022 are one shape —
 // "XXXX&nbsp;XXXX X X" in four characters of room — and they are what a break
@@ -253,13 +201,8 @@ func gluedPair(prev, r rune) bool {
 	// class is about what a character introduces rather than what it looks like.
 	//
 	// §5.3's loose is the one value that lets a newspaper column break there,
-	// and there is deliberately no test for it here. The exemption belongs to
-	// BreaksAfterUnderLoose, and SplitAtBreaks acts on it in a branch of its own
-	// that flushes the piece and marks the next one — so a loose document never
-	// reaches this function with a prefix behind it and an opportunity to lose.
-	// An "&& !lb.Loose" was written here first and could not be made to fail:
-	// planting its removal changed no output and moved no reftest, which is what
-	// says the guard was decoration rather than a rule.
+	// and there is deliberately no test for it here: this answers without a
+	// line-break value, and the relaxation is uax14.go's (lbChar.mayEnd).
 	if inLineBreakRanges(prev, prefixRanges[:]) {
 		return true
 	}

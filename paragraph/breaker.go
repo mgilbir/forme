@@ -169,12 +169,23 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 	// MeasureShaped hands those straight back to the sum.
 	var w style.Unit
 	switch {
+	case how.Upright && face.StatesVerticalMetrics():
+		// A run set upright on a line of vertical text advances by its glyphs'
+		// vertical advances — the face's 'vmtx', as shaping with
+		// Features.Vertical reports them in Glyph.YAdvance — and its horizontal
+		// advances say nothing about it. A backend drawing the run steps its pen
+		// by those same advances, so the width the line is filled to is the one
+		// the glyphs take. The two ends are rounded apart, as a merge group's
+		// are; see uprightSpan.
+		head, through := uprightSpan(br.advances(uprightKey(face, text, how.Before,
+			how.After, how.Off)), 0, len(text), size)
+		w = through.Sub(head)
 	case how.Upright:
-		// A run set upright on a line of vertical text advances one em per
-		// character, and the face's horizontal advances say nothing about it.
-		// CSS Writing Modes §4.4: where a face states no vertical metrics the
-		// UA synthesizes them, and the em box is the synthesis. See UprightUnits
-		// for what counts as a character here.
+		// A face that states no vertical metrics: CSS Writing Modes §4.4 has
+		// the UA synthesize them, and the synthesis is the em box — one em per
+		// character. Shaping's own synthesis for such a face, the height of its
+		// line (HarfBuzz's), is not CSS's. See UprightUnits for what counts as
+		// a character here, and shape.Face.StatesVerticalMetrics.
 		w = size.Mul(float64(UprightUnits(text)))
 	case face == nil:
 		// An item with text and no face. What a glyph advances is the face's to
@@ -272,11 +283,20 @@ func (br *Breaker) mergedSpan(face *shape.Face, text string, size float64,
 // run that is part of a merge group, whose string is not its own, and one with
 // no face.
 //
-// A run set upright is not shaped at all: its advance is a count of its
-// characters, an em each, and where the run is long enough to have a table the
-// count is taken from it like the spacing is, so that the rest of an upright
-// word is not read again at every line either. See UprightUnits.
+// A run set upright in a face that states vertical metrics is shaped upright
+// once, and each stretch is a sum over its glyphs' vertical advances, as a
+// horizontal run's is over its horizontal ones. In a face that states none its
+// advance is a count of its characters, an em each (CSS Writing Modes §4.4),
+// and where the run is long enough to have a table the count is taken from it
+// like the spacing is, so that the rest of an upright word is not read again
+// at every line either. See UprightUnits.
 func (br *Breaker) spanWidth(item Item, from, to int, piece Item) style.Unit {
+	if item.Face.StatesVerticalMetrics() && item.Upright && piece.Text != "" {
+		whole, base, before, after := item.uprightRun()
+		head, through := uprightSpan(br.advances(uprightKey(item.Face, whole, before,
+			after, item.Off)), base+from, base+to, item.Size)
+		return through.Sub(head).Add(br.spacingIn(item, from, to, piece.Text))
+	}
 	if item.Face != nil && item.Upright && piece.Text != "" {
 		if n, ok := br.uprightIn(item, from, to, piece.Text); ok {
 			return item.Size.Mul(float64(n)).Add(br.spacingIn(item, from, to, piece.Text))
@@ -550,9 +570,20 @@ func (br *Breaker) advances(key groupKey) []float64 {
 		return br.lastAdvances
 	}
 	cum, ok := br.grouped[key]
-	if !ok {
+	if !ok && key.off.Vertical {
+		// A run set upright: the pen moves down the page by each glyph's
+		// vertical advance, which shaping states growing upwards. See
+		// uprightKey.
+		glyphs, _ := key.face.ShapeGlyphsInContext(key.whole, key.before, key.after, key.off)
+		for i := range glyphs {
+			glyphs[i].XAdvance = -glyphs[i].YAdvance
+		}
+		cum = shape.GroupAdvances(glyphs, len(key.whole))
+	} else if !ok {
 		glyphs := key.face.ShapeGroup(key.whole, key.before, key.after, key.kerns, key.off)
 		cum = shape.GroupAdvances(glyphs, len(key.whole))
+	}
+	if !ok {
 		if br.grouped == nil {
 			br.grouped = map[groupKey][]float64{}
 		}
@@ -560,6 +591,27 @@ func (br *Breaker) advances(key groupKey) []float64 {
 	}
 	br.lastGroup, br.lastAdvances = key, cum
 	return cum
+}
+
+// uprightKey is the shaping of a run set upright: its text and its context,
+// shaped with Features.Vertical and nothing else merged in. A merge group is a
+// horizontal run's — it is about glyphs a ligature or a kern forms across a
+// boundary, and neither is applied down a line (see shape.Features.Vertical) —
+// so an upright run is shaped as the backend drawing it shapes it: its own
+// text, between its neighbours.
+func uprightKey(face *shape.Face, text, before, after string, off shape.Features) groupKey {
+	off.Vertical = true
+	return groupKey{face: face, whole: text, before: before, after: after, off: off}
+}
+
+// uprightSpan is where a stretch of an upright run starts and ends along the
+// line, each end rounded to a layout unit apart, so that the stretches of one
+// run add up to the run's own rounded advance. See shape.GroupSpan.
+func uprightSpan(cum []float64, lo, hi int, size style.Unit) (head, through style.Unit) {
+	h, t := shape.GroupSpan(cum, lo, hi, size.Px())
+	head, _ = style.FromPx(h)
+	through, _ = style.FromPx(t)
+	return head, through
 }
 
 // groupKey identifies one shaping of one merge group: everything that decides
@@ -613,8 +665,8 @@ type Shaping struct {
 	// a pair that spans the boundary is this font's pair. See Item.ContextKerns.
 	ContextKerns bool
 	// Upright says the run stands upright on a line of vertical text, so its
-	// advance is one em per typographic character unit rather than the face's.
-	// See Item.Upright.
+	// advance is the face's vertical one, or one em per typographic character
+	// unit where the face states none. See Item.Upright.
 	Upright bool
 	// Off is what a document turned off: a font's own rules that a CSS property
 	// or a CSS Text rule has overruled. See shape.Features.

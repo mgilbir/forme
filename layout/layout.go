@@ -79,6 +79,13 @@ type Fragment struct {
 	// See gridSharedBaseline.
 	gridBaseline    style.Unit
 	hasGridBaseline bool
+	// tableBaseline is a table's first baseline, which is its first row's, and
+	// tableRowTop is the top of that row, both measured down the table's content
+	// box; hasTableBaseline says the table has a row to take them from. They are
+	// recorded by the table layout because only it knows where its rows are and
+	// which of its cells took part in their alignment. See firstRowBaseline.
+	tableBaseline, tableRowTop style.Unit
+	hasTableBaseline           bool
 	// column is which column of its parent's pour this fragment was put in,
 	// counted from one, and nought where its parent was not poured — a box
 	// whose parent is not a multicol container, or is one that laid its
@@ -785,18 +792,15 @@ func absolutise(f *Fragment, x, y style.Unit) {
 	// lines are, so they take the same translation. Their §9.4.3 offset is folded
 	// in here for the reason the walk applies every other one here — it moves the
 	// box and nothing that was measured against it.
+	//
+	// A link's area on the line is sliced as those are and moves with them;
+	// LineFragment.placed is every such list.
 	for i := range f.Lines {
-		for _, ib := range f.Lines[i].Boxes {
-			ib.BorderRect.X = ib.BorderRect.X.Add(content.X).Add(ib.Offset.X)
-			ib.BorderRect.Y = ib.BorderRect.Y.Add(content.Y).Add(ib.Offset.Y)
-			ib.absolute = true
-		}
-		// A link's area on the line, which is sliced as those are and moves
-		// with them. See LineFragment.links.
-		for _, lf := range f.Lines[i].links {
-			lf.BorderRect.X = lf.BorderRect.X.Add(content.X).Add(lf.Offset.X)
-			lf.BorderRect.Y = lf.BorderRect.Y.Add(content.Y).Add(lf.Offset.Y)
-			lf.absolute = true
+		for _, list := range f.Lines[i].placed() {
+			for _, ib := range *list {
+				translate(ib, content.X.Add(ib.Offset.X), content.Y.Add(ib.Offset.Y))
+				ib.absolute = true
+			}
 		}
 	}
 	for _, c := range f.Children {
@@ -1484,13 +1488,27 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 				//
 				// A block whose only child is such a box makes no line box at
 				// all, which is why the answer cannot come from there.
-				x := style.Unit(0)
-				if child.staticInline && !lineBaseIsRTL(b, nil) {
-					if indent, mode := l.textIndent(b, width); mode.indentsLine(true, false) {
-						x = indent
+				//
+				// That line begins at its *start* edge, which on a right-to-left
+				// line is the right one, so the indent is taken in from there.
+				// And the inline box is a point on the line rather than a box
+				// filling it, so its two static positions are the same point
+				// read from the two edges — which the block-level answer, nought
+				// from both, is not. Taking the indent for a left-to-right line
+				// only left the dir=rtl half of text-indent-with-absolute-pos-
+				// child at the block's right edge, an indent from the words.
+				x, end := style.Unit(0), style.Unit(0)
+				if child.staticInline {
+					var indent style.Unit
+					if v, mode := l.textIndent(b, width); mode.indentsLine(true, false) {
+						indent = v
+					}
+					x, end = indent, width.Sub(indent)
+					if lineBaseIsRTL(b, nil) {
+						x, end = width.Sub(indent), indent
 					}
 				}
-				l.deferAbsolute(child, parent, x, y.Add(offset), 0, listIndex)
+				l.deferAbsolute(child, parent, x, y.Add(offset), end, listIndex)
 				continue
 			}
 			parent.Children = append(parent.Children,

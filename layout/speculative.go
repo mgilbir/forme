@@ -678,17 +678,15 @@ func (c *fragmentCloner) line(in LineFragment) LineFragment {
 	c.weight++
 	out := in
 	out.Runs = slices.Clone(in.Runs)
-	if in.Boxes != nil {
-		out.Boxes = make([]*Fragment, len(in.Boxes))
-		for i, b := range in.Boxes {
-			out.Boxes[i] = c.clone(b)
+	for _, list := range out.placed() {
+		if *list == nil {
+			continue
 		}
-	}
-	if in.links != nil {
-		out.links = make([]*Fragment, len(in.links))
-		for i, b := range in.links {
-			out.links[i] = c.clone(b)
+		copied := make([]*Fragment, len(*list))
+		for i, b := range *list {
+			copied[i] = c.clone(b)
 		}
+		*list = copied
 	}
 	return out
 }

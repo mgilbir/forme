@@ -1926,3 +1926,67 @@ Three small faces made from nothing by the script named above, for rules no
 published face at hand exercises. They are listed here because every font the
 repository keeps is, and for where they came from; no third party's work is
 in them.
+
+============================================================================
+Font built for the CFF ink oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/CFFInk.otf
+Source:  testdata/harfbuzz/cffink_fixture.py, in this repository, which
+         builds it with fontTools
+Licence: the licence in LICENSE; it is not anyone else's work
+
+A small face made from nothing by the script named above, a glyph for each
+thing a Type 2 charstring can say that no published face at hand says. It is
+listed here because every font the repository keeps is, and for where it came
+from; no third party's work is in it.
+
+============================================================================
+Fonts built for the variable vertical metrics and vertical kerning oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/VerticalVariable.ttf
+         testdata/harfbuzz/fonts/VerticalVariableNoVVAR.ttf
+         testdata/harfbuzz/fonts/VerticalKern.ttf
+         testdata/harfbuzz/fonts/VerticalKernNoVkrn.ttf
+Source:  testdata/harfbuzz/verticalinstance_fixture.py, in this repository,
+         which builds them with fontTools
+Licence: the licence in LICENSE; they are not anyone else's work
+
+Four small faces made from nothing by the script named above: a variable
+face with vertical metrics, with VVAR and without, and a face whose kern
+table kerns down the page, with 'vkrn' and without. They are listed here because every font the
+repository keeps is, and for where they came from; no third party's work is
+in them.
+
+============================================================================
+Fonts built for the colour ink oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/ColourInk.ttf
+         testdata/harfbuzz/fonts/ColourInkStatic.ttf
+         testdata/harfbuzz/fonts/BitmapInk.ttf
+Source:  testdata/harfbuzz/colrink_fixture.py, in this repository, which
+         builds them with fontTools
+Licence: the licence in LICENSE; they are not anyone else's work
+
+Three small faces made from nothing by the script named above: one painting
+with every paint format a COLR table has, variable and not, and one whose
+CBLC and CBDT tables
+say each thing a bitmap face's extents are read from, its images
+placeholders. They are listed here because every font the repository keeps
+is, and for where they came from; no third party's work is in them.
+
+============================================================================
+Font built for the ignorable characters corpus
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/Ignorables.ttf
+Source:  testdata/harfbuzz/ignorables_fixture.py, in this repository, which
+         builds it with fontTools
+Licence: the licence in LICENSE; it is not anyone else's work
+
+A small face made from nothing by the script named above, whose rules name
+the characters nothing is drawn for and put marks on a ligature built from a
+multiple substitution. It is listed here because every font the repository
+keeps is, and for where it came from; no third party's work is in it.

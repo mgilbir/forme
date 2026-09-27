@@ -79,9 +79,9 @@ func TestEveryListedFeatureIsOneShapingActsOn(t *testing.T) {
 			continue
 		}
 		for _, tag := range listed {
-			if len(f.layout.featureLookups[tag]) == 0 {
+			if len(f.layout.featureLookups[tag]) == 0 && len(f.layout.gposFeatures[tag]) == 0 {
 				t.Errorf("%s lists %q, and the plan would find no lookups "+
-					"for it, so asking would do nothing", name, tag)
+					"for it in either table, so asking would do nothing", name, tag)
 			}
 		}
 		for i := 1; i < len(listed); i++ {
@@ -90,5 +90,86 @@ func TestEveryListedFeatureIsOneShapingActsOn(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// TestAPositioningFeatureIsListed: a feature a face offers through positioning
+// alone is offered, because a plan positions with whatever it is asked for.
+//
+// 'halt' is the case the suite found: every CJK face states its trimmed
+// bracket widths as a single adjustment in GPOS and nowhere in GSUB, so a
+// face with them was listed as having none, and a document asking for them
+// was reported as asking for something the face has not got — while the face
+// applied it.
+func TestAPositioningFeatureIsListed(t *testing.T) {
+	f, err := Load(gposOrderFixtures()["requested"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := f.Features()
+	count := 0
+	for _, tag := range listed {
+		if tag == "halt" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("Features() came back with %v; the face offers 'halt' through "+
+			"positioning and it should be listed once", listed)
+	}
+
+	// And asking for it does something, which is what being listed claims.
+	named, _ := f.ShapeGlyphsWith("ab", "halt")
+	checkShaped(t, "ab with 'halt' named", named,
+		[]shapedAs{{goA, 250, -250, 0}, {goB, 600, 0, 0}})
+
+	// A feature both tables name is one feature: a face that substitutes an
+	// alternate under 'ss01' and spaces it under 'ss01' as well offers 'ss01'
+	// once, not twice.
+	both, err := Load(fonttest.SFNT(fonttest.SFNTOptions{
+		Name:   "BothTables",
+		Glyphs: gposOrderGlyphs(false),
+		Extra: map[string][]byte{
+			"GSUB": fonttest.GSUBLookups([]fonttest.Lookup{{Type: 1,
+				Subtables: [][]byte{fonttest.SingleSubst([]int{goA}, []int{goX})}}},
+				map[string][]int{"ss01": {0}}),
+			"GPOS": fonttest.GPOSLookups([]fonttest.Lookup{{Type: 1,
+				Subtables: [][]byte{fonttest.SinglePosSubtable(goX, 0, 0, 10)}}},
+				map[string][]int{"ss01": {0}}),
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := both.Features(); len(got) != 1 || got[0] != "ss01" {
+		t.Errorf("a face naming 'ss01' in both tables listed %v, want [ss01]", got)
+	}
+}
+
+// TestAFeatureWithNoLookupsIsNotListed: a tag a face declares with nothing
+// under it changes nothing when asked for, and so is not offered — in either
+// table. The layout keeps it all the same, for the shaper's own questions.
+func TestAFeatureWithNoLookupsIsNotListed(t *testing.T) {
+	data := fonttest.SFNT(fonttest.SFNTOptions{
+		Name:   "EmptyFeatures",
+		Glyphs: gposOrderGlyphs(false),
+		Extra: map[string][]byte{
+			"GSUB": fonttest.GSUBLookups(nil, map[string][]int{"smcp": nil}),
+			"GPOS": fonttest.GPOSLookups(nil, map[string][]int{"palt": nil}),
+		},
+	})
+	f, err := Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, kept := f.layout.featureLookups["smcp"]; !kept {
+		t.Fatal("the fixture's empty 'smcp' was not read at all; the case is not being made")
+	}
+	if _, kept := f.layout.gposFeatures["palt"]; !kept {
+		t.Fatal("the fixture's empty 'palt' was not read at all; the case is not being made")
+	}
+	if got := f.Features(); len(got) != 0 {
+		t.Errorf("Features() came back with %v; neither tag has a lookup under it, "+
+			"and asking for either changes nothing", got)
 	}
 }

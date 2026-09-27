@@ -143,6 +143,18 @@ type Face struct {
 	// cff reports that the outlines are CFF rather than glyf, which changes
 	// both how the program is embedded and whether it can be subsetted.
 	cff bool
+	// ink measures a CFF glyph's ink by running its charstring, which a glyf
+	// face has in its glyph headers instead: nil for every face but a CFF one.
+	// See cffink.go.
+	ink *cffInk
+	// colr measures the ink of a colour glyph by painting it, which is asked
+	// before the outline is: nil for a face with no COLR table. See
+	// colrink.go.
+	colr *colrInk
+	// bitmap reads the ink of a colour bitmap glyph from its metrics, which is
+	// asked before anything else: nil for a face with no CBDT. See
+	// bitmapink.go.
+	bitmap *cbdtInk
 	// simple is set when the face is to be embedded as a simple font: one byte
 	// per character through WinAnsiEncoding, rather than as a composite font
 	// keyed by glyph index.
@@ -206,6 +218,28 @@ func keepLayoutTables(tables map[string][]byte) map[string][]byte {
 	return out
 }
 
+// noCmapError says why a font with no usable Unicode cmap is refused.
+//
+// The refusal is one — a face that maps no character to a glyph can set no
+// text — but the reason is not, and the reason is what the author reads, in the
+// @font-face finding that quotes this. A font whose map is there and names only
+// glyphs past maxp's count was told it "has no Unicode character map", which is
+// false of it and sends whoever reads it looking for a table the font carries.
+// font.CmapState is what tells the cases apart.
+func noCmapError(prog *font.Program) error {
+	switch prog.CmapState {
+	case font.CmapUnreadable:
+		return errors.New("fonts: the font's Unicode character map could not be " +
+			"read: each of its subtables is in a format this engine does not read, " +
+			"is cut short, or maps no character to a glyph")
+	case font.CmapNamesNoGlyph:
+		return fmt.Errorf("fonts: the font's Unicode character map names no glyph "+
+			"the font has: every character in it is mapped to a glyph index past "+
+			"the %d glyphs its maxp declares", prog.NumGlyphs)
+	}
+	return errors.New("fonts: the font has no Unicode character map")
+}
+
 // Load parses an sfnt font program — TrueType or OpenType — and prepares it for
 // embedding. The bytes are retained as they are, and Subset cuts them down.
 //
@@ -253,7 +287,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		return nil, err
 	}
 	if len(prog.Cmap) == 0 {
-		return nil, errors.New("fonts: the font has no Unicode character map")
+		return nil, noCmapError(prog)
 	}
 	// The CID a glyph index stands for, when the outlines are a CID-keyed CFF
 	// and the two numberings differ. nil for every other kind of face, which is
@@ -344,6 +378,13 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	}
 	f.readOS2(tables["OS/2"])
 	f.readPost(tables["post"])
+	if !hasGlyf {
+		f.ink = newCFFInk(tables["CFF "], prog.NumGlyphs)
+	}
+	if len(tables["COLR"]) > 0 {
+		f.colr = newCOLRInk(f, tables, prog.NumGlyphs)
+	}
+	f.bitmap = newCBDTInk(tables, f.unitsPerEm)
 	f.vert = readVerticalTables(tables, prog.NumGlyphs, budget)
 	if err := budget.Err(); err != nil {
 		return nil, err
@@ -1043,16 +1084,20 @@ func (f *Face) Clone() *Face {
 // glyphs may overhang it slightly and none of this is precise enough to matter
 // there.
 //
-// ok is false when the face cannot answer — a CFF-flavoured font, whose glyph
-// extents are in the charstrings and cannot be had without interpreting them —
-// and a caller should fall back to the face's ascent and descent. It is also
-// false for a string with nothing in it that draws.
+// ok is false when the face cannot answer for some glyph of s — a CFF glyph
+// whose charstring cannot be run, or one past the work the face may spend
+// measuring (see LayoutLimits) — and a caller should fall back to the face's
+// ascent and descent. It is also false for a string with nothing in it that
+// draws.
 //
 // The numbers come from what the font states: the glyph header for a glyf-based
-// face, and Adobe's published per-character boxes for the fourteen standard
-// ones. Neither is verified against the outline, and a font that overstates a
-// glyph's box makes this overstate the run's — which is the safe direction for
-// the question it exists to answer.
+// face, the box the charstring draws for a CFF one, the box a colour glyph
+// paints or its bitmap states, and Adobe's published per-character boxes for
+// the fourteen standard ones. The header and the AFM
+// are not verified against the outline, and a CFF glyph's box takes in its
+// curves' control points, so a glyph's box may be larger than its ink and this
+// overstate the run's — which is the safe direction for the question it exists
+// to answer.
 func (f *Face) InkExtent(s string, size float64) (above, below float64, ok bool) {
 	top, bottom, any := f.inkUnits(s)
 	if !any {
@@ -1093,10 +1138,9 @@ func (f *Face) inkUnits(s string) (top, bottom int, ok bool) {
 
 // glyphInk is one character's vertical extent in font units.
 //
-// has is false when the face has no such table to read, which is the CFF case
-// and is answered for the run as a whole rather than per character: a run whose
-// extent is known for some of its letters and not for others has no extent this
-// can report.
+// has is false when the face cannot measure the glyph, which is answered for
+// the run as a whole rather than per character: a run whose extent is known for
+// some of its letters and not for others has no extent this can report.
 func (f *Face) glyphInk(r rune) (lo, hi int, has bool) {
 	if f.std != nil {
 		_, name, ok := stdCode(r)
@@ -1111,21 +1155,21 @@ func (f *Face) glyphInk(r rune) (lo, hi int, has bool) {
 		}
 		return box[0], box[1], true
 	}
-	if f.prog == nil || f.prog.GlyphBBox == nil {
+	if f.prog == nil {
 		return 0, 0, false
 	}
 	// The character map rather than GlyphID, which answers with the WinAnsi
 	// *code* for a simple face because that is what will be written. What is
 	// wanted here is the outline, which is found by index either way.
 	gid, ok := f.prog.Cmap[r]
-	if !ok || gid <= 0 || gid >= len(f.prog.GlyphBBox) {
+	if !ok || gid <= 0 || gid >= f.prog.NumGlyphs {
 		// A character the face does not cover draws the notdef glyph, whose
 		// extent is as much a part of the run's as any other's.
 		gid = 0
 	}
-	if gid >= len(f.prog.GlyphBBox) {
+	e, ok := f.glyphExtents(gid)
+	if !ok {
 		return 0, 0, false
 	}
-	b := f.prog.GlyphBBox[gid]
-	return b[1], b[3], true
+	return e.yBearing + e.height, e.yBearing, true
 }
