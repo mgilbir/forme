@@ -330,6 +330,19 @@ func (g *varGlyph) setVerticalPhantoms(top, advance int) {
 	g.x[n-1], g.y[n-1] = 0, float64(top-advance)
 }
 
+// metricsComponent is the component a composite takes its metrics from — the
+// last one flagged USE_MY_METRICS, as HarfBuzz takes them — and -1 for a glyph
+// that takes its own.
+func (g *varGlyph) metricsComponent() int {
+	use := -1
+	for _, c := range g.comps {
+		if c.flags&compUseMyMetrics != 0 {
+			use = c.glyph
+		}
+	}
+	return use
+}
+
 // phantoms are the four phantom points, left, right, top and bottom, as x and
 // y.
 func (g *varGlyph) phantoms() [4][2]float64 {

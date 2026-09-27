@@ -42,8 +42,8 @@ LOCATIONS = {
     "NotoSansJP-VF.ttf": [100, 400, 700, 900],
 }
 STRINGS = {
-    "VerticalVariable.ttf": ["ABD", "A B"],
-    "VerticalVariableNoVVAR.ttf": ["ABD", "A B"],
+    "VerticalVariable.ttf": ["ABD", "A B", "CEF"],
+    "VerticalVariableNoVVAR.ttf": ["ABD", "A B", "CEF"],
     "NotoSansJP-VF.ttf": ["\u65e5\u672c\u8a9e", "\u3042\u3001\u3044\u3002", "\uff08\u6f22\u5b57\uff09"],
     "VerticalKern.ttf": ["ABCA", "CAB", "AB BC", "BCBC", "A\u0301B"],
     "VerticalKernNoVkrn.ttf": ["ABCA", "CAB", "AB BC", "BCBC", "A\u0301B"],

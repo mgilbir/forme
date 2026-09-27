@@ -58,16 +58,8 @@ func verticalMetricsFaces(t *testing.T) []verticalMetricsFace {
 			if len(loc.metrics) == 0 {
 				continue // the kerned faces, which the oracle shapes and does not measure
 			}
-			metrics := map[int][3]int{}
-			for gid, m := range loc.metrics {
-				// See takesComponentMetrics: HarfBuzz and this package differ
-				// there on purpose, and the test that records it holds it.
-				if !(takesComponentMetrics[want.name][gid] && loc.weight != 100) {
-					metrics[gid] = m
-				}
-			}
 			out = append(out, verticalMetricsFace{fmt.Sprintf("%s@wght=%v", want.name, loc.weight),
-				func(t *testing.T) *Face { return want.loadAt(t, loc) }, metrics})
+				func(t *testing.T) *Face { return want.loadAt(t, loc) }, loc.metrics})
 		}
 	}
 	return out

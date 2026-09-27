@@ -204,12 +204,12 @@ its layout tables and with a mark attached in GPOS,
 `fonts/VerticalKernNoVkrn.ttf`. `shape/verticalinstance_test.go` holds the package to all of
 it.
 
-One difference is listed, in `takesComponentMetrics`: a composite that takes
-its metrics from a component is given the component's phantom points by
-HarfBuzz off the default instance, and its own by this package, as fontTools'
-instancer gives them — which `testdata/varinstance` holds the horizontal
-advances of a face with no HVAR to. Which of the two to follow is a decision
-left open, and the entry fails if the difference goes.
+A composite that takes its metrics from a component is given the
+component's phantom points by HarfBuzz off the default instance, and its own
+by fontTools' instancer. This package follows HarfBuzz, by the user's choice;
+`takesComponentMetrics` names the glyphs that hold the case, and
+`testdata/varinstance`'s `followsHarfBuzz` the two advances in Noto Sans at
+weight 700 where it departs from fontTools there.
 
 `make hbverticalinstance` regenerates it.
 

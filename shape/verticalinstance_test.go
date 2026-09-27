@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonttest"
 )
 
@@ -36,23 +37,24 @@ var verticalInstanceFaces = map[string]func(t *testing.T) []byte{
 // verticalInstanceStrings are the strings verticalinstance.py shapes in each
 // face, in its order.
 var verticalInstanceStrings = map[string][]string{
-	"VerticalVariable.ttf":       {"ABD", "A B"},
-	"VerticalVariableNoVVAR.ttf": {"ABD", "A B"},
+	"VerticalVariable.ttf":       {"ABD", "A B", "CEF"},
+	"VerticalVariableNoVVAR.ttf": {"ABD", "A B", "CEF"},
 	"NotoSansJP-VF.ttf":          {"\u65E5\u672C\u8A9E", "\u3042\u3001\u3044\u3002", "\uFF08\u6F22\u5B57\uFF09"},
 	"VerticalKern.ttf":           {"ABCA", "CAB", "AB BC", "BCBC", "A\u0301B"},
 	"VerticalKernNoVkrn.ttf":     {"ABCA", "CAB", "AB BC", "BCBC", "A\u0301B"},
 }
 
-// takesComponentMetrics are the glyphs of each face whose metrics HarfBuzz
-// takes from a component (USE_MY_METRICS) at a location off the default, and
-// this package, as fontTools' instancer does, from the composite's own phantom
-// points: see the note on USE_MY_METRICS at the top of instance.go, which says
-// why the choice is not taken here. At the default instance the two agree and
-// the glyph is compared; at any other location it is required to differ, so
-// that the entry cannot outlive the difference it records.
+// takesComponentMetrics are the glyphs of each face that take their metrics
+// from a component (USE_MY_METRICS), whose own phantom points gvar moves
+// differently from the component's: HarfBuzz gives such a glyph the
+// component's off the default, and fontTools' instancer its own, and this
+// package follows HarfBuzz (see the note at the top of instance.go). Each is
+// compared with HarfBuzz like every other glyph; the entry says the face holds
+// the case, and the test requires that it does — a composite so flagged,
+// compared somewhere off the default.
 var takesComponentMetrics = map[string]map[int]bool{
-	"VerticalVariable.ttf":       {4: true},
-	"VerticalVariableNoVVAR.ttf": {4: true},
+	"VerticalVariable.ttf":       {4: true, 6: true, 7: true},
+	"VerticalVariableNoVVAR.ttf": {4: true, 6: true, 7: true},
 }
 
 // hbLocation is one location's expectations for a face: the weight, or zero
@@ -230,6 +232,7 @@ func TestInstancedVerticalMetricsAgreeWithHarfBuzz(t *testing.T) {
 			if len(want.locations) < 2 {
 				t.Fatal("fewer than two locations, so no instance is compared")
 			}
+			offDefault := map[int]bool{}
 			for _, loc := range want.locations {
 				f := want.loadAt(t, loc)
 				if len(loc.metrics) == 0 {
@@ -238,18 +241,32 @@ func TestInstancedVerticalMetricsAgreeWithHarfBuzz(t *testing.T) {
 				for gid, m := range loc.metrics {
 					advance, x, y := f.verticalUnits(gid)
 					same := advance == m[0] && x == m[1] && y == m[2]
-					switch {
-					case takesComponentMetrics[want.name][gid] && loc.weight != 100:
-						if same {
-							t.Errorf("wght %v: glyph %d, listed in takesComponentMetrics, agrees with "+
-								"HarfBuzz; it should no longer be listed", loc.weight, gid)
-						}
-					case !same:
+					if !same {
 						t.Errorf("wght %v: glyph %d advances %d hung (%d, %d), want %d hung (%d, %d)",
 							loc.weight, gid, advance, x, y, m[0], m[1], m[2])
 					}
+					if takesComponentMetrics[want.name][gid] && loc.weight != 100 {
+						offDefault[gid] = true
+					}
 				}
 				checkLocationShaped(t, f, loc, verticalInstanceStrings[want.name])
+			}
+			f := want.loadAt(t, want.locations[0])
+			for gid := range takesComponentMetrics[want.name] {
+				if !offDefault[gid] {
+					t.Errorf("glyph %d, listed in takesComponentMetrics, is not compared off the default", gid)
+				}
+				g, _ := f.vert.glyfBytes(gid)
+				flagged := false
+				if len(g) >= 10 && signed16(font.Be16(g, 0)) < 0 {
+					eachComponent(g, func(flags, _ int) bool {
+						flagged = flagged || flags&compUseMyMetrics != 0
+						return true
+					})
+				}
+				if !flagged {
+					t.Errorf("glyph %d, listed in takesComponentMetrics, has no component whose metrics it takes", gid)
+				}
 			}
 		})
 	}

@@ -58,12 +58,13 @@ import (
 //     where HarfBuzz hangs them at the location. VORG is not rewritten: it is
 //     a CFF face's, and a CFF face is not instanced here.
 //   - A composite that takes its metrics from a component (USE_MY_METRICS)
-//     is given its own phantom points' advance, as fontTools' instancer gives
-//     it, and not the component's, which is what HarfBuzz reads for it — both
-//     across the page and down it. testdata/varinstance holds the horizontal
-//     advance of a font with no HVAR to fontTools, and following HarfBuzz
-//     there moves two of its values in Noto Sans at weight 700; which of the
-//     two to follow is left to be decided rather than taken here.
+//     is given that component's phantom points, as HarfBuzz reads them, both
+//     across the page and down it. fontTools' instancer gives it its own, and
+//     the two differ where the composite's own points moved differently: in
+//     Noto Sans at weight 700 with no HVAR, glyphs 3248 and 3360 advance 867
+//     and 594 by HarfBuzz and 875 and 592 by fontTools. Following HarfBuzz
+//     was chosen, since what a face advances by is what it is shaped with;
+//     testdata/varinstance records the two as fontTools' disagreement.
 //   - The font-wide vertical metrics do *not* move. MVAR — which varies ascent,
 //     descent, cap height and the rest of the font-wide numbers — is dropped
 //     rather than applied, so those stay at the default instance's values. For
@@ -237,9 +238,11 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 		tops = make([]int, numGlyphs)
 		newVAdvances = make([]int, numGlyphs)
 	}
-	// Each glyph's four phantom points once gvar has moved them, which its
-	// advances and its bearings are read from.
+	// Each glyph's four phantom points once gvar has moved them, and the
+	// component whose metrics a composite takes, or -1: the advances and the
+	// side bearings are read from these once every glyph has them.
 	phantoms := make([][4][2]float64, numGlyphs)
+	useMetrics := make([]int, numGlyphs)
 	for gid := 0; gid < numGlyphs; gid++ {
 		start, end := offsets[gid], offsets[gid+1]
 		if start > end || int(end) > len(glyf) {
@@ -264,6 +267,7 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 			}
 		}
 		phantoms[gid] = g.phantoms()
+		useMetrics[gid] = g.metricsComponent()
 		b, err := encodeVarGlyph(g)
 		if err != nil {
 			return nil, nil, fmt.Errorf("fonts: glyph %d: %w", gid, err)
@@ -276,12 +280,21 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 	}
 	newLoca[numGlyphs] = uint32(len(newGlyf))
 
-	// The metrics, from the phantom points. A composite's are its own, as
-	// fontTools' instancer reads them, where HarfBuzz reads a composite that
-	// takes its metrics from a component (USE_MY_METRICS) by that component's:
-	// see the note at the top of this file.
+	// The metrics, from the phantom points: a composite that takes its metrics
+	// from a component takes that component's phantom points, as HarfBuzz
+	// takes them, whether or not it has phantom points of its own — but only
+	// away from the default. At the default instance HarfBuzz reads no phantom
+	// points and a glyph's metrics are the ones hmtx and vmtx store for it,
+	// which for such a composite need not be its component's.
+	offDefault := false
+	for _, c := range coords {
+		offDefault = offDefault || c != 0
+	}
 	for gid := 0; gid < numGlyphs; gid++ {
 		ph := phantoms[gid]
+		if offDefault {
+			ph = metricsPhantoms(phantoms, useMetrics, gid)
+		}
 		origins[gid] = ph[0][0]
 		switch {
 		case hvar != nil:
@@ -1185,4 +1198,16 @@ func encodeNameString(s string, platform int) []byte {
 		out = append(out, byte(r>>8), byte(r))
 	}
 	return out
+}
+
+// metricsPhantoms are the phantom points a glyph's metrics are read from: its
+// own, or for a composite that takes its metrics from a component, that
+// component's — followed as far as components that take theirs from another,
+// and no further than maxComponentDepth, which a chain of components naming
+// each other in a circle reaches.
+func metricsPhantoms(phantoms [][4][2]float64, useMetrics []int, gid int) [4][2]float64 {
+	for depth := 0; depth < maxComponentDepth && useMetrics[gid] >= 0; depth++ {
+		gid = useMetrics[gid]
+	}
+	return phantoms[gid]
 }

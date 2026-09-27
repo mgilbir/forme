@@ -18,6 +18,9 @@
 #   B        its outline moves one way and its vertical phantom points the other
 #   C        a composite of A, whose metrics it takes (USE_MY_METRICS), moved
 #   D        nothing moves
+#   E        a composite of B and A, both flagged to give it their metrics:
+#            HarfBuzz takes the last one's, A's
+#   F        a composite of C, whose metrics it takes, and so A's through C
 #   space    no outline; its vertical phantom points alone move
 #
 # # VerticalKern.ttf
@@ -75,7 +78,7 @@ def finish(fb, path):
     fb.save(path)
 
 
-ORDER = [".notdef", "space", "A", "B", "C", "D"]
+ORDER = [".notdef", "space", "A", "B", "C", "D", "E", "F"]
 
 # Deltas at the heaviest weight: each outline point's, then the four phantom
 # points' — left, right, top, bottom — as gvar lists them.
@@ -83,32 +86,44 @@ DELTAS = {
     "A": [(0, 60)] * 4 + [(0, 0), (20, 0), (0, 45), (0, -25)],
     "B": [(0, -30)] * 4 + [(0, 0), (0, 0), (0, -10), (0, 15)],
     "C": [(0, 20)] + [(0, 0), (0, 0), (0, 7), (0, 3)],
+    "E": [(0, 10), (0, -10)] + [(0, 0), (-12, 0), (0, 21), (0, -9)],
+    "F": [(0, -15)] + [(0, 0), (17, 0), (0, -6), (0, 11)],
     "space": [(0, 0), (0, 0), (0, 33), (0, -33)],
 }
 
 # VVAR's advance deltas at the heaviest weight, glyph by glyph.
-VVAR_DELTAS = {".notdef": 0, "space": 2, "A": 37, "B": -11, "C": 0, "D": 5}
+VVAR_DELTAS = {".notdef": 0, "space": 2, "A": 37, "B": -11, "C": 0, "D": 5, "E": 0, "F": 0}
 
 
 def variable(path, with_vvar):
     fb = FontBuilder(1000, isTTF=True)
     fb.setupGlyphOrder(ORDER)
-    fb.setupCharacterMap({0x20: "space", 0x41: "A", 0x42: "B", 0x43: "C", 0x44: "D"})
-    c = Glyph()
-    c.numberOfContours = -1
-    comp = GlyphComponent()
-    comp.glyphName, comp.x, comp.y, comp.flags = "A", 0, 50, USE_MY_METRICS
-    c.components = [comp]
+    fb.setupCharacterMap({0x20: "space", 0x41: "A", 0x42: "B", 0x43: "C", 0x44: "D", 0x45: "E",
+                          0x46: "F"})
+
+    def composite(*parts):
+        g = Glyph()
+        g.numberOfContours = -1
+        g.components = []
+        for name, y in parts:
+            comp = GlyphComponent()
+            comp.glyphName, comp.x, comp.y, comp.flags = name, 0, y, USE_MY_METRICS
+            g.components.append(comp)
+        return g
+    c = composite(("A", 50))
     fb.setupGlyf({
         ".notdef": rect(50, 0, 450, 700), "space": Glyph(),
         "A": rect(100, -50, 500, 700), "B": rect(50, 100, 300, 450),
         "C": c, "D": rect(0, 0, 200, 200),
+        "E": composite(("B", 0), ("A", 30)), "F": composite(("C", -20)),
     })
     fb.setupHorizontalMetrics({".notdef": (500, 50), "space": (250, 0), "A": (600, 100),
-                               "B": (350, 50), "C": (600, 100), "D": (300, 0)})
+                               "B": (350, 50), "C": (600, 100), "D": (300, 0), "E": (620, 100),
+                               "F": (610, 100)})
     fb.setupHorizontalHeader(ascent=880, descent=-120)
     fb.setupVerticalMetrics({".notdef": (1000, 100), "space": (1000, 300), "A": (1000, 120),
-                             "B": (900, 200), "C": (1000, 30), "D": (800, 70)})
+                             "B": (900, 200), "C": (1000, 30), "D": (800, 70), "E": (960, 40),
+                             "F": (980, 60)})
     fb.setupVerticalHeader(ascent=500, descent=-500)
     fb.setupOS2(sTypoAscender=880, sTypoDescender=-120, usWinAscent=880, usWinDescent=120)
     name = "VerticalVariable" if with_vvar else "VerticalVariableNoVVAR"
