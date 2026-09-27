@@ -629,11 +629,22 @@ phrases: phrase-sources
 # language to language and a table shipped without them is a table nobody may
 # ship.
 #
-# Four languages, and each is a table checked in — Hungarian's alone is half a
-# megabyte, which is what a hyphenation dictionary costs when it is patterns
-# rather than words. They are the four the suite asks for by name; adding a
-# fifth is an entry in cmd/internal/tables, its file here, and a line in
-# paragraph/hyphenate.go's hyphenSources.
+# Five languages, and each is a table checked in — Hungarian's alone is half a
+# megabyte and German's a quarter, which is what a hyphenation dictionary costs
+# when it is patterns rather than words. They are the five the suite asks for by
+# name and hyph-utf8 has patterns for; adding a sixth is an entry in
+# cmd/internal/tables, its file here, and a line in paragraph/hyphenate.go's
+# hyphenSources.
+#
+# German is the reformed spelling, hyph-de-1996, and only that: the suite's
+# German is "Donaudampfschifffahrt", three f's, which the traditional spelling
+# writes with two. The 1901 patterns are two more tables of the same size for
+# text the suite never holds, so a document that asks for them by its variant
+# subtag is told it did not get them rather than given the reformed breaks.
+#
+# The suite asks for two more, Uyghur and Cree, and neither is here because
+# nobody publishes patterns for them: not hyph-utf8, not LibreOffice's
+# dictionaries, not the ones Android and Chromium ship.
 #
 # Each entry carries the Go identifier and the key paragraph.HyphenationOf
 # resolves a lang attribute to. They differ for pinyin, whose key carries the
@@ -644,7 +655,7 @@ phrases: phrase-sources
 TEX_HYPHEN_COMMIT := 5684c0f51c0b81133db2efbe60a408b4155a3ff5
 HYPHEN_URL := https://raw.githubusercontent.com/hyphenation/tex-hyphen/$(TEX_HYPHEN_COMMIT)/hyph-utf8/tex/generic/hyph-utf8/patterns/tex
 HYPHEN_DIR := testdata/hyphen
-HYPHEN_FILES := hyph-en-us.tex hyph-nl.tex hyph-hu.tex hyph-zh-latn-pinyin.tex
+HYPHEN_FILES := hyph-en-us.tex hyph-nl.tex hyph-hu.tex hyph-zh-latn-pinyin.tex hyph-de-1996.tex
 
 HYPHEN_STAMP := $(call stamp,$(HYPHEN_DIR),$(HYPHEN_URL) $(HYPHEN_FILES))
 

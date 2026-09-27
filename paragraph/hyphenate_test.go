@@ -145,15 +145,19 @@ func TestOnlyWordsAreHyphenated(t *testing.T) {
 }
 
 // TestOnlyALanguageWithPatterns is §6.1's second condition, at the level that
-// knows about it. There is a table for four keys and for nothing else, and a
-// document in a fifth language is not divided with a fourth language's patterns.
+// knows about it. There is a table for five keys and for nothing else, and a
+// document in a sixth language is not divided with a fifth language's patterns.
 func TestOnlyALanguageWithPatterns(t *testing.T) {
-	for _, lang := range []Language{"en", "nl", "hu", "zh-latn"} {
+	for _, lang := range []Language{"en", "nl", "hu", "zh-latn", "de"} {
 		if !HyphenatesLanguage(lang) {
 			t.Errorf("%q has a table in hyphenSources and was not hyphenated", lang)
 		}
 	}
-	for _, lang := range []Language{"", "de", "fr", "e", "eng", "zh", "nl-latn"} {
+	// Uyghur and Cree are the two the suite asks for that nobody publishes
+	// patterns for, and the 1901 keys are German in the spelling the table is
+	// not for.
+	for _, lang := range []Language{"", "fr", "e", "eng", "zh", "nl-latn",
+		"ug", "cr", "de-1901", "de-ch-1901"} {
 		if HyphenatesLanguage(lang) {
 			t.Errorf("%q was hyphenated with another language's patterns", lang)
 		}
@@ -178,6 +182,8 @@ func TestEachLanguageDividesItsOwnWords(t *testing.T) {
 		{"woordenlijst", "nl", []int{4, 7}},
 		{"magyarorszag", "hu", []int{2, 6, 8}},
 		{"zhongguo", "zh-latn", []int{5}},
+		// Wie-der-ver-ei-ni-gung. No other table puts a point after "wie".
+		{"wiedervereinigung", "de", []int{3, 6, 9, 11, 13}},
 	} {
 		got := HyphenPoints(tc.word, tc.lang, 0, 0)
 		if !reflect.DeepEqual(got, tc.want) {
@@ -272,6 +278,83 @@ func TestHanTextIsNotDividedWithPinyinPatterns(t *testing.T) {
 	}
 	if got := HyphenPoints("zhongguo", HyphenationOf("zh"), 0, 0); got != nil {
 		t.Errorf("a word under lang=zh divided at %v, want nothing", got)
+	}
+}
+
+// TestGermanIsDividedInTheReformedSpelling.
+//
+// The words are the ones whose division the 1996 reform changed or that the
+// suite asks about, and each is checked against a second reading of
+// hyph-de-1996.tex — a Liang implementation written apart from this one — as
+// well as against the German rules: "ck" is no longer divided as "k-k" but
+// stays whole on the next line, "st" may now be divided, and the triple
+// consonant of a compound is written out and divided between its parts.
+// Donaudampfschifffahrt is hyphens-character's word, and its reference sets it
+// Do-nau-dampf-schiff-fahrt.
+func TestGermanIsDividedInTheReformedSpelling(t *testing.T) {
+	for _, tc := range []struct {
+		word string
+		want []int
+	}{
+		{"Donaudampfschifffahrt", []int{2, 5, 10, 16}},
+		{"Zucker", []int{2}},
+		{"Fenster", []int{4}},
+		{"Schifffahrt", []int{6}},
+		{"Silbentrennung", []int{3, 6, 10}},
+		{"Rechtschreibung", []int{5, 11}},
+		// ß is a letter of the patterns, and Swiss "ss" is a spelling they
+		// divide as well: Stra-ße and Stras-se.
+		{"Straße", []int{4}},
+		{"Strasse", []int{5}},
+		// Two letters are left at each end, as the file's typesetting
+		// hyphenmins say. The patterns alone put a point after the first
+		// letter of "Ofen" and of "Strasse", and neither is a place German
+		// divides a word.
+		{"Donau", []int{2}},
+		{"Ofen", []int{}},
+	} {
+		got := HyphenPoints(tc.word, "de", 0, 0)
+		if len(got) != len(tc.want) || len(got) > 0 && !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%q divided at %v, want %v", tc.word, got, tc.want)
+		}
+	}
+}
+
+// TestAGermanSpellingIsKeyedOnItsVariant.
+//
+// "de" is the reformed spelling and so is every German tag that does not name
+// the traditional one; "1901" names it, and Swiss or Liechtenstein text in it
+// is a third key again. A 1901 after a singleton is an extension's or private
+// use's, not the language's.
+func TestAGermanSpellingIsKeyedOnItsVariant(t *testing.T) {
+	for _, tc := range []struct {
+		tag  string
+		want Language
+	}{
+		{"de", "de"},
+		{"De-dE", "de"},
+		{"de-AT", "de"},
+		{"de-CH", "de"},
+		{"de-1996", "de"},
+		{"de-DE-1996", "de"},
+		{"de-1901", "de-1901"},
+		{"de-DE-1901", "de-1901"},
+		{"de-Latn-1901", "de-1901"},
+		{"de-CH-1901", "de-ch-1901"},
+		{"de-LI-1901", "de-ch-1901"},
+		{"de-x-1901", "de"},
+		{"de-u-co-phonebk", "de"},
+		// A variant is a German spelling only under "de": the registry gives
+		// "1901" the prefix "de" and nothing else.
+		{"en-1901", "en"},
+	} {
+		if got := HyphenationOf(tc.tag); got != tc.want {
+			t.Errorf("HyphenationOf(%q) = %q, want %q", tc.tag, got, tc.want)
+		}
+	}
+	if got := HyphenPoints("Fenster", HyphenationOf("de-1901"), 0, 0); got != nil {
+		t.Errorf("Fenster under de-1901 divided at %v — the reformed patterns' "+
+			"Fens-ter is a wrong break in the traditional spelling", got)
 	}
 }
 

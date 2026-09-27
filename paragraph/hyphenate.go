@@ -44,8 +44,9 @@ import (
 // patterns produces breaks that are not merely wrong but unreadable, which is
 // worse than not breaking at all.
 //
-// Four tables, one generated file each, listed in hyphenSources. Adding a fifth
-// is a line there and a line in the Makefile's HYPHEN_PATTERNS.
+// Five tables, one generated file each, listed in hyphenSources. Adding a sixth
+// is a line there, an entry in cmd/internal/tables and a file in the Makefile's
+// HYPHEN_FILES.
 
 // maxHyphenWord is the longest word this will hyphenate.
 //
@@ -171,7 +172,9 @@ func withinMins(points []int, n, left, right int) []int {
 // is sometimes the script. "zh" is Chinese, which has no hyphenation to speak
 // of, and "zh-Latn" is Chinese romanised — a text of Latin syllables that
 // divides between them. Everything else is keyed on the primary subtag, which is
-// what "en-US" and "en-GB-oxendict" have in common.
+// what "en-US" and "en-GB-oxendict" have in common, unless a variant subtag
+// names a spelling of the language its table is not for; see
+// orthographicVariants.
 //
 // A document that declares no language gets nothing. The tag is what the author
 // wrote, and hyphenating undeclared text as English is guessing at the language
@@ -188,21 +191,93 @@ func HyphenationOf(tag string) Language {
 		return ""
 	}
 	primary, rest, _ := strings.Cut(tag, "-")
-	script := ""
+	script, region := "", ""
+	var variants []string
 	for rest != "" {
 		var sub string
 		sub, rest, _ = strings.Cut(rest, "-")
-		// A script subtag is four letters, which is what tells it from a region
-		// (two letters or three digits) and from a variant. The first one wins.
-		if len(sub) == 4 && isAlpha(sub) {
-			script = sub
-			break
+		switch {
+		case len(sub) == 1:
+			// A singleton begins an extension or a private use part — "-u-",
+			// "-x-" — and nothing after it is a subtag of the language: in
+			// "de-x-1901" the 1901 is private, not the traditional spelling.
+			rest = ""
+		case len(sub) == 4 && isAlpha(sub):
+			// A script subtag is four letters, which is what tells it from a
+			// region (two letters or three digits) and from a variant. The
+			// first one wins.
+			if script == "" {
+				script = sub
+			}
+		case len(sub) == 2 && isAlpha(sub), len(sub) == 3 && isDigits(sub):
+			if region == "" {
+				region = sub
+			}
+		case len(sub) >= 5 || len(sub) == 4 && sub[0] >= '0' && sub[0] <= '9':
+			// A variant is five to eight characters, or four beginning with a
+			// digit, which is how "1901" is told from a script.
+			variants = append(variants, sub)
 		}
 	}
 	if script != "" && romanised[primary] == script {
 		return Language(primary + "-" + script)
 	}
+	if spelling := orthographicVariants[primary]; spelling != nil {
+		for _, v := range variants {
+			if key := spelling(v, region); key != "" {
+				return key
+			}
+		}
+	}
 	return Language(primary)
+}
+
+// isDigits reports whether s is ASCII digits and nothing else.
+func isDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// orthographicVariants is the languages spelled in more than one orthography,
+// each with patterns of its own, and the key each variant subtag names.
+//
+// German has two, and hyph-utf8 publishes three tables for them: the reformed
+// spelling of 1996 (hyph-de-1996), the traditional spelling of 1901
+// (hyph-de-1901), and the traditional spelling as Switzerland writes it, with
+// no ß (hyph-de-ch-1901). BCP 47 registers "1901" and "1996" as variants of
+// "de" by exactly those names — "Traditional German orthography" and "German
+// orthography of 1996" — so the tag says which the text is in.
+//
+// The table here is the reformed one, under "de": the spelling a German text
+// is in when its tag does not say otherwise, which is what Android — where
+// Chromium's hyphenation comes from — assumes as well, aliasing "de" to
+// "de-1996". Swiss text with no variant, "de-CH", takes it too: Switzerland
+// adopted the reform, and its "ss" for "ß" is a spelling the reformed patterns
+// divide already, because German writes "ss" as well.
+//
+// A text tagged 1901 is keyed apart from "de", and that key has no table. The
+// two spellings divide differently, and not only where the words differ: the
+// reform allowed "st" to be divided, so "Fenster" is "Fens-ter" under the
+// reformed patterns and "Fen-ster" under the traditional ones. Reformed breaks
+// in traditional text are wrong breaks, so a document that asks for the old
+// spelling is told it was not hyphenated rather than hyphenated wrongly. Swiss
+// and Liechtenstein text in the old spelling is keyed apart again — the same
+// grouping Android makes — because upstream it is a third table and it would
+// be a third one here.
+var orthographicVariants = map[string]func(variant, region string) Language{
+	"de": func(variant, region string) Language {
+		if variant != "1901" {
+			return ""
+		}
+		if region == "ch" || region == "li" {
+			return "de-ch-1901"
+		}
+		return "de-1901"
+	},
 }
 
 // romanised is the languages whose *romanisation* has a table of its own, and
@@ -237,19 +312,24 @@ type hyphenSource struct {
 
 // hyphenSources is every table this engine has, one generated file each.
 //
-// Four languages and not the hundred hyph-utf8 publishes, because each is a
+// Five languages and not the hundred hyph-utf8 publishes, because each is a
 // table checked into the repository and Hungarian's alone is half a megabyte.
-// These four are the ones the suite asks for by name.
+// These five are the ones the suite asks for by name and that anybody publishes
+// patterns for. The suite asks for two more, Uyghur and Cree, and no hyphenation
+// resource exists for either — not in hyph-utf8, not in LibreOffice's or
+// Mozilla's dictionaries, not in Android's — so text in them is read as
+// "manual" and reported, as it is in every browser.
 var hyphenSources = []*hyphenSource{
 	&englishHyphenation,
 	&dutchHyphenation,
 	&hungarianHyphenation,
 	&pinyinHyphenation,
+	&germanHyphenation,
 }
 
 // hyphenationFor finds the table for a key, or nil.
 //
-// A scan of four rather than a map, because it is four: the loop is shorter than
+// A scan of five rather than a map, because it is five: the loop is shorter than
 // the hash and a document that hyphenates nothing never reaches it.
 func hyphenationFor(lang Language) *hyphenSource {
 	if lang == "" {
