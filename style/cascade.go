@@ -163,6 +163,14 @@ type Styler struct {
 	// suppressed, which is the key.
 	seen map[string]bool
 
+	// namespaces is what the stylesheet being prepared declared with
+	// @namespace, nil for nothing, and namespacesClosed says a rule has come
+	// after which none may be declared. Both are per sheet: CSS Namespaces 3
+	// scopes a declaration to the sheet it is written in. See
+	// prepareNamespace.
+	namespaces       *css.Namespaces
+	namespacesClosed bool
+
 	// intern shares what the document's computed styles have in common. See
 	// styleInterner; it is per Styler because a Styler styles one document.
 	intern *styleInterner
@@ -622,6 +630,7 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 
 	for _, sheet := range sheets {
 		s.sheet = sheet.Name
+		s.namespaces, s.namespacesClosed = nil, false
 		if done, ok := preparedBefore(sheet, order, s.media); ok {
 			// The same sheet, prepared before, at the same place in the order.
 			// The rules are reused; the findings are raised again, because they
@@ -963,6 +972,17 @@ func utf8Charset(label string) bool {
 func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 	out *[]preparedRule, order *int) {
 
+	if rule.At && ascii.EqualFold(rule.Name, "namespace") {
+		s.prepareNamespace(rule, parent)
+		return
+	}
+	if !rule.At || !(ascii.EqualFold(rule.Name, "charset") ||
+		ascii.EqualFold(rule.Name, "layer") && !rule.HasBlock) {
+		// Anything but these three ends the part of a sheet where an
+		// @namespace may be written. (@import never reaches here: the loader
+		// has already put the sheet it names in its place.)
+		s.namespacesClosed = true
+	}
 	if rule.At {
 		if ascii.EqualFold(rule.Name, "media") {
 			s.prepareMedia(rule, parent, origin, out, order)
@@ -1027,7 +1047,7 @@ func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 	// Nested or not, the prelude is parsed once and as the author wrote it: a
 	// nested rule's selectors are relative, and their "&" is the parent by
 	// reference. See css.ParseNestedSelectorList.
-	sels, errs, ok := css.ParseNestedSelectorList(rule.Prelude, parent)
+	sels, errs, ok := css.ParseNestedSelectorListIn(rule.Prelude, parent, s.namespaces)
 	for _, e := range errs {
 		s.report(Finding{
 			Offset:      e.Offset,
@@ -1047,6 +1067,74 @@ func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 	}
 
 	s.prepareStyleBlock(rule, sels, nil, origin, out, order)
+}
+
+// prepareNamespace reads an @namespace rule: CSS Namespaces 3 §3, a default
+// namespace or a prefix bound to one, which the selectors after it in the same
+// sheet are read against. It is valid only at the top of a sheet, before
+// every rule but @charset, @import and a statement @layer; anywhere else, and
+// with a prelude that is not an optional prefix and a string or url(), it is
+// invalid and ignored, which is reported. A prefix declared twice, or the
+// default namespace, keeps the later declaration.
+func (s *Styler) prepareNamespace(rule css.Rule, parent *css.Nesting) {
+	if parent != nil || s.namespacesClosed || rule.HasBlock {
+		s.report(Finding{
+			Offset: rule.Offset,
+			Message: "an @namespace rule must be written before every other rule but " +
+				"@charset, @import and @layer statements; this one was ignored",
+			Property: "@namespace",
+		})
+		return
+	}
+	var vals []css.ComponentValue
+	for _, v := range rule.Prelude {
+		if v.IsToken() && v.Token.Kind == css.Whitespace {
+			continue
+		}
+		vals = append(vals, v)
+	}
+	prefix, hasPrefix := "", false
+	if len(vals) == 2 && vals[0].IsToken() && vals[0].Token.Kind == css.Ident {
+		prefix, hasPrefix = vals[0].Token.Value, true
+		vals = vals[1:]
+	}
+	uri, ok := "", len(vals) == 1
+	if ok {
+		switch v := vals[0]; {
+		case v.IsToken() && (v.Token.Kind == css.String || v.Token.Kind == css.URL):
+			uri = v.Token.Value
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "url"):
+			var args []css.ComponentValue
+			for _, a := range v.Values {
+				if !a.IsToken() || a.Token.Kind != css.Whitespace {
+					args = append(args, a)
+				}
+			}
+			ok = len(args) == 1 && args[0].IsToken() && args[0].Token.Kind == css.String
+			if ok {
+				uri = args[0].Token.Value
+			}
+		default:
+			ok = false
+		}
+	}
+	if !ok {
+		s.report(Finding{
+			Offset: rule.Offset,
+			Message: "the @namespace rule " + quoted(serialize(rule.Prelude)) +
+				" is not a prefix and a namespace name, so it was ignored",
+			Property: "@namespace",
+		})
+		return
+	}
+	if s.namespaces == nil {
+		s.namespaces = &css.Namespaces{Prefixes: map[string]string{}}
+	}
+	if hasPrefix {
+		s.namespaces.Prefixes[prefix] = uri
+	} else {
+		s.namespaces.Default, s.namespaces.HasDefault = uri, true
+	}
 }
 
 // prepareStyleBlock prepares one style block: the declarations it holds, which

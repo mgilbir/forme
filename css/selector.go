@@ -351,6 +351,15 @@ type Compound struct {
 	Type      string
 	Universal bool
 
+	// Namespace is the namespace an element must be in for the compound to
+	// select it, when HasNamespace says there is one: the namespace a prefix
+	// was declared for ("m|mi"), the empty string for no namespace at all
+	// ("|mi"), or the stylesheet's default namespace for a compound written
+	// with no prefix. HasNamespace false is any namespace — "*|mi", or a
+	// compound in a sheet that declared no default. See Namespaces.
+	Namespace    string
+	HasNamespace bool
+
 	// IDs is every "#name" in the compound. More than one is legal and is not a
 	// mistake to be corrected here: "#a#b" matches nothing, and "#a#a" matches
 	// what "#a" matches while counting twice towards specificity, which is a
@@ -589,7 +598,34 @@ var legacyPseudoElements = map[string]bool{
 // with no specificity — see selParser.nesting. A rule written inside another is
 // read with ParseNestedSelectorList.
 func ParseSelectorList(vals []ComponentValue) (sels []Selector, errs []Error, ok bool) {
-	return parseSelectorList(vals, nil)
+	return parseSelectorList(vals, nil, nil)
+}
+
+// Namespaces is what a stylesheet's @namespace rules declared (CSS Namespaces
+// 3): a default namespace, and prefixes, each bound to a namespace name.
+//
+// A selector is read against them. A type or universal selector written with
+// no prefix is in the default namespace where one is declared, and in any
+// namespace otherwise; so is a compound written with neither, which is the
+// universal selector left out. "p|E" is E in the namespace p was declared
+// for, "*|E" E in any namespace, and "|E" E in none — and a prefix nobody
+// declared makes the selector invalid, as an undeclared anything does.
+type Namespaces struct {
+	Default    string
+	HasDefault bool
+	Prefixes   map[string]string
+}
+
+// ParseSelectorListIn is ParseSelectorList for a stylesheet that declared
+// namespaces. A nil ns is ParseSelectorList.
+func ParseSelectorListIn(vals []ComponentValue, ns *Namespaces) (sels []Selector, errs []Error, ok bool) {
+	return parseSelectorList(vals, nil, ns)
+}
+
+// ParseNestedSelectorListIn is ParseNestedSelectorList for a stylesheet that
+// declared namespaces.
+func ParseNestedSelectorListIn(vals []ComponentValue, parent *Nesting, ns *Namespaces) (sels []Selector, errs []Error, ok bool) {
+	return parseSelectorList(vals, parent, ns)
 }
 
 // ParseNestedSelectorList parses the prelude of a style rule written inside
@@ -618,11 +654,11 @@ func ParseSelectorList(vals []ComponentValue) (sels []Selector, errs []Error, ok
 //
 // A nil parent is a rule at the top of a stylesheet, and is ParseSelectorList.
 func ParseNestedSelectorList(vals []ComponentValue, parent *Nesting) (sels []Selector, errs []Error, ok bool) {
-	return parseSelectorList(vals, parent)
+	return parseSelectorList(vals, parent, nil)
 }
 
-func parseSelectorList(vals []ComponentValue, parent *Nesting) (sels []Selector, errs []Error, ok bool) {
-	p := &selParser{nest: parent}
+func parseSelectorList(vals []ComponentValue, parent *Nesting, ns *Namespaces) (sels []Selector, errs []Error, ok bool) {
+	p := &selParser{nest: parent, ns: ns}
 	out, all := p.list(vals, 0)
 	if p.tooDeep {
 		return nil, p.errs, false
@@ -655,6 +691,8 @@ type selParser struct {
 	errs []Error
 	// nest is the parent rule "&" refers to, or nil at the top of a stylesheet.
 	nest *Nesting
+	// ns is what the stylesheet declared with @namespace, or nil for nothing.
+	ns *Namespaces
 	// unanswered counts the PseudoUnanswered selectors read so far, including
 	// an "&" whose parent holds one. A :not() or an "of S" reads it before and
 	// after its argument, which is how it learns that the argument holds one
@@ -990,19 +1028,11 @@ func trimWhitespace(vals []ComponentValue) []ComponentValue {
 func (p *selParser) compound(vals []ComponentValue, depth int) (out Compound, elem, written string, ok bool) {
 	i := 0
 
-	// A type or universal selector, if present, must come first.
-	if len(vals) > 0 && vals[0].IsToken() {
-		switch t := vals[0].Token; {
-		case t.Kind == Ident:
-			out.Type = t.Value
-			i = 1
-		case t.IsDelim('*'):
-			out.Universal = true
-			i = 1
-		case t.IsDelim('|'):
-			p.unsupported(t.Offset, "namespaces in selectors are not implemented")
-			return out, "", "", false
-		}
+	// A type or universal selector, if present, must come first — with its
+	// namespace prefix, if it has one.
+	i, ok = p.typeSelector(vals, &out, depth)
+	if !ok {
+		return out, "", "", false
 	}
 
 	for i < len(vals) {
@@ -1025,9 +1055,11 @@ func (p *selParser) compound(vals []ComponentValue, depth int) (out Compound, el
 			return out, "", "", false
 		}
 
-		// A namespace separator anywhere makes this a qualified name.
+		// A namespace separator belongs before an element name, at the start
+		// of a compound (see typeSelector); anywhere else it is not a
+		// selector.
 		if v.IsToken() && v.Token.IsDelim('|') {
-			p.unsupported(v.Token.Offset, "namespaces in selectors are not implemented")
+			p.fail(v.Token.Offset, "a namespace separator that is not in front of an element name")
 			return out, "", "", false
 		}
 
@@ -1398,6 +1430,101 @@ func (p *selParser) langs(fn ComponentValue) ([]string, bool) {
 	return out, true
 }
 
+// typeSelector reads the type or universal selector a compound begins with,
+// if it begins with one, and its namespace; it returns how many values it
+// read. A compound that names no namespace is in the stylesheet's default
+// namespace, if it declared one — including a compound with no type selector
+// at all, whose universal selector is implied, where it is not inside a
+// selector argument (depth > 0).
+func (p *selParser) typeSelector(vals []ComponentValue, out *Compound, depth int) (int, bool) {
+	name := func(v ComponentValue) (string, bool, bool) {
+		if !v.IsToken() {
+			return "", false, false
+		}
+		switch t := v.Token; {
+		case t.Kind == Ident:
+			return t.Value, false, true
+		case t.IsDelim('*'):
+			return "", true, true
+		}
+		return "", false, false
+	}
+	bar := func(k int) bool {
+		return k < len(vals) && vals[k].IsToken() && vals[k].Token.IsDelim('|')
+	}
+	setName := func(n string, universal bool) {
+		out.Type, out.Universal = n, universal
+	}
+	if bar(0) {
+		// "|E": in no namespace.
+		if len(vals) < 2 {
+			p.fail(vals[0].Token.Offset, "a namespace separator with no element name after it")
+			return 0, false
+		}
+		n, universal, ok := name(vals[1])
+		if !ok {
+			p.fail(vals[0].Token.Offset, "a namespace separator with no element name after it")
+			return 0, false
+		}
+		setName(n, universal)
+		out.Namespace, out.HasNamespace = "", true
+		return 2, true
+	}
+	first, firstUniversal, ok := name(safeAt(vals, 0))
+	if !ok {
+		// No type selector: the universal one is implied, in the default
+		// namespace — except inside :is(), :not() and the other selector
+		// arguments, where Selectors 4 §4 has the default namespace apply
+		// only to a type or universal selector actually written. That is what
+		// makes "m|*:not(:first-child)" mean "not the first child", in a sheet
+		// whose default is another namespace.
+		if depth == 0 {
+			p.defaultNamespace(out)
+		}
+		return 0, true
+	}
+	if !bar(1) {
+		setName(first, firstUniversal)
+		p.defaultNamespace(out)
+		return 1, true
+	}
+	// "ns|E" or "*|E".
+	n, universal, ok := name(safeAt(vals, 2))
+	if !ok {
+		p.fail(vals[1].Token.Offset, "a namespace separator with no element name after it")
+		return 0, false
+	}
+	setName(n, universal)
+	if firstUniversal {
+		return 3, true
+	}
+	uri, declared := "", false
+	if p.ns != nil {
+		uri, declared = p.ns.Prefixes[first]
+	}
+	if !declared {
+		p.fail(vals[0].Token.Offset, "the namespace prefix \""+first+"\" is not declared by an @namespace rule")
+		return 0, false
+	}
+	out.Namespace, out.HasNamespace = uri, true
+	return 3, true
+}
+
+func safeAt(vals []ComponentValue, i int) ComponentValue {
+	if i < len(vals) {
+		return vals[i]
+	}
+	return ComponentValue{}
+}
+
+// defaultNamespace puts a compound that named no namespace in the
+// stylesheet's default one, if it declared one.
+func (p *selParser) defaultNamespace(out *Compound) {
+	if p.ns != nil && p.ns.HasDefault {
+		out.Namespace, out.HasNamespace = p.ns.Default, true
+	}
+}
+
 // attribute parses one "[...]" selector.
 func (p *selParser) attribute(block ComponentValue) (Attr, bool) {
 	vals := trimWhitespace(block.Values)
@@ -1413,7 +1540,7 @@ func (p *selParser) attribute(block ComponentValue) (Attr, bool) {
 	if vals[0].IsToken() && (vals[0].Token.IsDelim('|') ||
 		(vals[0].Token.IsDelim('*') && len(vals) > 1 &&
 			vals[1].IsToken() && vals[1].Token.IsDelim('|'))) {
-		p.unsupported(vals[0].Token.Offset, "namespaces in selectors are not implemented")
+		p.unsupported(vals[0].Token.Offset, "namespaces on attribute names are not implemented")
 		return Attr{}, false
 	}
 	if !vals[0].IsToken() || vals[0].Token.Kind != Ident {
@@ -1430,7 +1557,7 @@ func (p *selParser) attribute(block ComponentValue) (Attr, bool) {
 	// A namespace separator between the name and the operator.
 	if vals[0].IsToken() && vals[0].Token.IsDelim('|') &&
 		!(len(vals) > 1 && vals[1].IsToken() && vals[1].Token.IsDelim('=')) {
-		p.unsupported(vals[0].Token.Offset, "namespaces in selectors are not implemented")
+		p.unsupported(vals[0].Token.Offset, "namespaces on attribute names are not implemented")
 		return Attr{}, false
 	}
 

@@ -316,8 +316,20 @@ func (m *Matcher) spent() bool {
 // The rule index files a type under its fold either way, so it still offers
 // every rule that can match; this is what decides.
 func (m *Matcher) compound(c css.Compound, n *html.Node) bool {
+	if c.HasNamespace && (n.Namespace == html.NamespaceOther || n.Namespace.URI() != c.Namespace) {
+		// The compound names a namespace — a prefix, "|" for none, or the
+		// sheet's default — and the element is not in it. An element of a
+		// namespace this engine does not know is in none a sheet can name,
+		// and no element is in no namespace: this engine reads every element
+		// an XHTML document leaves in none as HTML.
+		return false
+	}
 	if c.Type != "" {
-		if m.xml && c.Type != n.Name || !m.xml && !ascii.EqualFold(c.Type, n.Name) {
+		// ASCII case-insensitively for an HTML element in an HTML document,
+		// and as written for everything else: a MathML or an SVG element, and
+		// every element of an XHTML document (Selectors 4 §6.1).
+		if n.NamesFoldCase(m.xml) && !ascii.EqualFold(c.Type, n.Name) ||
+			!n.NamesFoldCase(m.xml) && c.Type != n.Name {
 			return false
 		}
 	}
