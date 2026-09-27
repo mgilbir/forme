@@ -152,11 +152,18 @@ var properties = map[string]property{
 
 	// Text and fonts. Most of these inherit, which is the whole reason
 	// inheritance exists: setting a font on <body> has to reach the text.
-	"color":          {true, "black"},
-	"font-family":    {true, "serif"},
-	"font-size":      {true, "medium"},
-	"font-style":     {true, "normal"},
-	"font-weight":    {true, "normal"},
+	"color":       {true, "black"},
+	"font-family": {true, "serif"},
+	"font-size":   {true, "medium"},
+	"font-style":  {true, "normal"},
+	"font-weight": {true, "normal"},
+	// CSS Fonts 4 §2.3: how condensed or expanded a face to choose, as a
+	// percentage of its normal width. It inherits like the rest of the font,
+	// and font-stretch is its legacy name (see the shorthands table). Layout
+	// chooses a face by it — §5.2 tries it before the style and the weight —
+	// and nothing geometrically stretches a face that has no width to offer,
+	// which §2.3 forbids.
+	"font-width":     {true, "normal"},
 	"line-height":    {true, "normal"},
 	"letter-spacing": {true, "normal"},
 	"word-spacing":   {true, "normal"},
@@ -689,7 +696,7 @@ var shorthands = map[string]shorthand{
 	"list-style": {listStyleShorthand,
 		[]string{"list-style-type", "list-style-position", "list-style-image"}},
 	"font": {fontShorthand, []string{
-		"font-style", "font-weight", "font-size", "font-family", "line-height",
+		"font-style", "font-weight", "font-width", "font-size", "font-family", "line-height",
 		"font-variant-caps", "font-variant-ligatures", "font-variant-numeric",
 		"font-variant-east-asian", "font-variant-position", "font-kerning",
 		"font-feature-settings"}},
@@ -727,6 +734,9 @@ var shorthands = map[string]shorthand{
 	// could not tell which was written later (audit C111). The fix is the one
 	// white-space and text-align already had.
 	"word-wrap": {aliasOf("overflow-wrap"), []string{"overflow-wrap"}},
+	// CSS Fonts 4 §2.3.1: font-stretch is "a legacy name alias" of
+	// font-width, for the reason word-wrap is one of overflow-wrap's.
+	"font-stretch": {aliasOf("font-width"), []string{"font-width"}},
 
 	// CSS Grid 2 §8.4's three placement shorthands. See gridLineShorthand.
 	"grid-row":    gridLineShorthand("grid-row-start", "grid-row-end"),

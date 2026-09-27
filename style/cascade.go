@@ -526,6 +526,7 @@ func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media, urls InlineU
 			b.set(fontSizeID, s.interner().value(pxValue(size)))
 		}
 		s.absolutiseLengths(b, declared, size, rootSize)
+		s.resolveRelativeWeight(b, parent)
 
 		cs = s.interner().finish(b)
 		out.Styles[n] = cs
@@ -552,6 +553,7 @@ func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media, urls InlineU
 				pb.set(fontSizeID, s.interner().value(pxValue(psize)))
 			}
 			s.absolutiseLengths(pb, pdeclared, psize, rootSize)
+			s.resolveRelativeWeight(pb, cs)
 			out.Pseudo[key] = s.interner().finish(pb)
 			if own {
 				out.OwnPseudoFontSize[key] = true

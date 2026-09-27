@@ -112,7 +112,7 @@ func (noFaceSet) FaceFor(string, bool, bool) (*shape.Face, bool) { return nil, f
 // cluster nobody can set starts being cut into pieces that each report the same
 // missing glyph.
 func TestAClusterNoFaceCanSetIsLeftWhole(t *testing.T) {
-	if runs := clusterFaceRuns(noFaceSet{}, "⛹\U0001F3FF", nil, false, false); runs != nil {
+	if runs := clusterFaceRuns(fallbackLookup(noFaceSet{}), "⛹\U0001F3FF", nil, normalRequest); runs != nil {
 		t.Errorf("a cluster no face can set was cut into %d runs; it is left whole, "+
 			"because cutting it reports the same missing glyphs several times and "+
 			"changes nothing about what is drawn", len(runs))

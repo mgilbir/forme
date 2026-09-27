@@ -593,18 +593,37 @@ func TestGenericFamiliesResolve(t *testing.T) {
 	}
 }
 
-// TestWeightBoundary pins where the numeric scale becomes bold. 400 is normal
-// and 700 is bold; the boundary is at 600, which is where every renderer puts it.
+// TestWeightBoundary pins where the numeric scale becomes bold for a set that
+// is asked FontSet's two booleans: what CSS Fonts 4 §5.2 chooses from a family
+// of a 400 face and a 700 one. At 500 and below the search reaches 400 first
+// (between 400 and 500 it looks up to 500, then down); above 500 it looks up
+// first and reaches 700. It was 600, which is where a renderer begins to
+// synthesize bold for a family with no bold face, and is not the question.
 func TestWeightBoundary(t *testing.T) {
 	cases := map[string]bool{
-		"normal": false, "bold": true, "bolder": true, "lighter": false,
-		"100": false, "400": false, "500": false,
-		"600": true, "700": true, "900": true,
-		"nonsense": false,
+		"normal": false, "bold": true,
+		"100": false, "400": false, "500": false, "500.5": true,
+		"501": true, "550": true, "600": true, "700": true, "900": true,
+		// What the cascade no longer leaves, read against the initial weight
+		// as the cascade reads it at the root; and what it would not let in.
+		"bolder": true, "lighter": false, "nonsense": false,
 	}
 	for value, want := range cases {
-		if got := isBold(value); got != want {
+		r := normalRequest
+		if w, ok := parseFontWeight(value); ok {
+			r.Weight = w
+		}
+		if got := r.Bold(); got != want {
 			t.Errorf("font-weight:%s is bold=%v, want %v", value, got, want)
+		}
+		// And the same answer from §5.2 itself, over the family the two
+		// booleans stand for.
+		keep, _ := matchFaces([]matchable{
+			{width: valueRange{100, 100}, weight: valueRange{400, 400}, slope: faceStyle{}.offer()},
+			{width: valueRange{100, 100}, weight: valueRange{700, 700}, slope: faceStyle{}.offer()},
+		}, r)
+		if len(keep) != 1 || (keep[0] == 1) != want {
+			t.Errorf("font-weight:%s: §5.2 kept %v of a 400 and a 700 face, and Bold says %v", value, keep, want)
 		}
 	}
 }

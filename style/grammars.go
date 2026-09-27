@@ -88,6 +88,10 @@ func init() {
 	g["font-size"] = single(either(fontSizeKeyword, lpNonNeg))
 	g["font-style"] = fontStyle
 	g["font-weight"] = single(fontWeight)
+	// normal | <percentage [0,∞]> | the eight width keywords.
+	g["font-width"] = single(either(kw("normal", "ultra-condensed", "extra-condensed",
+		"condensed", "semi-condensed", "semi-expanded", "expanded", "extra-expanded",
+		"ultra-expanded"), num(numeric{percent: true}.nonNeg())))
 	g["font-kerning"] = single(kw("auto", "normal", "none"))
 	g["font-variant-ligatures"] = oneOf(single(kw("normal", "none")), groups(ligatureKeywordGroup))
 	g["font-variant-caps"] = single(kw("normal", "small-caps", "all-small-caps",

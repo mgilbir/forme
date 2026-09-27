@@ -41,7 +41,7 @@ import (
 // firstLetterApplies are the ones this engine takes from a ::first-letter: the
 // ones that decide what the letter is set in and what it says.
 var firstLetterApplies = []string{
-	"font-family", "font-size", "font-weight", "font-style",
+	"font-family", "font-size", "font-weight", "font-style", "font-width",
 	"line-height", "letter-spacing", "word-spacing", "color", "text-transform",
 }
 

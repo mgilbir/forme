@@ -26,6 +26,13 @@ import (
 // what to do when none of them is there are decisions the engine makes and
 // reports on, and a set that made them silently would be a set that could hide
 // a substitution.
+//
+// Face's two booleans are what CSS Fonts 4 §5.2 chooses from a family of a
+// regular and a bold face, an upright and an italic one (FontRequest.Bold and
+// Italic say how a request comes to them). A set that has more to offer — a
+// range of weights, condensed faces, oblique angles — implements StyledFontSet
+// as well, and is asked the numbers instead; RangedFontSet and FallbackFontSet
+// have numeric forms too.
 type FontSet interface {
 	// Face returns the face for a family in a weight and style, and whether the
 	// set has it. The family is matched case-insensitively, as CSS matches one.
@@ -207,9 +214,9 @@ func faceForStyle(fonts FontSet, cs style.ComputedStyle) *shape.Face {
 	if fonts == nil || cs.IsZero() {
 		return nil
 	}
-	bold, italic := isBold(cs.Get("font-weight")), isItalic(cs.Get("font-style"))
+	r := fontRequestOf(cs)
 	for _, family := range parseFamilyList(cs.Get("font-family")) {
-		if f, ok := fonts.Face(family, bold, italic); ok {
+		if f, ok := faceIn(fonts, family, r); ok {
 			return f
 		}
 	}
@@ -226,18 +233,15 @@ func faceForStyle(fonts FontSet, cs style.ComputedStyle) *shape.Face {
 // metrics and different line breaks, and nothing about the resulting page says
 // so.
 func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
-	key := fontKey{
-		families: b.Style.Get("font-family"),
-		bold:     isBold(b.Style.Get("font-weight")),
-		italic:   isItalic(b.Style.Get("font-style")),
-	}
+	key := fontKeyOf(b)
 	if got, ok := l.fonts[key]; ok {
 		return got.face, got.face != nil
 	}
+	r := l.fontRequest(b)
 
 	families := parseFamilyList(key.families)
 	for _, family := range families {
-		if face, ok := l.fontSet.Face(family, key.bold, key.italic); ok {
+		if face, ok := faceIn(l.fontSet, family, r); ok {
 			l.fonts[key] = resolvedFont{face: face}
 			l.noteFace(face)
 			return face, true
@@ -257,7 +261,7 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	//
 	// Taking it silently is what this whole design is against, which is what the
 	// finding below is for.
-	face, ok := l.fontSet.Face(initialFamily, key.bold, key.italic)
+	face, ok := faceIn(l.fontSet, initialFamily, r)
 	l.fonts[key] = resolvedFont{face: face}
 	l.noteFace(face)
 	if !ok {
@@ -293,10 +297,22 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 // value the cascade hands out.
 const initialFamily = "serif"
 
+// fontKey is what fontFor's answer depends on: the family list and the three
+// properties a face is chosen by, as the cascade wrote them. The strings and
+// not the request they are read into, so that a box whose answer is known is
+// not read again.
 type fontKey struct {
-	families string
-	bold     bool
-	italic   bool
+	families             string
+	weight, width, slope string
+}
+
+func fontKeyOf(b *Box) fontKey {
+	return fontKey{
+		families: b.Style.Get("font-family"),
+		weight:   b.Style.Get("font-weight"),
+		width:    b.Style.Get("font-width"),
+		slope:    b.Style.Get("font-style"),
+	}
 }
 
 type resolvedFont struct{ face *shape.Face }
@@ -336,34 +352,6 @@ func parseFamilyList(value string) []string {
 	return out
 }
 
-// isBold reads font-weight. The numeric scale runs 100 to 900 and 400 is
-// normal; the boundary is at 600, which is where every renderer puts it.
-func isBold(value string) bool {
-	switch v := ascii.Lower(ascii.TrimCSSSpace(value)); v {
-	case "bold", "bolder":
-		return true
-	case "", "normal", "lighter":
-		return false
-	default:
-		n := 0
-		for i := 0; i < len(v); i++ {
-			if v[i] < '0' || v[i] > '9' {
-				return false
-			}
-			n = n*10 + int(v[i]-'0')
-		}
-		return n >= 600
-	}
-}
-
-func isItalic(value string) bool {
-	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
-	case "italic", "oblique":
-		return true
-	}
-	return false
-}
-
 // fontMetrics answers style.Metrics from a font set: the cascade's one font
 // question, asked of the faces this package has already loaded.
 //
@@ -391,9 +379,9 @@ func (m fontMetrics) XHeight(cs style.ComputedStyle, size style.Unit) (float64, 
 // past the families the document named into the fallback set, because the
 // question is which of *those* sets the character.
 func (l *layouter) faceWithGlyph(b *Box, r rune) (*shape.Face, bool) {
-	bold, italic := isBold(b.Style.Get("font-weight")), isItalic(b.Style.Get("font-style"))
+	req := l.fontRequest(b)
 	for _, family := range parseFamilyList(b.Style.Get("font-family")) {
-		face, ok := l.fontSet.Face(family, bold, italic)
+		face, ok := faceIn(l.fontSet, family, req)
 		if !ok {
 			continue
 		}

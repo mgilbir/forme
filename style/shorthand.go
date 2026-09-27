@@ -645,13 +645,13 @@ func isIdentPart(part []css.ComponentValue) bool {
 //	[ <'font-style'> || <font-variant-css2> || <'font-weight'> ||
 //	  <font-width-css3> ]? <'font-size'> [ / <'line-height'> ]? <'font-family'>#
 //
-// The width (font-stretch in CSS 3, font-width in 4) is valid and this engine
-// has no such property, so it is reported as a part it cannot produce and the
-// rest is applied. It was not accepted at all, and nor was a numeric weight
-// other than the nine hundreds or an oblique angle, so "font: condensed 12px
-// serif", "font: 450 12px serif" and "font: oblique 10deg 12px serif" — valid
-// declarations every browser applies — were dropped whole and called the
-// author's mistake (audit C112).
+// The width (font-stretch in CSS 3, font-width in 4) sets font-width. It was
+// not accepted at all, and nor was a numeric weight other than the nine
+// hundreds or an oblique angle, so "font: condensed 12px serif", "font: 450
+// 12px serif" and "font: oblique 10deg 12px serif" — valid declarations every
+// browser applies — were dropped whole and called the author's mistake (audit
+// C112); and then, with no font-width to set, the width was reported as a part
+// this engine could not produce.
 //
 // # What it resets
 //
@@ -677,7 +677,7 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 		}
 	}
 
-	style, weight, caps := ident("normal"), ident("normal"), ident("normal")
+	style, weight, caps, width := ident("normal"), ident("normal"), ident("normal"), ident("normal")
 	var size, lineHeight, family []css.ComponentValue
 	var unsupported []string
 	var seenStyle, seenWeight, seenCaps, seenWidth bool
@@ -714,10 +714,7 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 		case !seenWeight && len(part) == 1 && fontWeight(part[0]).ok:
 			weight, seenWeight = part, true
 		case isIdent && !seenWidth && fontWidthKeywords[name]:
-			seenWidth = true
-			if name != "normal" {
-				unsupported = append(unsupported, "the font width "+name)
-			}
+			width, seenWidth = part, true
 		default:
 			return nil, nil, false
 		}
@@ -766,6 +763,7 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 	out := map[string][]css.ComponentValue{
 		"font-style":        style,
 		"font-weight":       weight,
+		"font-width":        width,
 		"font-size":         size,
 		"font-family":       family,
 		"font-variant-caps": caps,
