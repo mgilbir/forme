@@ -264,14 +264,12 @@ func (e *runEmphasis) drawn(at Point, colour style.RGBA, turn runTurn) DrawText 
 // verticalTypography reports whether a box's text is in a vertical typographic
 // mode: laid out in a vertical-rl or vertical-lr box that was turned. The two
 // sideways modes are vertical writing modes and horizontal typographic ones,
-// and a box whose turn was refused is laid out across the page.
+// and a box whose turn was refused is laid out across the page — as is the
+// text of a horizontal inline-block standing on a turned line, which
+// turnedModeOf stops at.
 func (l *layouter) verticalTypography(b *Box) bool {
-	for at := b; at != nil; at = at.Parent {
-		if mode, turned := l.turnedMode[at]; turned {
-			return mode == verticalRL || mode == verticalLR
-		}
-	}
-	return false
+	mode, turned := l.turnedModeOf(b)
+	return turned && (mode == verticalRL || mode == verticalLR)
 }
 
 // emphasisOver reads text-emphasis-position into the side of the line the marks

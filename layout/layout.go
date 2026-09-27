@@ -153,6 +153,11 @@ type Fragment struct {
 	// the whole box and only *shown* through the cells — an image tiled per band
 	// would start afresh in each one, which is a different picture.
 	bgBands []Rect
+	// turnedBack marks the fragment of a horizontal inline-block on a turned
+	// line (layouter.turnedBack): the turn moves its rectangle and permutes
+	// its edges and leaves what is inside it alone, because what is inside it
+	// was laid out across the page already. See turnFragment.
+	turnedBack bool
 	// bgSuppressed marks the box whose background became the canvas's, so that
 	// it is not also painted over its own smaller box. See §2.11.2: the element
 	// the background was taken from is left with the initial values.
@@ -302,6 +307,7 @@ func newLayouter(root *Box, avail Size, set FontSet, rec *Recorder) *layouter {
 		inlineAligns:     map[*Box]vAlignState{},
 		intrinsic:        map[*Box]intrinsicWidths{},
 		turnedMode:       map[*Box]writingMode{},
+		turnedBack:       map[*Box]writingMode{},
 		grids:            map[*Box]*tableGrid{},
 		tableDemands:     map[*Box][]tableColumnDemand{},
 		collapsed:        map[*Box]*collapsedGrid{},
@@ -511,6 +517,15 @@ type layouter struct {
 	// text faces whichever way that mode and their own text-orientation say
 	// (facingOf).
 	turnedMode map[*Box]writingMode
+	// turnedBack records each horizontal inline-block standing on a turned
+	// line, keyed to the vertical mode of the line it is on. It is laid out
+	// across the page in its own frame and is not turned with the line: only
+	// its rectangle is. See layout/writingmode.go's turnsBack.
+	turnedBack map[*Box]writingMode
+	// pendingBack is the turnedBack entries the subtree walk of a box that may
+	// turn has found, kept until the turn is decided: a box refused for
+	// something further on does not turn, and neither do they.
+	pendingBack []*Box
 	// grids and tableDemands memoize the two expensive answers about a table:
 	// where its cells sit in the grid, and what each column asks for. Both are
 	// wanted once while the table's width is being resolved and again while it
@@ -1154,7 +1169,22 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 			// It is the same shrink-to-fit a float does, asked of the same
 			// measurement, because it is the same question: the horizontal
 			// engine's widths *are* this box's inline extents.
-			lineLength = l.shrinkToFit(b, l.avail.H)
+			//
+			// §7.3.2 names the constraint: the smallest of the containing
+			// block's size where that is definite and the initial containing
+			// block's, stretch-fit into — so less the box's own margins,
+			// borders and padding on the two sides the line runs between,
+			// which are its top and bottom. It was the page's height whole,
+			// which let a vertical box with a margin run its lines past the
+			// page by the margin, and ignored a containing block with a height
+			// of its own.
+			room := l.avail.H
+			if at.cbDefinite && at.cbHeight < room {
+				room = at.cbHeight
+			}
+			room = maxZero(room.Sub(margin.Vertical()).Sub(border.Vertical()).
+				Sub(padding.Vertical()))
+			lineLength = l.shrinkToFit(b, room)
 		}
 	}
 	// Where the content began, so that a pour that cannot be made can be taken

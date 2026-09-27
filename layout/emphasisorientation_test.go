@@ -260,3 +260,42 @@ func TestACompositionsLeadingIsAnUprightCharacters(t *testing.T) {
 		t.Errorf("the line is %g across, want 32.5", w)
 	}
 }
+
+// TestAMarkInAHorizontalInlineBlockOnAVerticalLineLiesOverItsText.
+//
+// A horizontal inline-block standing on a vertical line is laid out across the
+// page, and its text is in a horizontal typographic mode: its marks are over
+// it and lie along its line, as on any horizontal page — not upright beside a
+// column. Its own 25px line grows by the marks' band to 37.5, the text's
+// baseline 32.5 below its top; the marks' baseline is over the text's 20 and
+// under the mark's 2.5: 22.5 above the text's. Each mark, the fixture's "o" at
+// 10px, is 5 wide and centred over its 10px letter: 2.5 into it.
+func TestAMarkInAHorizontalInlineBlockOnAVerticalLineLiesOverItsText(t *testing.T) {
+	root, runs, marks := verticalMarks(t, verticalFallbacksSet(t),
+		`<div id="d">o<span id="ib">xx</span></div>`,
+		emphasisVerticalCSS+` #d { line-height: 50px }
+	#ib { display: inline-block; writing-mode: horizontal-tb; line-height: 25px }`)
+	var across *DrawText
+	for i := range runs {
+		if !runs[i].Sideways {
+			across = &runs[i]
+		}
+	}
+	if across == nil || len(marks) != 3 {
+		t.Fatalf("drew %+v and %d marks", runs, len(marks))
+	}
+	if h := find(t, root, "ib").BorderRect.W.Px(); h != 20 {
+		t.Fatalf("the inline-block is %g across, want 20", h)
+	}
+	for i, m := range marks[1:] {
+		if m.Sideways || m.Upright {
+			t.Errorf("mark %d over the inline-block's text is sideways=%v upright=%v, "+
+				"want it lying along the page", i, m.Sideways, m.Upright)
+		}
+		if want := across.At.X.Px() + 2.5 + float64(10*i); m.At.X.Px() != want ||
+			m.At.Y.Px() != across.At.Y.Px()-22.5 {
+			t.Errorf("mark %d is at (%g, %g), want (%g, %g)", i, m.At.X.Px(), m.At.Y.Px(),
+				want, across.At.Y.Px()-22.5)
+		}
+	}
+}

@@ -211,18 +211,19 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 // before any of this existed, which is what makes the finding the whole of the
 // difference.
 func TestABoxThisEngineCannotTurnIsLaidOutHorizontally(t *testing.T) {
-	// An inline-block, which is refused for being a box with sizing rules of
-	// its own rather than for the mode it asked for. Every value of the
-	// property is laid out now — the refusals that are left are all about the
-	// box — so these two documents differ in the declaration and in nothing
-	// else, which is what makes the comparison below mean anything.
+	// An inline flex container, which is refused for being a box with sizing
+	// rules of its own rather than for the mode it asked for. Every value of
+	// the property is laid out now — the refusals that are left are all about
+	// the box — so these two documents differ in the declaration and in
+	// nothing else, which is what makes the comparison below mean anything.
+	// (It was an inline-block, until an inline-block was turned.)
 	refused := turnedRuns(t, `<div id="d">ab</div>`,
 		`#d { font-family: Courier; font-size: 20px; line-height: 20px;
-		      display: inline-block;
+		      display: inline-flex;
 		      writing-mode: vertical-rl; width: 60px; height: 100px }`)
 	plain := turnedRuns(t, `<div id="d">ab</div>`,
 		`#d { font-family: Courier; font-size: 20px; line-height: 20px;
-		      display: inline-block; width: 60px; height: 100px }`)
+		      display: inline-flex; width: 60px; height: 100px }`)
 	if len(refused) != 1 || len(plain) != 1 {
 		t.Fatalf("the fixtures drew %d and %d runs, want 1 each", len(refused), len(plain))
 	}

@@ -1518,7 +1518,17 @@ const wptEnv = "WPT_TESTS"
 // one composition, an em along the line and one U+FFFC for every rule that
 // asks about a character, drawn across the page squeezed into its em square.
 // See layout/combine.go. wpt.fyi: Chrome and Firefox pass, Safari fails.
-const wptCleanPassBaseline = 5995
+//
+// **5995 to 5996, for a vertical inline-block**. text-fit/writing-mode and its
+// reference set four inline-blocks in the four vertical modes on a horizontal
+// line, each "inline-size: 120px" with two lines of Ahem; the test scales its
+// text with "text-fit: grow consistent" and the reference sets it at the size
+// that fits. Every one was refused, an inline-block not being a box this
+// engine turned. It is one now — CSS Writing Modes §7.3's orthogonal flow, as
+// wide as its lines stack and sitting on its bottom margin edge — and text-fit
+// fits the lines it breaks against its height. wpt.fyi: Chrome passes,
+// Firefox and Safari fail.
+const wptCleanPassBaseline = 5996
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

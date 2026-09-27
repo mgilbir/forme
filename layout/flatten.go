@@ -105,6 +105,37 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 	if b.Replaced == nil {
 		baseline, ok := lastLineBaseline(frag)
 		switch {
+		case l.turnedBack[b].vertical():
+			// A horizontal inline-block on a vertical line: its lines run across
+			// the page and none of them is along the line it stands on. §4.3
+			// synthesizes its central baseline halfway between its over and
+			// under margin edges, and on a vertical line under "mixed" or
+			// "upright" the central is the dominant baseline (§4.2), so its
+			// middle goes on the parent's central baseline, which is
+			// centralShift above the alphabetic one the line is laid out on.
+			// Under "sideways", and in a sideways mode, the alphabetic baseline
+			// is the dominant one, and that is its under margin edge, which the
+			// item already says.
+			ok = false
+			if parent := b.Parent; parent != nil {
+				if face, found := l.fontFor(parent); found {
+					if facing, vertical := l.facingOf(parent); vertical &&
+						facing != orientationSideways {
+						central, _ := l.centralShift(parent, face, parent.FontSize, true)
+						item.Ascent = box.H.Div(2).Sub(central)
+						item.Descent = box.H.Sub(item.Ascent)
+					}
+				}
+			}
+		case l.turnedMode[b].vertical():
+			// An inline-block whose own writing mode is vertical, on a
+			// horizontal line: its lines run down the page, and none of them
+			// has a baseline across it for the words beside it to sit on. CSS
+			// Writing Modes §4.3 synthesizes one for an atomic inline that has
+			// none — "the alphabetic baseline is assumed to be at the under
+			// margin edge" — and the under edge of a horizontal line is its
+			// bottom, which is what the item already says.
+			ok = false
 		case b.TableWrapper:
 			// §10.8.1 again, and a different sentence of it: "the baseline of an
 			// 'inline-table' is the baseline of the first row of the table".
@@ -198,15 +229,23 @@ func (l *layouter) inlineBlockFragment(b *Box, frame inlineFrame) *Fragment {
 	border := l.borderWidths(b)
 	padding := l.edges(b, "padding", frame.Containing)
 
-	width, ok := l.explicitWidth(b, frame.Containing)
+	// A horizontal inline-block on a turned line is sized across the page in
+	// its own writing mode, and the room it has there is not the line's: see
+	// turnsBack. Its edges are its own, physical, already (insideTurn).
+	backMode, back := l.turnedBack[b]
+	containing := frame.Containing
+	if back {
+		containing = l.avail.W
+	}
+	width, ok := l.explicitWidth(b, containing)
 	if !ok {
-		room := frame.Containing.
+		room := containing.
 			Sub(margin.Horizontal()).
 			Sub(border.Horizontal()).
 			Sub(padding.Horizontal())
 		width = l.shrinkToFit(b, maxZero(room))
 	}
-	width = l.clampWidth(b, width, frame.Containing)
+	width = l.clampWidth(b, width, containing)
 
 	// A fresh formatting context, because an inline-block establishes one:
 	// no float inside it escapes and none outside reaches in. That is not a
@@ -222,6 +261,9 @@ func (l *layouter) inlineBlockFragment(b *Box, frame inlineFrame) *Fragment {
 		frag.Offset = Point{X: frame.Offset.X.Add(d.X), Y: frame.Offset.Y.Add(d.Y)}
 	} else {
 		frag.Offset = frame.Offset
+	}
+	if back {
+		standBack(frag, backMode)
 	}
 	return frag
 }

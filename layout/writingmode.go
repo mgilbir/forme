@@ -14,9 +14,12 @@ import (
 // # What is laid out
 //
 // All four vertical modes — "vertical-rl", "vertical-lr", "sideways-rl" and
-// "sideways-lr" — and only for a box refusesToTurn accepts. A box it will not
-// turn is reported, per box, and laid out horizontally, which is the page that
-// was already there.
+// "sideways-lr" — and only for a box refusesToTurn accepts: a block, or an
+// inline-block on a horizontal line (an orthogonal flow, CSS Writing Modes
+// §7.3). A turned box's lines may hold inline-blocks of their own, in its
+// mode or turned back to horizontal-tb (turnsBack). A box it will not turn is
+// reported, per box, and laid out horizontally, which is the page that was
+// already there.
 //
 // # Why a rotation and not an axis abstraction
 //
@@ -221,11 +224,21 @@ func untuneEdges(e Edges, mode writingMode) Edges {
 // Strictly above: the box that starts a turn keeps its own edges physical,
 // because they are in its parent's frame and its parent is not turned. It is
 // what it *holds* that is laid out sideways.
+//
+// A horizontal inline-block on a turned line is where the frame stops: it is
+// laid out across the page with its own edges physical, like the box a turn
+// starts at, and so is everything inside it. See turnsBack.
 func (l *layouter) insideTurn(b *Box) (writingMode, bool) {
 	if b == nil {
 		return horizontalTB, false
 	}
+	if _, back := l.turnedBack[b]; back {
+		return horizontalTB, false
+	}
 	for at := b.Parent; at != nil; at = at.Parent {
+		if _, back := l.turnedBack[at]; back {
+			return horizontalTB, false
+		}
 		if mode, turned := l.turnedMode[at]; turned {
 			return mode, true
 		}
@@ -322,6 +335,14 @@ func turnFragment(f *Fragment, mode writingMode, in Size) {
 	f.Margin = turnEdges(f.Margin, mode)
 	f.Border = turnEdges(f.Border, mode)
 	f.Padding = turnEdges(f.Padding, mode)
+	if f.turnedBack {
+		// A horizontal inline-block on the line: its rectangle and its edges
+		// were stated in the frame, and have now been turned onto the page;
+		// what it holds was laid out on the page already, in coordinates from
+		// its own content box, which the turn has just put where it belongs.
+		// See turnsBack.
+		return
+	}
 	// contentH is a block-axis extent, which is a width on the page. It is read
 	// only by the overflow arithmetic, which asks it of the box it belongs to
 	// and never compares it across a turn, so it keeps its name and changes its
@@ -375,16 +396,28 @@ func (l *layouter) turns(b *Box, containing style.Unit) writingMode {
 	if mode == horizontalTB {
 		// A box that turns *back*, inside a vertical ancestor. There is nothing
 		// to report — horizontal-tb is the mode this engine lays out — and
-		// nothing to do either: the ancestor it sits in was refused, because
-		// refusesToTurn will not turn a box holding one of these, so the whole
-		// subtree is already being laid out horizontally.
+		// nothing to do either. Either the ancestor it sits in was refused,
+		// because refusesToTurn will not turn a box holding one of these, and
+		// the whole subtree is being laid out horizontally; or it is an
+		// inline-block the ancestor's turn stands on its line untuned (see
+		// turnsBack), which is laid out across the page by being laid out
+		// here, and placed by the turn.
 		return horizontalTB
 	}
+	l.pendingBack = l.pendingBack[:0]
 	why := l.refusesToTurn(b, mode, containing)
 	if why == "" {
 		l.turnedMode[b] = mode
+		// And the horizontal inline-blocks its lines hold, which the walk found
+		// and which stand on them untuned. Only now, because only now is it
+		// known that there is a turn for them to stand in.
+		for _, back := range l.pendingBack {
+			l.turnedBack[back] = mode
+		}
+		l.pendingBack = l.pendingBack[:0]
 		return mode
 	}
+	l.pendingBack = l.pendingBack[:0]
 	l.reportWritingMode(b, mode, why)
 	return horizontalTB
 }
@@ -413,15 +446,23 @@ func (l *layouter) reportWritingMode(b *Box, mode writingMode, why string) {
 // reported, which is the honest answer; a box turned that should not have been
 // is a page that is quietly wrong.
 func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit) string {
-	if b.Outer != OuterBlock || (b.Inner != InnerFlow && b.Inner != InnerFlowRoot) {
-		// A table, an inline-block, a table part. Each has sizing rules of its
-		// own that resolve the two axes together, and turning the result would
-		// mean turning arithmetic this has not been through.
+	if !isInlineBlock(b) && (b.Outer != OuterBlock || (b.Inner != InnerFlow && b.Inner != InnerFlowRoot)) {
+		// A table, a flex or grid container, a table part. Each has sizing
+		// rules of its own that resolve the two axes together, and turning the
+		// result would mean turning arithmetic this has not been through.
 		//
 		// A flow root is not one of those. It is ordinary block layout that
 		// seals its own formatting context, which is the one thing a turned box
 		// needs from the box it is — and it is what a float is, so refusing it
 		// would refuse every floated vertical box in the suite.
+		//
+		// Nor is an inline-block, which is a flow root that sits on a line: a
+		// vertical one in a horizontal paragraph is CSS Writing Modes §7.3's
+		// orthogonal flow, sized in its own writing mode and placed in its
+		// parent's. Its width, being its block size, is how far its lines stack
+		// — the answer an automatic width of a turned box already gets — and
+		// the line it sits on takes it as that wide. See atomicItem for where
+		// its baseline is.
 		return "it is not an ordinary block box"
 	}
 	if b.Position != PositionStatic || b.Replaced != nil {
@@ -498,8 +539,25 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) str
 		if b.Replaced != nil || b.Control != nil || b.ListItem || b.MarkerImage != nil {
 			return "it holds a replaced element, a form control or a list marker"
 		}
-		switch b.Inner {
-		case InnerFlow, InnerText:
+		if isInlineBlock(b) && writingModeOf(b) == horizontalTB {
+			// A horizontal inline-block on the turned line. What it holds is
+			// laid out across the page, in its own frame, and is none of this
+			// walk's business: it is not turned. What it must not do is ask
+			// for something its own frame cannot give. See turnsBack.
+			if why := l.refusesToTurnBack(b); why != "" {
+				return why
+			}
+			l.pendingBack = append(l.pendingBack, b)
+			return ""
+		}
+		switch {
+		case b.Inner == InnerFlow, b.Inner == InnerText:
+		case isInlineBlock(b):
+			// An inline-block on a turned line, in the same writing mode: it is
+			// block layout in the horizontal frame like the rest, sized to fit
+			// its content along the line, and the turn takes it with the line
+			// it is on. Its own sizes are read in the frame (see
+			// refusesPhysicalGeometry) as every box's are.
 		default:
 			return "it holds a table or another box with sizing rules of its own"
 		}
@@ -610,8 +668,14 @@ func (l *layouter) facingOf(b *Box) (textOrientation, bool) {
 // the turned ones: the mode of the nearest box, this one or above it, that the
 // turn started at. It is insideTurn with the box itself counted, which is the
 // question about the box's own text rather than about its edges.
+//
+// The text of a horizontal inline-block on a turned line is on no turned line:
+// the walk stops there. See turnsBack.
 func (l *layouter) turnedModeOf(b *Box) (writingMode, bool) {
 	for at := b; at != nil; at = at.Parent {
+		if _, back := l.turnedBack[at]; back {
+			return horizontalTB, false
+		}
 		if mode, turned := l.turnedMode[at]; turned {
 			return mode, true
 		}
@@ -766,12 +830,25 @@ func orientationOf(b *Box) textOrientation {
 // that would have been right into a page that says so, and the other way round
 // is a page that is quietly wrong.
 func (l *layouter) widthAskedOfTheContent(b *Box) bool {
-	if shrinksToFit(b) {
+	if shrinksToFit(b) && !isInlineBlock(b) {
+		// An inline-block shrinks to fit too, and it is not asked here: a
+		// turned box with an automatic width is as wide as its lines stack,
+		// which is §7.3's answer for an orthogonal flow whose block size is
+		// auto — "the used block size of the child is calculated to fit its
+		// content" — and nothing measures the box before it is laid out. What
+		// is still asked is whether anything *above* it is measured, which is
+		// the walk below.
 		return true
 	}
 	for at := b.Parent; at != nil; at = at.Parent {
 		if _, declared := l.explicitWidth(at, 0); declared {
 			return false
+		}
+		if at.Outer == OuterInline && at.Inner == InnerFlow {
+			// An inline box between the box and its block container. It has
+			// no width of its own to shrink — its content is on the lines of
+			// the block above it — so the question is that block's.
+			continue
 		}
 		if shrinksToFit(at) {
 			return true
@@ -781,6 +858,13 @@ func (l *layouter) widthAskedOfTheContent(b *Box) bool {
 		}
 	}
 	return false
+}
+
+// isInlineBlock reports whether a box is an inline-block: a block container
+// laid out on its parent's line as one atomic inline. (A replaced element on a
+// line is not one; every caller has refused it by then.)
+func isInlineBlock(b *Box) bool {
+	return b.Outer == OuterInline && b.Inner == InnerFlowRoot
 }
 
 // shrinksToFit reports whether a box's own width is CSS 2.1 §10.3.5's
@@ -798,4 +882,74 @@ func (l *layouter) drawShiftOf(item inlineItem) style.Unit {
 	}
 	draw, _ := l.centralShift(b, item.Face, item.Size, item.Upright)
 	return draw
+}
+
+// A horizontal inline-block on a turned line.
+//
+// CSS Writing Modes §7.3 again, the other way round: an inline-block in
+// horizontal-tb inside a vertical paragraph is an orthogonal flow, sized in its
+// own writing mode — its lines run across the page — and placed in its
+// parent's, as one atomic inline on a line that runs down it.
+//
+// The turn cannot draw it by turning it: its text would come out lying on its
+// side, which is exactly what the author turned it back to avoid. So it is not
+// turned. It is laid out across the page first, in a frame of its own whose
+// edges are the physical ones (insideTurn stops at it), and then stated in the
+// turned frame as the rectangle it will be once turned — its width along the
+// line is its physical height, its height across the line its physical width,
+// and its edges are the physical ones permuted backwards (untuneEdges). The
+// turn then moves that rectangle onto the page and permutes the edges back,
+// and leaves the inside alone (turnFragment): it is measured from the box's own
+// content edge, which is where the turn has just put it.
+//
+// §7.3.1 gives it the available width an orthogonal flow falls back on, the
+// initial containing block's, since the containing block's physical width is
+// its block size and is not known while its lines are being filled; its height
+// is its content's. Across the line it is centred on the central baseline —
+// §4.3 synthesizes an atomic inline's central baseline "halfway between the
+// under and over margin edges" and §4.2 makes the central the dominant one —
+// or sits on its under margin edge where "text-orientation: sideways" makes
+// the alphabetic baseline dominant.
+
+// refusesToTurnBack is why a horizontal inline-block on a turned line cannot
+// stand there, or the empty string if it can.
+//
+// Two things its own frame cannot give. A percentage width or height is a
+// fraction of the containing block's physical width or height, which on a
+// vertical line is a block size nothing knows yet. And a box inside it that
+// changes the writing mode again would be a turn inside a box that is itself
+// placed by a turn, which is two frames this file has one of.
+func (l *layouter) refusesToTurnBack(b *Box) string {
+	for _, p := range [...]string{"width", "height", "min-width", "min-height", "max-width", "max-height"} {
+		if strings.ContainsRune(b.Style.Get(p), '%') {
+			return "a percentage \"" + p + "\" is declared on a horizontal inline-block inside it, " +
+				"and the size it is a percentage of is not known on a vertical line"
+		}
+	}
+	var changes func(*Box) bool
+	changes = func(at *Box) bool {
+		if at != b && !at.Anonymous() && !at.IsText() && writingModeOf(at) != horizontalTB {
+			return true
+		}
+		for _, c := range at.Children {
+			if changes(c) {
+				return true
+			}
+		}
+		return false
+	}
+	if changes(b) {
+		return "it holds a horizontal inline-block that changes the writing mode again"
+	}
+	return ""
+}
+
+// standBack states the fragment of a horizontal inline-block, laid out across
+// the page, in the turned frame of the line it stands on: see turnsBack, above.
+func standBack(f *Fragment, mode writingMode) {
+	f.BorderRect.W, f.BorderRect.H = f.BorderRect.H, f.BorderRect.W
+	f.Margin = untuneEdges(f.Margin, mode)
+	f.Border = untuneEdges(f.Border, mode)
+	f.Padding = untuneEdges(f.Padding, mode)
+	f.turnedBack = true
 }
