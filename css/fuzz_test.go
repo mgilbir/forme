@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/mgilbir/forme/internal/diag"
 )
 
 // Fuzzing the CSS reader.
@@ -108,9 +110,10 @@ func FuzzTokenize(f *testing.F) {
 			if e.Offset < 0 || e.Offset > len(input) {
 				t.Fatalf("a problem reported at offset %d, outside the input", e.Offset)
 			}
-			// A message is shown to a person, so it has to be text.
-			if !utf8.ValidString(e.Message) {
-				t.Fatalf("a problem reported with a message that is not valid UTF-8: %q", e.Message)
+			// A message is shown to a person, so it has to be text, and text a
+			// log can print: no control character either. See internal/diag.
+			if !utf8.ValidString(e.Message) || !diag.IsText(e.Message) {
+				t.Fatalf("a problem reported with a message that is not text: %q", e.Message)
 			}
 		}
 

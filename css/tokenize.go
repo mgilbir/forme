@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/diag"
 )
 
 // The tokenizer of CSS Syntax Level 3 §4, followed step for step.
@@ -226,7 +227,8 @@ func (t *tokenizer) fail(off int, msg string) {
 	if t.quiet {
 		return
 	}
-	t.errs = addError(t.errs, Error{Offset: off, Message: msg})
+	// Made text wherever it was written: see internal/diag, and parser.fail.
+	t.errs = addError(t.errs, Error{Offset: off, Message: diag.Text(msg)})
 }
 
 // addError appends a problem to a list under the maxErrors bound, putting the

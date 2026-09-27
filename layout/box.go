@@ -6,6 +6,7 @@ import (
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/diag"
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
@@ -736,25 +737,9 @@ func (b *boxBuilder) fontSizeOf(n *html.Node, parent style.Unit) style.Unit {
 }
 
 // quoteValue renders a value for a diagnostic without letting a hostile
-// stylesheet put control characters into a caller's log.
-func quoteValue(s string) string {
-	const max = 40
-	var out strings.Builder
-	out.WriteByte('"')
-	for i, r := range s {
-		if i >= max {
-			out.WriteString("...")
-			break
-		}
-		if r < 0x20 || r == 0x7F {
-			out.WriteByte('?')
-			continue
-		}
-		out.WriteRune(r)
-	}
-	out.WriteByte('"')
-	return out.String()
-}
+// stylesheet put control characters, or bytes that are not text, into a
+// caller's log. See internal/diag.
+func quoteValue(s string) string { return diag.Quote(s, 40) }
 
 func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	cs := b.styles[n]

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/diag"
 )
 
 // Selectors, from Selectors Level 4 — parsed and given a specificity here, and
@@ -734,7 +735,10 @@ func (p *selParser) inapplicable(off int, msg string) {
 	p.add(Error{Offset: off, Message: msg})
 }
 
+// add records a problem under the maxErrors bound, its message made text as
+// parser.fail makes one.
 func (p *selParser) add(e Error) {
+	e.Message = diag.Text(e.Message)
 	switch {
 	case len(p.errs) > maxErrors:
 		return

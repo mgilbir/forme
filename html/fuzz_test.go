@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/diag"
 )
 
 // Fuzzing the HTML reader.
@@ -43,6 +46,13 @@ func FuzzParse(f *testing.F) {
 		strings.Repeat("<div>", 400),
 		strings.Repeat("<li>", 400),
 		strings.Repeat("&amp;", 400),
+
+		// Names that are not folded to what strings.ToLower makes of them, and
+		// are right: a byte that is not UTF-8, a capital outside ASCII, and an
+		// XHTML element, which XML does not fold at all. See folded.
+		"<A\x93", "<p \u00c0=1 a\u212a=2>", "<?xml version='1.0'?><P>x</P>",
+		// And control characters in names, which a message quotes.
+		"<a\x01b c\x1b=1>", "</x\u0085>",
 	}
 	for _, s := range seeds {
 		f.Add(s)
@@ -81,7 +91,10 @@ func FuzzParse(f *testing.F) {
 				t.Fatalf("a problem reported at offset %d, outside the input of %d bytes",
 					e.Offset, len(src))
 			}
-			if !utf8.ValidString(e.Message) {
+			// Text, and text a log can print: no byte that begins no UTF-8
+			// character, and no control character. The document's bytes are
+			// neither, and a message quotes them. See internal/diag.
+			if !utf8.ValidString(e.Message) || !diag.IsText(e.Message) {
 				t.Fatalf("a problem reported with a message that is not text: %q", e.Message)
 			}
 			if line, col := Position(src, e.Offset); line < 1 || col < 1 {
@@ -95,6 +108,20 @@ func FuzzParse(f *testing.F) {
 		doc.TextContent()
 		doc.Walk(func(*Node) bool { return true })
 	})
+}
+
+// folded reports whether a tag or attribute name is folded as the document's
+// language folds it: to ASCII lower case in HTML, and not at all in XHTML, which
+// is XML and case-sensitive.
+//
+// It was strings.ToLower, which is Unicode's lower case and something else
+// besides: it maps a byte that begins no UTF-8 character to U+FFFD. So the
+// element "a\x93", which HTML folds to itself, was "not folded" — the second
+// failure in the crasher the scheduled fuzz run found for "<A\x93", hidden
+// behind the first — and so was an attribute named "À" or "a\u212A", which
+// HTML does not fold either (internal/ascii says why).
+func folded(doc *Node, name string) bool {
+	return doc.XML || ascii.Lower(name) == name
 }
 
 // checkTree walks iteratively — it is checking a depth bound, so it must not
@@ -129,7 +156,7 @@ func checkTree(t *testing.T, doc *Node, srcLen int) {
 			if f.n.Name == "" {
 				t.Fatal("an element with no name")
 			}
-			if f.n.Name != strings.ToLower(f.n.Name) {
+			if !folded(doc, f.n.Name) {
 				t.Fatalf("the element name %q was not folded", f.n.Name)
 			}
 			if f.n.Text != "" {
@@ -140,7 +167,7 @@ func checkTree(t *testing.T, doc *Node, srcLen int) {
 				if a.Name == "" {
 					t.Fatalf("<%s> has an attribute with no name", f.n.Name)
 				}
-				if a.Name != strings.ToLower(a.Name) {
+				if !folded(doc, a.Name) {
 					t.Fatalf("the attribute name %q was not folded", a.Name)
 				}
 				if names[a.Name] {

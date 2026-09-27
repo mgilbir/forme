@@ -1,9 +1,8 @@
 package css
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/diag"
 )
 
 // The parser of CSS Syntax Level 3 §5: the layer that turns a flat token stream
@@ -441,9 +440,16 @@ func (g *gathered) take(mark int) []ComponentValue {
 // fail records a problem. It keeps one past the bound, and no more, because
 // that is as many as report can use: the one past it is where the note that the
 // list was cut goes.
+//
+// The message is made text here, whatever it quotes. The tokenizer decodes the
+// input, so a byte that begins no UTF-8 character reaches a message as U+FFFD
+// already; a control character does not — "a\1 b" is an identifier holding
+// U+0001 — and a message is read by a log. quoteName bounds the name it
+// quotes; this is what holds for every message, whatever it quotes and however.
+// See internal/diag.
 func (p *parser) fail(off int, msg string) {
 	if len(p.errs) <= maxErrors {
-		p.errs = append(p.errs, Error{Offset: off, Message: msg})
+		p.errs = append(p.errs, Error{Offset: off, Message: diag.Text(msg)})
 	}
 }
 
@@ -1023,22 +1029,6 @@ func trimTrailingWhitespace(vals []ComponentValue) []ComponentValue {
 }
 
 // quoteName renders a property name for a diagnostic without letting a hostile
-// stylesheet put control characters into a caller's log.
-func quoteName(s string) string {
-	const max = 40
-	var b strings.Builder
-	b.WriteByte('"')
-	for i, r := range s {
-		if i >= max {
-			b.WriteString("...")
-			break
-		}
-		if r < 0x20 || r == 0x7F {
-			b.WriteByte('?')
-			continue
-		}
-		b.WriteRune(r)
-	}
-	b.WriteByte('"')
-	return b.String()
-}
+// stylesheet put control characters, or bytes that are not text, into a
+// caller's log. See internal/diag.
+func quoteName(s string) string { return diag.Quote(s, 40) }

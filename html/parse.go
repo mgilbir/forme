@@ -540,10 +540,10 @@ func (p *parser) startTag(tk token) {
 		switch name {
 		case "html", "link", "meta", "style":
 		case "head", "noscript":
-			p.tok.fail(tk.offset, "<"+name+"> inside a <noscript> in the head; it is ignored")
+			p.tok.fail(tk.offset, "<"+shown(name)+"> inside a <noscript> in the head; it is ignored")
 			return
 		default:
-			p.tok.fail(tk.offset, "<"+name+"> cannot be inside a <noscript> in the head, "+
+			p.tok.fail(tk.offset, "<"+shown(name)+"> cannot be inside a <noscript> in the head, "+
 				"which holds only <link>, <meta> and <style>; the <noscript> is closed before it")
 			p.open = p.open[:len(p.open)-1]
 		}
@@ -577,7 +577,7 @@ func (p *parser) startTag(tk token) {
 		// <details> ends an open paragraph, and what follows it is not in the
 		// paragraph.
 		p.closeFor(name, tk.offset)
-		p.tok.unsupported(tk.offset, "<"+name+"> is dropped: "+why)
+		p.tok.unsupported(tk.offset, "<"+shown(name)+"> is dropped: "+why)
 		// Its content goes with it. For the raw-text ones that means consuming
 		// to the end tag, or the script body would be read as markup.
 		if rawTextElements[name] && !tk.selfClosing {
@@ -675,8 +675,8 @@ func (p *parser) startTag(tk token) {
 		// renders it anyway is given. Dropping the element was a worse answer
 		// than either reading of the markup: XHTML says it is an empty div, HTML
 		// says it is an open one, and *neither* says it is nothing at all.
-		p.tok.fail(tk.offset, "<"+name+"/> is not an empty element; HTML has no "+
-			"self-closing syntax outside void elements, so it is read as <"+name+">")
+		p.tok.fail(tk.offset, "<"+shown(name)+"/> is not an empty element; HTML has no "+
+			"self-closing syntax outside void elements, so it is read as <"+shown(name)+">")
 	}
 
 	// The optional end tags of HTML: an incoming start tag can close what is
@@ -783,8 +783,8 @@ func (p *parser) insertUnknown(tk token) {
 		return
 	}
 	if tk.selfClosing {
-		p.tok.fail(tk.offset, "<"+tk.name+"/> is not an empty element; HTML has no "+
-			"self-closing syntax outside void elements, so it is read as <"+tk.name+">")
+		p.tok.fail(tk.offset, "<"+shown(tk.name)+"/> is not an empty element; HTML has no "+
+			"self-closing syntax outside void elements, so it is read as <"+shown(tk.name)+">")
 	}
 	el := p.insert(tk)
 	if el == nil {
@@ -841,8 +841,8 @@ func (p *parser) mergeAttributes(el *Node, attrs []Attribute, offset int) {
 			continue
 		}
 		if len(el.Attrs) >= maxAttributes {
-			p.tok.limit(offset, "<"+el.Name+"> has more attributes than this engine will read ("+
-				strconv.Itoa(maxAttributes)+"); \""+a.Name+"\" and those after it on this tag were dropped")
+			p.tok.limit(offset, "<"+shown(el.Name)+"> has more attributes than this engine will read ("+
+				strconv.Itoa(maxAttributes)+"); \""+shown(a.Name)+"\" and those after it on this tag were dropped")
 			return
 		}
 		names[a.Name] = true
@@ -921,7 +921,7 @@ func (p *parser) insert(tk token) *Node {
 	el.Attrs = tk.attrs
 	p.pragma(el)
 	if parent, before, ok := p.fosterParentOf(tk.name); ok {
-		p.tok.fail(tk.offset, "<"+tk.name+"> is not table content and was written "+
+		p.tok.fail(tk.offset, "<"+shown(tk.name)+"> is not table content and was written "+
 			"inside a table; it belongs before the table and is read there")
 		parent.insertBefore(el, before)
 		return el
@@ -984,7 +984,7 @@ func (p *parser) closeTo(at int, by string, off int, tableQuiet bool) {
 		if impliedEndTags[n] || tableQuiet && tableStructure[n] {
 			continue
 		}
-		p.tok.fail(off, by+" closes <"+p.open[at].Name+">, and <"+n+
+		p.tok.fail(off, by+" closes <"+shown(p.open[at].Name)+">, and <"+shown(n)+
 			"> inside it is still open; tags have to nest")
 		break
 	}
@@ -995,7 +995,7 @@ func (p *parser) closeTo(at int, by string, off int, tableQuiet bool) {
 // that every block-level start tag begins with.
 func (p *parser) closeParagraph(incoming string, off int) {
 	if at := p.inScope("p", buttonScope); at >= 0 {
-		p.closeTo(at, "<"+incoming+">", off, false)
+		p.closeTo(at, "<"+shown(incoming)+">", off, false)
 	}
 }
 
@@ -1036,7 +1036,7 @@ func (p *parser) closeFor(name string, off int) {
 		// what makes "<li><div>a<li>" close the div, reported, and the item.
 		p.closeListItem(off, "<li>", func(n string) bool { return n == "li" })
 	case "dd", "dt":
-		p.closeListItem(off, "<"+name+">", func(n string) bool { return n == "dd" || n == "dt" })
+		p.closeListItem(off, "<"+shown(name)+">", func(n string) bool { return n == "dd" || n == "dt" })
 	case "option":
 		if p.current().Name == "option" {
 			p.open = p.open[:len(p.open)-1]
@@ -1068,7 +1068,7 @@ func (p *parser) closeFor(name string, off int) {
 				p.open = p.open[:len(p.open)-1]
 			}
 			if cur := p.current().Name; cur != "ruby" && !(cur == "rtc" && (name == "rt" || name == "rp")) {
-				p.tok.fail(off, "<"+name+"> belongs directly in a <ruby>, and <"+cur+
+				p.tok.fail(off, "<"+shown(name)+"> belongs directly in a <ruby>, and <"+shown(cur)+
 					"> is still open around it; tags have to nest")
 			}
 		}
@@ -1079,7 +1079,7 @@ func (p *parser) closeFor(name string, off int) {
 		// stops where the standard's list of formatting elements has a marker —
 		// a link outside a cell does not end at a link inside it.
 		if p.inScope(name, formattingMarkers) >= 0 {
-			p.tok.fail(off, "<"+name+"> inside another <"+name+">; they do not nest, and "+
+			p.tok.fail(off, "<"+shown(name)+"> inside another <"+shown(name)+">; they do not nest, and "+
 				"a browser ends the first one here where this engine does not")
 		}
 	case "form":
@@ -1099,8 +1099,8 @@ func (p *parser) closeFor(name string, off int) {
 		// and reports it, because "</h1>" is not an optional end tag: the author
 		// forgot it.
 		if cur := p.current(); headings[cur.Name] {
-			p.tok.fail(off, "<"+name+"> inside <"+cur.Name+">; headings do not nest, "+
-				"and the <"+cur.Name+"> is closed here")
+			p.tok.fail(off, "<"+shown(name)+"> inside <"+shown(cur.Name)+">; headings do not nest, "+
+				"and the <"+shown(cur.Name)+"> is closed here")
 			p.open = p.open[:len(p.open)-1]
 		}
 	}
@@ -1168,7 +1168,7 @@ func (p *parser) closeForTablePart(name string, off int) {
 		}
 		switch open {
 		case "td", "th", "caption":
-			p.closeTo(at, "<"+name+">", off, false)
+			p.closeTo(at, "<"+shown(name)+">", off, false)
 		case "table":
 			// Only a <table> ends a table, and it is a mistake: HTML has no
 			// table directly inside a table, outside a cell.
@@ -1244,7 +1244,7 @@ func (p *parser) endTag(tk token) {
 		// is not a mistake either.
 		if !p.tok.xml {
 			p.tok.fail(tk.offset,
-				"</"+name+"> is an end tag for a void element, which has none")
+				"</"+shown(name)+"> is an end tag for a void element, which has none")
 		}
 		return
 	}
@@ -1301,10 +1301,10 @@ func (p *parser) endTag(tk token) {
 		return
 	}
 	if got := p.open[at].Name; got != name {
-		p.tok.fail(tk.offset, "</"+name+"> closes <"+got+
+		p.tok.fail(tk.offset, "</"+shown(name)+"> closes <"+shown(got)+
 			">; the end tag does not match the heading it ends")
 	}
-	p.closeTo(at, "</"+name+">", tk.offset, quiet)
+	p.closeTo(at, "</"+shown(name)+">", tk.offset, quiet)
 }
 
 // endTagClosesNothing reports an end tag that did not close anything, saying
@@ -1313,12 +1313,12 @@ func (p *parser) endTag(tk token) {
 func (p *parser) endTagClosesNothing(name, boundary string, isTarget func(string) bool, off int) {
 	for _, el := range p.open {
 		if isTarget(el.Name) {
-			p.tok.fail(off, "</"+name+"> cannot close the <"+el.Name+"> outside the <"+
-				boundary+"> it is written in, and is ignored")
+			p.tok.fail(off, "</"+shown(name)+"> cannot close the <"+shown(el.Name)+"> outside the <"+
+				shown(boundary)+"> it is written in, and is ignored")
 			return
 		}
 	}
-	p.tok.fail(off, "</"+name+"> closes nothing: no <"+name+"> is open here")
+	p.tok.fail(off, "</"+shown(name)+"> closes nothing: no <"+shown(name)+"> is open here")
 }
 
 // skipElement consumes to the matching end tag of an element being dropped,
@@ -1358,7 +1358,7 @@ func (p *parser) skipRaw(name string, off int) {
 	p.tok.pos = end
 	// Consume the end tag itself.
 	if tk := p.tok.next(); tk.kind != tokEndTag {
-		p.tok.fail(off, "<"+name+"> is never closed")
+		p.tok.fail(off, "<"+shown(name)+"> is never closed")
 	}
 }
 
@@ -1376,7 +1376,7 @@ func (p *parser) finish() {
 		if closedAtEnd[el.Name] {
 			continue
 		}
-		p.tok.fail(el.Offset, "<"+el.Name+"> is never closed")
+		p.tok.fail(el.Offset, "<"+shown(el.Name)+"> is never closed")
 	}
 	p.open = nil
 }

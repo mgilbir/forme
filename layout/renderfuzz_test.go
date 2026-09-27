@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/internal/diag"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -152,6 +153,19 @@ func checkRender(t testing.TB, src, sheetSrc string) {
 	if got, want := findingKey(again.Findings), findingKey(built.Findings); got != want {
 		t.Fatalf("two builds of the same document reported differently:\n%s\n%s",
 			want, got)
+	}
+
+	// What a reader is shown is text. Every one of these quotes the document
+	// or its stylesheet, and a document that is not UTF-8 names its elements
+	// in bytes that are not text. See internal/diag.
+	for _, list := range [...][]Finding{built.Findings, rec.Findings()} {
+		for _, f := range list {
+			for _, s := range [...]string{f.Message, f.Path, f.Selector, f.Property} {
+				if !diag.IsText(s) {
+					t.Fatalf("a finding that is not text: %q in %+v", s, f)
+				}
+			}
+		}
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/diag"
 )
 
 // The cascade: deciding which declaration wins when several apply, and what an
@@ -1846,7 +1847,16 @@ func (s *Styler) report(f Finding) {
 // Unsupported finding the bound drops turns the note into one, with that
 // finding's property — which is what decides the rule a caller maps it to — and
 // its message, so what the page lacked is named rather than hinted at.
+//
+// It is also where a finding is made text. A message quotes the stylesheet and
+// the document — a value, a property, a media query, a tag name — and those are
+// bytes the author chose: "color: a\x01b" put a control character in a message,
+// and an element named in a document that is not UTF-8 put bytes that are not
+// text at all. Every finding this stage produces passes through here, so this
+// is where the guarantee is kept rather than at each of the places that quote.
+// See internal/diag.
 func appendBounded(findings []Finding, f Finding) []Finding {
+	f.Message, f.Property = diag.Text(f.Message), diag.Text(f.Property)
 	if len(findings) < maxFindings {
 		return append(findings, f)
 	}
