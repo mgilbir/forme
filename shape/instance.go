@@ -81,6 +81,9 @@ import (
 //     charstrings blend their own variations, and the instance is written as
 //     the CFF font they draw at the location. VORG, which a CFF face states
 //     its vertical origins in, moves there by VVAR.
+//   - A glyph VARC composes is written out as the glyf outline HarfBuzz draws
+//     for it at the location, and VARC is dropped; its ink stays what
+//     HarfBuzz states there (varcinstance.go).
 
 // maxInstanceAxes bounds fvar's axis count. The format allows 65535; the fonts
 // that exist have between one and five, and every axis multiplies the work each
@@ -108,10 +111,11 @@ const maxComponentDepth = 8
 // instanceDropped are the tables an instance does not carry. The variation
 // tables describe a design space this font no longer has, and would be read by
 // anything downstream as deltas from a default instance that is no longer the
-// stored one — which is worse than their absence. The hinting tables go with the
+// stored one — which is worse than their absence. VARC goes too, its glyphs
+// written out as glyf (varcinstance.go). The hinting tables go with the
 // instructions, see the note above.
 var instanceDropped = map[string]bool{
-	"fvar": true, "gvar": true, "avar": true, "cvar": true,
+	"fvar": true, "gvar": true, "avar": true, "cvar": true, "VARC": true,
 	"HVAR": true, "VVAR": true, "MVAR": true, "STAT": true,
 	"cvt ": true, "fpgm": true, "prep": true,
 	// CFF2 outlines vary by their own blends, and a static font carries none:
@@ -152,6 +156,16 @@ func LoadInstance(data []byte, coords map[string]float64) (*Face, error) {
 		tables["glyf"] == nil && tables["CFF "] == nil {
 		// CFF2 outlines, which are cut as the CFF font they draw at the
 		// location: see instanceCFF2.
+		if tables["VARC"] != nil {
+			// VARC is among the tables an instance drops, because the glyf
+			// path writes its glyphs out as outlines first (varcinstance.go).
+			// Nothing writes out a composite whose leaves are CFF2, so
+			// dropping the table here would leave each composite drawing its
+			// empty base glyph with nothing to say so.
+			return nil, errors.New("fonts: the font's variable composite glyphs (VARC) are built on " +
+				"CFF2 outlines, and an instance cannot write them out; the instance is refused rather " +
+				"than drawn without them")
+		}
 		out, normalized, limits, err := instanceCFF2(tables, coords)
 		if err != nil {
 			return nil, err
@@ -163,7 +177,8 @@ func LoadInstance(data []byte, coords map[string]float64) (*Face, error) {
 		f.cff2Limits = limits
 		return f, nil
 	}
-	out, normalized, err := instanceProgram(data, coords)
+	var varcInk map[int]extents
+	out, normalized, err := instanceProgram(data, coords, &varcInk)
 	if err != nil {
 		return nil, err
 	}
@@ -171,12 +186,14 @@ func LoadInstance(data []byte, coords map[string]float64) (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
+	f.varcInk = varcInk
 	return f, nil
 }
 
 // instanceProgram does the rewrite, returning the new font program and the
-// location in normalized coordinates.
-func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, error) {
+// location in normalized coordinates, and setting varcInk to the ink of each
+// glyph it wrote out from VARC (varcinstance.go).
+func instanceProgram(data []byte, want map[string]float64, varcInk *map[int]extents) ([]byte, []float64, error) {
 	tables := font.SFNTTables(data)
 	if tables == nil {
 		return nil, nil, errors.New("fonts: not an sfnt font program (TrueType or OpenType)")
@@ -307,6 +324,15 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 		useMetrics[gid] = g.metricsComponent()
 		varied[gid] = g
 	}
+	// The VARC glyphs written out as glyf, before anything reads the glyphs
+	// as a whole: they are glyf glyphs of the instance.
+	flat, err := flattenVARC(data, tables, fvar, want, varied, &budget)
+	if err != nil {
+		return nil, nil, err
+	}
+	if flat != nil {
+		*varcInk = flat
+	}
 	if err := placeMatchedComponents(varied, &budget); err != nil {
 		return nil, nil, err
 	}
@@ -339,6 +365,11 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 			ph = metricsPhantoms(phantoms, useMetrics, gid)
 		}
 		origins[gid] = ph[0][0]
+		if _, ok := flat[gid]; ok {
+			// A VARC glyph's outline is drawn from its origin, which its
+			// side bearing is measured from: see varcinstance.go.
+			origins[gid] = 0
+		}
 		switch {
 		case hvar != nil:
 			newAdvances[gid] = advances[gid] + otRound(hvar.advanceDelta(gid, coords))
@@ -386,6 +417,14 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 		out["vmtx"], out["vhea"] = buildVerticalMetrics(vhea, newVAdvances, tops, bounds)
 	}
 	out["head"] = instanceHead(head, bounds)
+	if len(flat) > 0 && len(maxp) >= 32 {
+		// The VARC glyphs written out are glyf glyphs maxp's counts must cover.
+		var written [][]byte
+		for gid := range flat {
+			written = append(written, newGlyf[newLoca[gid]:newLoca[gid+1]])
+		}
+		out["maxp"] = raiseMaxp(append([]byte(nil), maxp...), written)
+	}
 	instanceDesign(out, axes, want)
 	if err := applyMVAR(out, tables["MVAR"], coords); err != nil {
 		return nil, nil, err

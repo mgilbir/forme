@@ -167,6 +167,14 @@ type Face struct {
 	// is asked before anything else: nil for a face with no sbix table, or one
 	// HarfBuzz would refuse. See sbixink.go.
 	sbix *sbixInk
+	// varc measures and draws a glyph through the VARC table, which is asked
+	// after COLR and before the outline: nil for a face with none, or one
+	// HarfBuzz would refuse. See varc.go.
+	varc *varcFace
+	// varcInk is the ink of each VARC glyph of a face from LoadInstance, which
+	// was written out as a glyf outline and whose table was dropped, as
+	// HarfBuzz measures the glyph at the location. See varcinstance.go.
+	varcInk map[int]extents
 	// simple is set when the face is to be embedded as a simple font: one byte
 	// per character through WinAnsiEncoding, rather than as a composite font
 	// keyed by glyph index.
@@ -431,6 +439,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	}
 	f.bitmap = newCBDTInk(tables, f.unitsPerEm)
 	f.sbix = newSbixInk(tables, prog.NumGlyphs, f.unitsPerEm)
+	f.varc = newVARCFace(f, tables, prog.NumGlyphs)
 	f.vert = readVerticalTables(tables, prog.NumGlyphs, budget)
 	if err := budget.Err(); err != nil {
 		return nil, err

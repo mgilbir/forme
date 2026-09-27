@@ -260,6 +260,7 @@ func FuzzLoadAndUse(f *testing.F) {
 		"SbixInk.ttf",           // sbix strikes, duplicates and image formats
 		"PointMatchPhantom.ttf", // components placed by matching points, instanced
 		"PointMatch.ttf",        // and matched as an instance keeps them
+		"VarComposite.ttf",      // variable composites (VARC), measured, drawn, instanced
 	} {
 		if data, err := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", name)); err == nil {
 			f.Add(data)

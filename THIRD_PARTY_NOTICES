@@ -2101,6 +2101,25 @@ because every font the repository keeps is, and for where they came from; no
 third party's work is in them.
 
 ============================================================================
+Fonts built for the variable composites oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/VarComposite.ttf
+         testdata/harfbuzz/fonts/VarCompositeDeep64.ttf
+         testdata/harfbuzz/fonts/VarCompositeDeep65.ttf
+         testdata/harfbuzz/fonts/VarCompositeBroken.ttf
+         testdata/harfbuzz/fonts/VarCompositeStatic.ttf
+         testdata/harfbuzz/fonts/VarCompositeCFF.otf
+Source:  testdata/harfbuzz/varc_fixture.py, in this repository, which
+         builds them with fontTools, the last from CFFInk.otf above
+Licence: the licence in LICENSE; they are not anyone else's work
+
+Small faces made from nothing by the script named above, whose VARC tables
+compose glyphs from others, and one that adds such a table to the CFF ink
+face. They are listed here because every font the repository keeps is, and
+for where they came from; no third party's work is in them.
+
+============================================================================
 Font built for the ignorable characters corpus
 ============================================================================
 

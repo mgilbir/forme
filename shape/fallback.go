@@ -177,8 +177,9 @@ type extents struct {
 // glyphExtents is a glyph's ink, where the face can say.
 //
 // A bitmap glyph's is the box its sbix image covers or its CBDT metrics state,
-// and a colour glyph's the box it paints, which HarfBuzz asks before the
-// outline, in that order (sbixink.go, bitmapink.go, colrink.go). For a
+// a colour glyph's the box it paints, and in a face with a VARC table every
+// glyph's the box VARC draws it in, which HarfBuzz asks before the outline,
+// in that order (sbixink.go, bitmapink.go, colrink.go, varc.go). For a
 // TrueType face it is the glyph header's box with
 // the left side bearing hmtx states, which is how HarfBuzz reads a TrueType
 // glyph at the instance a face was cut at. An empty glyph has no ink and says
@@ -200,26 +201,16 @@ func (f *Face) glyphExtents(gid int) (extents, bool) {
 			return e, true
 		}
 	}
-	if f.ink != nil {
-		return f.ink.extents(gid)
+	if f.varc != nil {
+		if gid < 0 {
+			return extents{}, false
+		}
+		return f.varc.extents(gid)
 	}
-	if f.prog == nil || f.prog.GlyphBBox == nil || gid < 0 || gid >= len(f.prog.GlyphBBox) {
-		return extents{}, false
+	if e, ok := f.varcInk[gid]; ok {
+		return e, true
 	}
-	if !f.prog.GlyphNonEmpty[gid] {
-		return extents{}, true
-	}
-	b := f.prog.GlyphBBox[gid]
-	lsb := min(b[0], b[2])
-	if v, ok := f.leftSideBearing(gid); ok {
-		lsb = v
-	}
-	return extents{
-		xBearing: lsb,
-		yBearing: max(b[1], b[3]),
-		width:    max(b[0], b[2]) - min(b[0], b[2]),
-		height:   min(b[1], b[3]) - max(b[1], b[3]),
-	}, true
+	return f.outlineExtents(gid)
 }
 
 // leftSideBearing is a glyph's left side bearing as hmtx states it.

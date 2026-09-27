@@ -95,6 +95,8 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `colrink.py`, `colrink.expected.txt` | the ink of colour glyphs, painted from COLR or read from CBDT or sbix — see below |
 | `colrink_fixture.py`, `fonts/ColourInk*.ttf`, `fonts/BitmapInk.ttf`, `fonts/SbixInk*.ttf` | the faces that oracle needs and no foundry made |
 | `pointmatch.py`, `pointmatch.expected.txt` | components placed by matching points, instanced — see below |
+| `varc.py`, `varc.expected.txt` | variable composites (VARC): their ink, and their outlines drawn — see below |
+| `varc_fixture.py`, `fonts/VarComposite*` | the faces that oracle needs and no foundry made |
 | `pointmatch_fixture.py`, `fonts/PointMatch*.ttf` | the faces that oracle needs and no foundry made |
 | `ignorables_fixture.py`, `fonts/Ignorables.ttf`, `ignorables.txt`, `ignorables.expected.txt` | a corpus of the characters nothing is drawn for, shaped by `shape.py` in the face it needs — see below |
 
@@ -332,6 +334,23 @@ instance can keep — a phantom point, the component's own point, a point
 nobody has — placed at an offset, where HarfBuzz draws the variable face.
 
 `make hbpointmatch` regenerates it.
+
+## Variable composites
+
+A VARC glyph is drawn from other glyphs, each through a transform and at
+coordinates of its own, both varying at the location. `varc.py` asks HarfBuzz
+for every glyph's extents and path in `fonts/VarComposite.ttf`, which
+`varc_fixture.py` builds, at its default and at nine locations, and fontTools'
+glyph set for each VARC glyph's path; and for the extents of the faces beside
+it — conditions nested as deep as HarfBuzz's sanitizer takes and one deeper,
+a table it refuses, a VARC table over CFF glyphs, and a face with no design
+space. `shape/varc_test.go` holds `shape/varc.go` to all of it: every glyph's
+ink as HarfBuzz states it, a VARC glyph's outline HarfBuzz's to the bit, and
+the glyf outline an instance and a subset write for it HarfBuzz's rounded to
+whole units.
+
+`make hbvarc` regenerates it. `fonts/VarCompositeCFF.otf` is built from
+`fonts/CFFInk.otf`, so `make hbcffink` comes first where that changes.
 
 ## The characters nothing is drawn for
 

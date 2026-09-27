@@ -1134,6 +1134,9 @@ func (f *Face) LayoutLimits() []string {
 	if f.colr != nil {
 		out = append(out, f.colr.limits()...)
 	}
+	if f.varc != nil {
+		out = append(out, f.varc.limits()...)
+	}
 	if f.cache != nil {
 		f.cache.mu.Lock()
 		defer f.cache.mu.Unlock()

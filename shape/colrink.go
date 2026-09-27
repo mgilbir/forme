@@ -54,8 +54,9 @@ import (
 //
 // # What is not here
 //
-// VARC. The two bitmap tables HarfBuzz asks before COLR are read elsewhere:
-// sbix in sbixink.go and CBDT in bitmapink.go. And the table
+// The two bitmap tables HarfBuzz asks before COLR are read elsewhere: sbix in
+// sbixink.go and CBDT in bitmapink.go; and VARC, asked after it, in varc.go.
+// And the table
 // is read as far as it is sound rather than refused whole where HarfBuzz's
 // sanitizer would refuse it: a malformed COLR table answers from what can be
 // read of it where HarfBuzz answers from the outlines.
@@ -970,14 +971,18 @@ func (r clipRect) rect() box32 {
 
 // outline is the box of the points a glyph's outline draws, which is what a
 // fill clipped to the glyph is bounded by: hb_font_draw_glyph through the
-// extents' draw functions. The glyf outline is asked, and then the CFF one,
-// as HarfBuzz asks them; a glyph neither draws is a void box.
+// extents' draw functions. VARC is asked, then the glyf outline, and then the
+// CFF one, as HarfBuzz asks them; a glyph none draws is a void box.
 func (c *colrInk) outline(gid int) box32 {
 	if b, ok := c.outlines[gid]; ok {
 		return b
 	}
 	b := void32
 	switch {
+	case c.f.varc != nil && c.f.varc.t.coverageIndex(gid) >= 0:
+		// HarfBuzz draws a glyph through VARC before glyf or CFF; a glyph
+		// VARC does not compose it draws as glyf or CFF would.
+		b = c.f.varc.outlineBox(gid)
 	case c.glyf != nil:
 		b = c.glyfOutline(gid)
 	case c.f.ink != nil:
