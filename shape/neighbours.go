@@ -50,6 +50,9 @@ func (f *Face) ContextCanChange(s string, off Features) bool {
 	if s == "" || !f.composite() {
 		return false
 	}
+	// Asked as the run will be shaped: with the face's own settings, which
+	// can turn the kerning off or on. See Face.withSettings.
+	off = f.withSettings(off)
 	if borrowsScript(s) {
 		// The neighbour chooses the script, and with it the model and the
 		// rules. Nothing about s can say which, so the answer is the one that
@@ -81,6 +84,7 @@ func (f *Face) FormsFollowNeighbours(s string, off Features) bool {
 	if s == "" || !f.composite() {
 		return false
 	}
+	off = f.withSettings(off)
 	if borrowsScript(s) {
 		return f.HasJoiningForms()
 	}

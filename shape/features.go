@@ -1,6 +1,9 @@
 package shape
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // What a caller asks a face to apply and not to apply.
 //
@@ -73,6 +76,24 @@ type Features struct {
 	// It is font-kerning: none, and so it is below font-feature-settings in
 	// CSS Fonts 4 §7.2's order: a "kern" in Tags turns kerning back on.
 	NoKerning bool
+	// KerningOn asks for kerning: "kern" turned on, at the step NoKerning
+	// turns it off. It is font-kerning: normal, which CSS Fonts 4 §6.3 says
+	// must apply the kerning a font states, where "auto" leaves it to the
+	// user agent. A face kerns by default, so the two only part where
+	// something below this step turned it off — an @font-face rule's
+	// font-feature-settings (see Face.WithFeatureSettings) — and there
+	// "normal" turns it back on and "auto" does not.
+	//
+	// Setting both this and NoKerning asks for two values of one property at
+	// once; NoKerning is read first and wins.
+	//
+	// It is asked for in an upright run as well, where 'kern' is not on by
+	// default: the property makes no exception for one. A pair a font states
+	// as a horizontal advance changes nothing down a column — HarfBuzz 14.5.0
+	// applies an x advance only along a horizontal line, and so does this
+	// package — so what it can change there is a pair stated vertically under
+	// 'kern', which HarfBuzz asked for 'kern' would apply too.
+	KerningOn bool
 	// Caps is the capitals a run is set in: the first request here that asks a
 	// face for a rule rather than taking one away.
 	//
@@ -172,6 +193,115 @@ type Features struct {
 	// a fact about the run its characters do not state, and it reaches the
 	// backend that draws the run — which shapes it again — on the same value.
 	Vertical bool
+
+	// faceOn and faceOff are the face's own settings, CSS Fonts 4 §7.2's
+	// second step: what an @font-face rule's font-feature-settings asked of
+	// the face. They are not the caller's to set. Every way into shaping
+	// copies them from the face being asked (see Face.withSettings), so a run
+	// shaped in a face gets that face's settings whatever it was handed, and
+	// the backend that shapes the run again gets them the same way — it asks
+	// the same face. They are here, and not read off the face where they are
+	// needed, because this value is what a plan is built and cached by (the
+	// cache is shared between a face's clones), and what the kerning readers
+	// ask; a setting kept beside it would be one every one of them had to
+	// remember.
+	faceOn, faceOff string
+}
+
+// FeatureSetting is one entry of a font-feature-settings list: a feature
+// tag, and whether it is turned on or off.
+type FeatureSetting struct {
+	Tag string
+	On  bool
+}
+
+// WithFeatureSettings returns a copy of the face that asks for the given
+// features every time it shapes: CSS Fonts 4 §4.6's font-feature-settings
+// descriptor, which an @font-face rule states about the face it loads.
+//
+// They are §7.2's second step, above the features the face and the script
+// turn on by default and below everything a document asks of a run: the
+// font-variant properties, font-kerning, what letter-spacing turns off, and
+// the font-feature-settings property (Features.Tags and TagsOff). So a face
+// loaded with "liga" 0 sets no optional ligatures unless a run turns them
+// back on, and one loaded with "smcp" sets small capitals unless a run
+// turns them off. See Features.requested.
+//
+// A tag named more than once takes the last setting given, as the property's
+// does. A tag that cannot be one — not four characters of printable ASCII, or
+// holding the comma the settled form separates tags with — is left out.
+//
+// The copy is a Clone, and so records its own glyphs: a document that loads
+// one file both with and without settings embeds the glyphs each asked for
+// under each. That is the price of the two being different faces to every
+// caller that groups runs by face, which they have to be: they shape the same
+// text differently.
+func (f *Face) WithFeatureSettings(settings []FeatureSetting) *Face {
+	out := f.Clone()
+	out.settingsOn, out.settingsOff = settleFeatureSettings(settings)
+	return out
+}
+
+// FeatureSettings is what WithFeatureSettings asked of this face, settled: one
+// entry per tag, in tag order. Empty for a face nothing was asked of.
+func (f *Face) FeatureSettings() []FeatureSetting {
+	var out []FeatureSetting
+	for _, t := range splitTags(f.settingsOn) {
+		out = append(out, FeatureSetting{Tag: t, On: true})
+	}
+	for _, t := range splitTags(f.settingsOff) {
+		out = append(out, FeatureSetting{Tag: t})
+	}
+	slices.SortFunc(out, func(a, b FeatureSetting) int { return strings.Compare(a.Tag, b.Tag) })
+	return out
+}
+
+// withSettings is what a caller's request comes to in this face: the request,
+// with the face's own settings in it. Every way into shaping asks it first,
+// and it overwrites rather than adds, so a value carried over from another
+// face's shaping cannot bring that face's settings with it.
+func (f *Face) withSettings(off Features) Features {
+	off.faceOn, off.faceOff = f.settingsOn, f.settingsOff
+	return off
+}
+
+// settleFeatureSettings reduces a list of settings to the tags it turns on and
+// the ones it turns off, each sorted and joined as Features.Tags is: the last
+// setting of a tag is the one that stands, so no tag is in both.
+func settleFeatureSettings(settings []FeatureSetting) (on, off string) {
+	last := map[string]bool{}
+	for _, s := range settings {
+		if !validSettledTag(s.Tag) {
+			continue
+		}
+		last[s.Tag] = s.On
+	}
+	var ons, offs []string
+	for tag, set := range last {
+		if set {
+			ons = append(ons, tag)
+		} else {
+			offs = append(offs, tag)
+		}
+	}
+	slices.Sort(ons)
+	slices.Sort(offs)
+	return strings.Join(ons, ","), strings.Join(offs, ",")
+}
+
+// validSettledTag reports whether a tag can be carried in the settled form:
+// four characters of printable ASCII, as an OpenType tag is, and not the comma
+// that form separates tags with.
+func validSettledTag(tag string) bool {
+	if len(tag) != 4 {
+		return false
+	}
+	for i := 0; i < len(tag); i++ {
+		if tag[i] < 0x20 || tag[i] > 0x7E || tag[i] == ',' {
+			return false
+		}
+	}
+	return true
 }
 
 // Position is CSS Fonts 4 §6.5's font-variant-position, as the feature it asks
@@ -512,19 +642,30 @@ func (f Features) suppresses(tag string) bool {
 }
 
 // turnsOff reports whether a tag this set says anything about ends up off, in
-// CSS Fonts 4 §7.2's order: font-feature-settings over everything below it.
-// A tag it says nothing about is not off, whatever the font's own defaults
-// are; that is the plan's question.
+// CSS Fonts 4 §7.2's order: font-feature-settings over everything below it,
+// then font-kerning and the properties that turn features off, then what the
+// font-variant properties turn on, then the face's own settings. A tag it says
+// nothing about is not off, whatever the font's own defaults are; that is the
+// plan's question.
 func (f Features) turnsOff(tag string) bool {
 	switch {
 	case listsTag(f.TagsOff, tag):
 		return true
 	case listsTag(f.Tags, tag):
 		return false
-	case tag == "kern":
-		return f.NoKerning
+	case tag == "kern" && f.NoKerning:
+		return true
+	case tag == "kern" && f.KerningOn:
+		return false
+	case f.suppresses(tag):
+		return true
+	case listsTag(f.faceOff, tag):
+		// The face turned it off, and only a font-variant property turning it
+		// on stands above that. Asked last, because it is the only case that
+		// has to build the list of what they turn on.
+		return !slices.Contains(f.adds(), tag)
 	}
-	return f.suppresses(tag)
+	return false
 }
 
 // kerningOff is whether kerning is off for the run: the 'kern' feature's
@@ -547,17 +688,15 @@ func listsTag(list, tag string) bool {
 }
 
 // tags is Tags as a list, or nothing.
-func (f Features) tags() []string {
-	if f.Tags == "" {
-		return nil
-	}
-	return strings.Split(f.Tags, ",")
-}
+func (f Features) tags() []string { return splitTags(f.Tags) }
 
 // tagsOff is TagsOff as a list, or nothing.
-func (f Features) tagsOff() []string {
-	if f.TagsOff == "" {
+func (f Features) tagsOff() []string { return splitTags(f.TagsOff) }
+
+// splitTags is a settled tag list as a list, or nothing.
+func splitTags(list string) []string {
+	if list == "" {
 		return nil
 	}
-	return strings.Split(f.TagsOff, ",")
+	return strings.Split(list, ",")
 }

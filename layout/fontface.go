@@ -120,6 +120,14 @@ type fontFaceRule struct {
 	// which are the same thing and are the common case — a face with no
 	// restriction is asked no questions.
 	ranges []unicodeSpan
+
+	// features is the font-feature-settings descriptor, in the order it was
+	// written, and featuresAt is where in the sheet it was: the features the
+	// rule asks of every run set in the face it loads, at CSS Fonts 4 §7.2's
+	// second step. nil where the descriptor was absent, "normal", or not a
+	// value that could be read. See withFeatureSettings.
+	features   []shape.FeatureSetting
+	featuresAt int
 }
 
 // covers reports whether this face may be used for a character.
@@ -435,6 +443,7 @@ func loadFontFaces(pending []pendingFontFace, res ResourceResolver, base FontSet
 		if !ok {
 			continue
 		}
+		face = l.withFeatureSettings(p, rule, face)
 		df := &documentFace{rule: rule, face: face, ref: ref}
 		set.faces = append(set.faces, df)
 		key := familyKey(rule.family)
@@ -469,6 +478,9 @@ type fontFaceLoader struct {
 	// failed records the references already reported, so a stylesheet with
 	// twenty rules pointing at one missing file makes one attempt.
 	failed map[string]bool
+	// featured is the copies of loaded faces that font-feature-settings
+	// descriptors asked for. See withFeatureSettings.
+	featured map[featuredFace]*shape.Face
 
 	// budget is how many bytes of font program the document may still read.
 	budget int
@@ -531,6 +543,12 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 			}
 		case "unicode-range":
 			out.ranges = l.unicodeRange(p, d)
+		case "font-feature-settings":
+			// A declaration that cannot be read is dropped and the one before
+			// it stands, as it does for the two descriptors above.
+			if settings, ok := l.featureSettings(p, d); ok {
+				out.features, out.featuresAt = settings, d.Offset
+			}
 		case "font-display":
 			// A hint about what to show while a font is downloading. There is
 			// no download here and no moment at which a page is half-drawn, so
@@ -538,9 +556,17 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 		default:
 			// Every other descriptor changes how the face is used —
 			// size-adjust and the override descriptors change its metrics
-			// outright, font-feature-settings changes which glyphs are chosen.
-			// Ignoring one silently would move the text on the page with
-			// nothing saying so.
+			// outright, font-variation-settings where in its design space it
+			// is drawn. Ignoring one silently would move the text on the page
+			// with nothing saying so.
+			//
+			// font-variation-settings is §7.2's fifth step, between the
+			// variations font-weight, font-width and font-style ask for and
+			// the ones the property asks for, and neither of those is applied:
+			// a face is drawn at the instance it was loaded at. Applied alone
+			// it would stand where the property is meant to override it, and
+			// the property is reported as not applied, so the descriptor is
+			// reported with it rather than applied out of its order.
 			l.rec.ReportDetail(Finding{
 				Rule:     RuleUnsupportedProperty,
 				Source:   Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
@@ -570,6 +596,109 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 		return out, false
 	}
 	return out, true
+}
+
+// featureSettings reads the font-feature-settings descriptor, whose grammar is
+// the property's (CSS Fonts 4 §4.6) and is judged by the same code the cascade
+// judges the property with.
+//
+// ok is false where the value is not one this engine can read — not CSS, or CSS
+// holding something it does not evaluate — and each is reported as such, the
+// rule's earlier value standing. "normal" is read, as asking for nothing.
+func (l *fontFaceLoader) featureSettings(p pendingFontFace, d css.Declaration) ([]shape.FeatureSetting, bool) {
+	valid, unsupported := style.JudgeValue("font-feature-settings", d.Value)
+	switch {
+	case !valid:
+		l.badDescriptor(p, d, "font-feature-settings")
+		return nil, false
+	case unsupported != "":
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
+			Message: "the @font-face descriptor \"font-feature-settings\" uses " + unsupported +
+				", which this engine does not evaluate; the face was loaded with no settings of its own",
+			Property: "font-feature-settings",
+		})
+		return nil, false
+	}
+	settings, unusable := featureSettingsIn(d.Value)
+	if len(unusable) > 0 {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
+			Message: "the @font-face descriptor \"font-feature-settings\" names " +
+				quoteTags(unusable) + ", which cannot name a feature here; the rest of it was applied",
+			Property: "font-feature-settings",
+		})
+	}
+	return settings, true
+}
+
+// withFeatureSettings is the face a rule's font-feature-settings asks for: the
+// face, with the settings stated on it, so that every run set in it — measured
+// here or shaped again by a backend — is shaped with them. See
+// shape.Face.WithFeatureSettings.
+//
+// One per face and settings. A file several rules name is loaded once and
+// shared (see load), and the rules that state the same settings share its
+// copy; a rule that states none keeps the face as it was loaded.
+//
+// A feature the settings turn on that the face has nothing under is reported
+// here, where the face and the rule are both known, for the reason reportKerning
+// reports one the property asks for: the text is set in the letters it was
+// written with, which is not the page the rule asked for.
+func (l *fontFaceLoader) withFeatureSettings(p pendingFontFace, r fontFaceRule, face *shape.Face) *shape.Face {
+	if len(r.features) == 0 {
+		return face
+	}
+	on, off := settleFeatureSettings(r.features)
+	if on == "" && len(off) == 0 {
+		return face
+	}
+	key := featuredFace{face: face, on: on, off: strings.Join(off, ",")}
+	if got := l.featured[key]; got != nil {
+		return got
+	}
+	out := face.WithFeatureSettings(r.features)
+	if l.featured == nil {
+		l.featured = map[featuredFace]*shape.Face{}
+	}
+	l.featured[key] = out
+
+	var lacking []string
+	if on != "" {
+		for _, tag := range strings.Split(on, ",") {
+			if tag == "kern" && face.HasKerning() || faceDeclares(face, tag) {
+				continue
+			}
+			lacking = append(lacking, tag)
+		}
+	}
+	if len(lacking) > 0 {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: Source{HTMLOffset: -1, CSSOffset: r.featuresAt, Sheet: p.sheet},
+			Message: "the @font-face for " + quoteValue(r.family) + " asks for " + quoteTags(lacking) +
+				", which its face does not declare; its text is set in the letters it was written with",
+			Property: "font-feature-settings",
+		})
+	}
+	return out
+}
+
+// featuredFace is what withFeatureSettings keeps a face's copy under.
+type featuredFace struct {
+	face    *shape.Face
+	on, off string
+}
+
+// quoteTags renders feature tags for a message.
+func quoteTags(tags []string) string {
+	quoted := make([]string, len(tags))
+	for i, t := range tags {
+		quoted[i] = quoteValue(t)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 func (l *fontFaceLoader) badDescriptor(p pendingFontFace, d css.Declaration, name string) {

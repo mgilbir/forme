@@ -2,9 +2,9 @@ package layout
 
 import (
 	"slices"
-	"strconv"
 	"strings"
 
+	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
 )
@@ -59,8 +59,13 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 	case ligaturesNoContextual:
 		out.NoContextualAlternates = true
 	}
-	if noKerning(b) {
+	switch kerningOf(b) {
+	case "none":
 		out.NoKerning = true
+	case "normal":
+		// Kerning asked for, which a face gives anyway unless its own
+		// @font-face rule turned it off; see shape.Features.KerningOn.
+		out.KerningOn = true
 	}
 	if l.spacingSuppressesLigatures(b) {
 		out.NoOptionalLigatures = true
@@ -102,6 +107,24 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 // the ground that the features this engine applies by default have switches of
 // their own; §7.2 makes this property the one that wins over those switches.
 //
+// The value is the cascade's text, and it is read back as tokens rather than
+// as text: a tag is a CSS string, and the cascade writes one back with its
+// quotation marks escaped where it holds one. Cutting the text at the first
+// quotation mark of either kind read "a'bc" as the two-character tag "a" and
+// dropped it, and "a\"bc" the same way, both without a word.
+func featureSettingsOf(raw string) (on string, off []string) {
+	value := ascii.TrimCSSSpace(raw)
+	if value == "" || ascii.EqualFold(value, "normal") {
+		return "", nil
+	}
+	vals, _ := css.ParseComponentValues(value)
+	settings, _ := featureSettingsIn(vals)
+	return settleFeatureSettings(settings)
+}
+
+// settleFeatureSettings reduces settings in the order written to the tags
+// they turn on and the ones they turn off.
+//
 // A tag the list names more than once takes the last setting it is given,
 // the later setting overriding the earlier, so the two lists never share one.
 // Both come back sorted and deduplicated, the on list as one comma-separated
@@ -109,82 +132,92 @@ func (l *layouter) featuresFor(b *Box) shape.Features {
 // applied in — that is the font's, by lookup index — so two declarations
 // naming the same features are the same request, and settling the order lets
 // them share the memo entry the shaped group is kept under.
-func featureSettingsOf(raw string) (on string, off []string) {
-	value := ascii.TrimCSSSpace(raw)
-	if value == "" || ascii.EqualFold(value, "normal") {
-		return "", nil
-	}
-	type setting struct {
-		tag string
-		on  bool
-	}
-	var all []setting
-	for _, part := range strings.Split(value, ",") {
-		tag, set, ok := featureSetting(part)
-		if !ok {
-			continue
-		}
-		all = append(all, setting{tag, set})
-	}
+func settleFeatureSettings(settings []shape.FeatureSetting) (on string, off []string) {
+	all := slices.Clone(settings)
 	// The last setting of each tag: a stable sort by tag keeps the written
 	// order among one tag's settings, so the last of each run is the one.
-	slices.SortStableFunc(all, func(a, b setting) int { return strings.Compare(a.tag, b.tag) })
+	slices.SortStableFunc(all, func(a, b shape.FeatureSetting) int { return strings.Compare(a.Tag, b.Tag) })
 	var enabled []string
 	for i, s := range all {
-		if i+1 < len(all) && all[i+1].tag == s.tag {
+		if i+1 < len(all) && all[i+1].Tag == s.Tag {
 			continue
 		}
-		if s.on {
-			enabled = append(enabled, s.tag)
+		if s.On {
+			enabled = append(enabled, s.Tag)
 			continue
 		}
-		off = append(off, s.tag)
+		off = append(off, s.Tag)
 	}
 	return strings.Join(enabled, ","), off
 }
 
-// featureSetting reads one "<tag> [<setting>]" of the list.
+// featureSettingsIn reads a font-feature-settings list — the property's, or
+// the @font-face descriptor's, which has the same grammar — as the settings it
+// makes, in the order they are written.
 //
-// A tag is four characters in quotation marks and the setting that follows is
-// absent, "on", "off", or an integer. §6.11 makes an integer above zero select
-// an alternate *within* the feature rather than merely enable it — "salt" 2 is
-// the second alternate — and this engine applies a feature or does not, so any
-// positive setting reads as on. That is the same answer for every face that
-// offers one alternate, which is nearly all of them, and a narrowing rather than
-// a wrong answer where it is not.
-func featureSetting(part string) (tag string, on, ok bool) {
-	field := ascii.TrimCSSSpace(part)
-	quote := strings.IndexAny(field, "\"'")
-	if quote < 0 {
-		return "", false, false
+// Each entry is "<tag> [<setting>]": a string of four characters, then
+// nothing, "on", "off", or an integer. §6.11 makes an integer above zero
+// select an alternate *within* the feature rather than merely enable it —
+// "salt" 2 is the second alternate — and this engine applies a feature or does
+// not, so any positive setting reads as on. That is the same answer for every
+// face that offers one alternate, which is nearly all of them, and a narrowing
+// rather than a wrong answer where it is not.
+//
+// An entry that is not of that shape is skipped: the value has been judged by
+// the property's grammar before it gets here (the cascade drops a declaration
+// that fails it, and the descriptor is asked the same question), so there is
+// none unless the caller skipped that. unusable is the other kind of entry: a
+// tag that is CSS — any four characters of printable ASCII — and that the
+// shaping layer cannot carry, because it holds the comma the settled form of a
+// list separates tags with. No font names a feature so, and the caller says
+// it was not applied.
+func featureSettingsIn(vals []css.ComponentValue) (settings []shape.FeatureSetting, unusable []string) {
+	for _, part := range splitOnComma(vals) {
+		items := nonWhitespace(part)
+		if len(items) == 0 || len(items) > 2 || !items[0].IsToken() || items[0].Token.Kind != css.String {
+			continue
+		}
+		tag := items[0].Token.Value
+		if !featureTagIsCSS(tag) {
+			continue
+		}
+		on := true
+		if len(items) == 2 {
+			v := items[1]
+			switch {
+			case !v.IsToken():
+				continue
+			case v.Token.Kind == css.Ident && ascii.EqualFold(v.Token.Value, "on"):
+			case v.Token.Kind == css.Ident && ascii.EqualFold(v.Token.Value, "off"):
+				on = false
+			case v.Token.Kind == css.Number && v.Token.IsInteger && v.Token.Number >= 0:
+				on = v.Token.Number > 0
+			default:
+				continue
+			}
+		}
+		if strings.Contains(tag, ",") {
+			unusable = append(unusable, tag)
+			continue
+		}
+		settings = append(settings, shape.FeatureSetting{Tag: tag, On: on})
 	}
-	rest := field[quote+1:]
-	end := strings.IndexAny(rest, "\"'")
-	if end < 0 {
-		return "", false, false
-	}
-	tag, rest = rest[:end], ascii.TrimCSSSpace(rest[end+1:])
-	// A tag is four characters, and the range is the format's: a face names its
-	// features in printable ASCII.
+	return settings, unusable
+}
+
+// featureTagIsCSS reports whether a string is an <opentype-tag>: four
+// characters, each printable ASCII. The range is the format's: a face names
+// its features in printable ASCII.
+func featureTagIsCSS(tag string) bool {
 	if len(tag) != 4 {
-		return "", false, false
+		return false
 	}
 	for i := 0; i < len(tag); i++ {
 		if tag[i] < 0x20 || tag[i] > 0x7E {
-			return "", false, false
+			return false
 		}
 	}
-	switch {
-	case rest == "" || ascii.EqualFold(rest, "on"):
-		return tag, true, true
-	case ascii.EqualFold(rest, "off"):
-		return tag, false, true
-	}
-	n, err := strconv.Atoi(rest)
-	if err != nil {
-		return "", false, false
-	}
-	return tag, n > 0, true
+	return true
 }
 
 // spacingSuppressesLigatures is CSS Text §8.2's rule: "when the effective
@@ -272,13 +305,15 @@ func ligaturesOf(raw string) (ligatures, bool) {
 	return ligaturesNormal, false
 }
 
-// noKerning reads CSS Fonts 4 §6.5's font-kerning.
+// kerningOf reads CSS Fonts 4 §6.5's font-kerning, lowercased.
 //
 // "auto" and "normal" both leave the face's kerning on, and the difference
 // between them is about whether a UA may turn it off for performance — which
-// this engine never does, so the two are one answer here.
-func noKerning(b *Box) bool {
-	return ascii.EqualFold(ascii.TrimCSSSpace(b.Style.Get("font-kerning")), "none")
+// this engine never does. They part in one place: "normal" asks for the
+// kerning, in §7.2's third step, and so turns it back on over an @font-face
+// rule's font-feature-settings that turned it off, where "auto" asks nothing.
+func kerningOf(b *Box) string {
+	return ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("font-kerning")))
 }
 
 // capsOf reads CSS Fonts 4 §6.6's font-variant-caps.

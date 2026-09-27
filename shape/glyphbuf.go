@@ -485,6 +485,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	if !f.composite() {
 		return f.shapeByCode(s, rtl, ctx.features.Vertical)
 	}
+	// The face's own settings, which every run it shapes is asked with. This
+	// is the one place every way of shaping a run passes through — the public
+	// calls, a Stack's runs, the neighbour a boundary pair is found by — so it
+	// is the one place they are put in. See Face.withSettings.
+	ctx.features = f.withSettings(ctx.features)
 	// Which model sets the run is decided by the script and by the tag the
 	// font's rules for it were read under — see categorize — and it decides
 	// everything below: how the characters are normalised, whether the ones

@@ -199,6 +199,13 @@ type Face struct {
 	// nil stands for.
 	varCoords []float64
 
+	// settingsOn and settingsOff are the features this face was loaded asking
+	// for and against — an @font-face rule's font-feature-settings — in the
+	// settled form Features.Tags is kept in. Empty for a face nobody asked
+	// that of, which is every face but one WithFeatureSettings made. See
+	// WithFeatureSettings.
+	settingsOn, settingsOff string
+
 	used map[int]bool // glyph indices this face has encoded
 }
 

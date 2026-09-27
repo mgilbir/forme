@@ -449,7 +449,14 @@ func useFace(face *Face) {
 	}
 
 	clone := face.Clone()
-	stack := NewStack(face, clone)
+	// And a copy loaded with settings of its own, turning on what nothing asks
+	// for by default and off what is on, so that the plans built from the
+	// font's bytes are asked with a second step in them.
+	settled := face.WithFeatureSettings([]FeatureSetting{
+		{Tag: "smcp", On: true}, {Tag: "liga"}, {Tag: "kern"}, {Tag: "zzzz", On: true},
+	})
+	_ = settled.FeatureSettings()
+	stack := NewStack(face, clone, settled)
 	_ = stack.Faces()
 
 	// With a language, so that the language systems a font names are read as
@@ -483,6 +490,8 @@ func useFace(face *Face) {
 	_, _ = face.ShapeGlyphsInContextOrAcross(text, before, after, true, off)
 	_ = face.ContextCanChange(text, off)
 	_ = face.FormsFollowNeighbours(text, off)
+	_, _ = settled.ShapeGlyphsInContext(text, before, after, off)
+	_ = settled.ContextCanChange(text, off)
 
 	whole := face.ShapeGroup(text, before, after, true, off)
 	_, _ = GroupContext(before, after, before, after)

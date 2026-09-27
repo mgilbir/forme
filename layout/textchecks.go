@@ -993,8 +993,17 @@ func blank(text string) bool {
 // may kern from its legacy kern table, which is no feature and is applied as
 // 'kern'. Compared exactly: CSS Fonts 4 makes an <opentype-tag>
 // case-sensitive, so "KERN" is some other feature.
+//
+// And a tag that cannot name a feature here at all: four characters holding a
+// comma, which is CSS and which the settled form a run carries its tags in
+// cannot hold (see featureSettingsIn). It is dropped from the run and named.
 func unappliedFontFeatures(value string, face *shape.Face) string {
 	on, _ := featureSettingsOf(value)
+	var unusable []string
+	if trimmed := ascii.TrimCSSSpace(value); trimmed != "" && !ascii.EqualFold(trimmed, "normal") {
+		vals, _ := css.ParseComponentValues(trimmed)
+		_, unusable = featureSettingsIn(vals)
+	}
 	var lacking []string
 	if on != "" {
 		for _, tag := range strings.Split(on, ",") {
@@ -1008,11 +1017,16 @@ func unappliedFontFeatures(value string, face *shape.Face) string {
 			lacking = append(lacking, quoteValue(tag))
 		}
 	}
-	if len(lacking) > 0 {
-		return "asks for " + strings.Join(lacking, ", ") + ", which this face does " +
-			"not declare; the run is set in the letters it was written with"
+	var why []string
+	if len(unusable) > 0 {
+		why = append(why, "names "+quoteTags(unusable)+", which cannot name a feature "+
+			"here and was not applied")
 	}
-	return ""
+	if len(lacking) > 0 {
+		why = append(why, "asks for "+strings.Join(lacking, ", ")+", which this face does "+
+			"not declare; the run is set in the letters it was written with")
+	}
+	return strings.Join(why, "; and it ")
 }
 
 // reportAutospace names the part of text-autospace this engine does not do.
