@@ -185,6 +185,9 @@ func renderKey(ops []Op) string {
 			fmt.Fprintf(&b, "image %v %q\n", v.Rect, v.Key)
 		case TileImage:
 			fmt.Fprintf(&b, "tile %+v\n", tileKey(v))
+		case FillGradient:
+			fmt.Fprintf(&b, "gradient %v %v %v %v overhang=%v %+v\n",
+				v.Clip, v.Tile, v.StepX, v.StepY, v.Overhang, v.Gradient)
 		case Link:
 			fmt.Fprintf(&b, "link %v %q\n", v.Rects, v.Href)
 		default:

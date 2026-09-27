@@ -54,6 +54,27 @@ type coloured struct {
 	// expected square with a solid PNG while the test draws it with a
 	// background. Those arrive here as ordinary fills, so img is empty.
 	img string
+	// shade is set when the mark's colour is not one colour across its
+	// rectangle: a gradient, whose colour at each point shade says. c is then
+	// unused. See rasterCell, which is what reads a cell such a mark reaches.
+	shade shader
+}
+
+// shader is the colour a mark that varies puts at a point, alpha included, the
+// point in page pixels.
+type shader interface {
+	at(x, y float64) style.RGBA
+}
+
+// gradientShade is one tile of a FillGradient: the gradient, and where the
+// tile's top left is on the page, which is where its geometry is measured from.
+type gradientShade struct {
+	g      Gradient
+	ox, oy float64
+}
+
+func (s gradientShade) at(x, y float64) style.RGBA {
+	return s.g.ColorAtOffset(s.g.offsetOf(x-s.ox, y-s.oy))
 }
 
 // sample is what is visible at a point: either a colour or a picture.
@@ -168,6 +189,47 @@ func picFills(ops []Op) []coloured {
 				continue
 			}
 			out = append(out, tiledFills(v)...)
+
+		case FillGradient:
+			out = append(out, gradientFills(v)...)
+		}
+	}
+	return out
+}
+
+// gradientFills is the marks a gradient's tiling puts on the page: one per tile,
+// each the part of the tile inside the clip, coloured point by point.
+//
+// Past maxComparedTiles the tiling is one mark keyed by what it is, for the
+// reason tiledFills gives, with the first tile drawn as its origin so that two
+// descriptions of one tiling agree. A key is not a colour, so such a tiling
+// hides what is under it — the direction that calls documents different.
+func gradientFills(v FillGradient) []coloured {
+	if v.Clip.Empty() || v.Tile.Empty() || v.StepX <= 0 || v.StepY <= 0 {
+		return nil
+	}
+	cols, rows := v.Tiles()
+	if cols <= 0 || rows <= 0 {
+		return nil
+	}
+	firstX := alignTile(v.Clip.X, v.Tile.X, v.Tile.W, v.StepX)
+	firstY := alignTile(v.Clip.Y, v.Tile.Y, v.Tile.H, v.StepY)
+	if cols > maxComparedTiles/rows {
+		key := fmt.Sprintf("gradient %+v at %s,%s size %s step %s,%s",
+			v.Gradient, num(firstX), num(firstY),
+			num(v.Tile.W)+"x"+num(v.Tile.H), num(v.StepX), num(v.StepY))
+		return []coloured{{r: v.Clip, c: style.RGBA{A: 1}, img: key}}
+	}
+	out := make([]coloured, 0, cols*rows)
+	for j := 0; j < rows; j++ {
+		y := firstY.Add(v.StepY.Mul(float64(j)))
+		for i := 0; i < cols; i++ {
+			x := firstX.Add(v.StepX.Mul(float64(i)))
+			r := intersect(Rect{X: x, Y: y, W: v.Tile.W, H: v.Tile.H}, v.Clip)
+			if r.Empty() {
+				continue
+			}
+			out = append(out, coloured{r: r, shade: gradientShade{g: v.Gradient, ox: x.Px(), oy: y.Px()}})
 		}
 	}
 	return out
@@ -1392,19 +1454,33 @@ var paper = style.RGBA{R: 255, G: 255, B: 255, A: 1}
 // stops at the first rectangle. A translucent mark blends with what is under it,
 // which is why the accumulation is a composite rather than a first-hit.
 func colourAt(fs []coloured, x, y style.Unit) sample {
+	got, _ := colourVaryingAt(fs, x, y)
+	return got
+}
+
+// colourVaryingAt is colourAt, and also whether a mark whose colour varies
+// across its rectangle took part in the answer — in which case the colour is
+// the one at this point only, and not the one across the cell the point was
+// chosen to stand for.
+func colourVaryingAt(fs []coloured, x, y style.Unit) (sample, bool) {
 	var acc style.RGBA
 	remaining := 1.0
+	varies := false
 	for i := len(fs) - 1; i >= 0; i-- {
 		f := fs[i]
 		if x < f.r.X || x >= f.r.X.Add(f.r.W) || y < f.r.Y || y >= f.r.Y.Add(f.r.H) {
 			continue
+		}
+		if f.shade != nil {
+			varies = true
+			f.c = f.shade.at(x.Px(), y.Px())
 		}
 		if f.img != "" {
 			// A picture hides what is beneath it, so the walk stops here.
 			// Anything translucent painted over it does not change *which*
 			// picture is at this point, and blending a colour into one would
 			// invent a value that neither document could be compared against.
-			return sample{img: f.img}
+			return sample{img: f.img}, varies
 		}
 		a := f.c.A * remaining
 		acc.R += f.c.R * a
@@ -1421,7 +1497,7 @@ func colourAt(fs []coloured, x, y style.Unit) sample {
 	acc.G += paper.G * remaining
 	acc.B += paper.B * remaining
 	acc.A += remaining
-	return sample{c: acc}
+	return sample{c: acc}, varies
 }
 
 // sameColour reports whether two resolved colours are indistinguishable.
@@ -1452,6 +1528,7 @@ func pictureEqual(got, want []Op, clip Rect) bool {
 
 	xs := edges(clip.X, clip.X.Add(clip.W), gf, wf)
 	ys := edgesY(clip.Y, clip.Y.Add(clip.H), gf, wf)
+	budget := maxRasterSamples
 
 	for i := 0; i+1 < len(xs); i++ {
 		x0, x1 := xs[i], xs[i+1]
@@ -1467,12 +1544,94 @@ func pictureEqual(got, want []Op, clip Rect) bool {
 				continue
 			}
 			y := y0.Add(y1.Sub(y0).Div(2))
-			if !colourAt(gf, x, y).same(colourAt(wf, x, y)) {
+			g, gv := colourVaryingAt(gf, x, y)
+			w, wv := colourVaryingAt(wf, x, y)
+			if gv || wv {
+				// The cell is not one colour, so its middle does not stand for
+				// it: it is sampled pixel by pixel instead.
+				if !rasterCell(gf, wf, x0, x1, y0, y1, &budget) {
+					return false
+				}
+				continue
+			}
+			if !g.same(w) {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+// Sampling a cell that is not one colour.
+//
+// Everything else in this comparison is exact because a cell is uniform by
+// construction: no edge crosses it. A mark whose colour changes across its own
+// rectangle breaks that, and for such a cell the comparison becomes what the
+// rest of it avoids being — a rasteriser. The cell is sampled at the centre of
+// every device pixel inside it, a pixel being the CSS pixel the whole suite is
+// drawn at, and the two documents are compared sample by sample.
+//
+// Two tolerances, both the ones already in force. A sample's colour is compared
+// with sameColour, half a step of the 8-bit channel. And a sample that differs is
+// forgiven if moving it a sliver in any direction finds the other document's
+// colour — the quarter pixel the edges of fills and the positions of glyphs are
+// already allowed, and for the same reason: the two documents reach their
+// geometry by different arithmetic, and a gradient laid out a unit away from
+// another is a unit away everywhere.
+//
+// It is bounded, because a gradient over a page is half a million samples.
+// Past maxRasterSamples the pages are ruled different, which is the direction
+// an oracle errs in.
+
+// maxRasterSamples bounds the samples one comparison takes.
+const maxRasterSamples = 1 << 22
+
+// rasterCell compares the two documents across one cell, pixel by pixel.
+func rasterCell(gf, wf []coloured, x0, x1, y0, y1 style.Unit, budget *int) bool {
+	xs := pixelCentres(x0, x1)
+	ys := pixelCentres(y0, y1)
+	if *budget -= len(xs) * len(ys); *budget < 0 {
+		return false
+	}
+	for _, y := range ys {
+		for _, x := range xs {
+			if !nearlySame(gf, wf, x, y) || !nearlySame(wf, gf, x, y) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// pixelCentres is the centres of the device pixels in [lo, hi), or the middle
+// of the span when it holds none — a cell narrower than a pixel is still a cell.
+func pixelCentres(lo, hi style.Unit) []style.Unit {
+	var out []style.Unit
+	first := math.Floor(lo.Px()-0.5) + 0.5
+	for c := first; c < hi.Px(); c++ {
+		u, _ := style.FromPx(c)
+		if u >= lo && u < hi {
+			out = append(out, u)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, lo.Add(hi.Sub(lo).Div(2)))
+	}
+	return out
+}
+
+// nearlySame reports whether a's colour at a point is b's there, or within a
+// sliver of there.
+func nearlySame(a, b []coloured, x, y style.Unit) bool {
+	want, _ := colourVaryingAt(a, x, y)
+	for _, dy := range [3]style.Unit{0, -sliver, sliver} {
+		for _, dx := range [3]style.Unit{0, -sliver, sliver} {
+			if got, _ := colourVaryingAt(b, x.Add(dx), y.Add(dy)); got.same(want) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // invisibleInk reports whether a run is the colour of what it is drawn on.

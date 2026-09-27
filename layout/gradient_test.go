@@ -128,35 +128,59 @@ func TestAGradientIsSizedAndPlacedLikeAnImage(t *testing.T) {
 	}
 }
 
-// TestARealGradientIsStillReported. The line this change draws is between a
-// gradient of one colour and a gradient, and the second half of it has to hold:
-// a two-colour gradient must paint nothing and say so, exactly as before.
-//
-// Painting it as one of its colours would be worse than painting nothing,
-// because nothing is visibly missing and a wrong colour is not.
-func TestARealGradientIsStillReported(t *testing.T) {
-	built := Build(Input{
-		HTML: `<div id="d">x</div>`,
-		CSS: []Stylesheet{{Source: `#d { width: 100px; height: 50px;
-			background-image: linear-gradient(red, blue) }`}},
-	})
-	if built.Root == nil {
-		t.Fatal("the document produced no boxes")
+// TestARealGradientIsPainted. The line this file draws is between a gradient of
+// one colour, which is a fill, and a gradient, which is a FillGradient: a
+// two-colour gradient must not come out as either of its colours, and must come
+// out as itself, unreported. A gradient in a colour space this engine does not
+// interpolate in is still one it cannot paint, and still says so.
+func TestARealGradientIsPainted(t *testing.T) {
+	paint := func(value string) ([]Op, []Finding) {
+		built := Build(Input{
+			HTML: `<div id="d">x</div>`,
+			CSS: []Stylesheet{{Source: `#d { width: 100px; height: 50px;
+				background-image: ` + value + ` }`}},
+		})
+		if built.Root == nil {
+			t.Fatal("the document produced no boxes")
+		}
+		rec := NewRecorder(nil)
+		w, _ := style.FromPx(600)
+		h, _ := style.FromPx(10000)
+		return Paint(Layout(built.Root, Size{W: w, H: h}, nil, rec)), rec.Findings()
 	}
-	rec := NewRecorder(nil)
-	w, _ := style.FromPx(600)
-	h, _ := style.FromPx(10000)
-	frag := Layout(built.Root, Size{W: w, H: h}, nil, rec)
-	ops := Paint(frag)
+
+	ops, findings := paint("linear-gradient(red, blue)")
+	var got []FillGradient
 	for _, op := range ops {
-		if r, ok := op.(FillRect); ok {
-			if r.Color == (style.RGBA{R: 255, A: 1}) || r.Color == (style.RGBA{B: 255, A: 1}) {
-				t.Errorf("a two-colour gradient painted %v", r.Color)
+		switch v := op.(type) {
+		case FillRect:
+			if v.Color == (style.RGBA{R: 255, A: 1}) || v.Color == (style.RGBA{B: 255, A: 1}) {
+				t.Errorf("a two-colour gradient painted %v", v.Color)
 			}
+		case FillGradient:
+			got = append(got, v)
 		}
 	}
-	if !hasRule(rec.Findings(), RuleUnsupportedValue) {
-		t.Errorf("a gradient this engine cannot paint was not reported: %v", rec.Findings())
+	if len(got) != 1 {
+		t.Fatalf("%d gradients painted, want 1", len(got))
+	}
+	stops := got[0].Gradient.Stops
+	if len(stops) != 2 || stops[0].Color != (style.RGBA{R: 255, A: 1}) ||
+		stops[1].Color != (style.RGBA{B: 255, A: 1}) {
+		t.Errorf("the stops are %+v, want red then blue", stops)
+	}
+	if hasRule(findings, RuleUnsupportedValue) {
+		t.Errorf("a gradient this engine paints was reported: %v", findings)
+	}
+
+	ops, findings = paint("linear-gradient(in oklab, red, blue)")
+	for _, op := range ops {
+		if _, ok := op.(FillGradient); ok {
+			t.Errorf("a gradient interpolated in oklab was painted in sRGB")
+		}
+	}
+	if !hasRule(findings, RuleUnsupportedValue) {
+		t.Errorf("a gradient this engine cannot paint was not reported: %v", findings)
 	}
 }
 

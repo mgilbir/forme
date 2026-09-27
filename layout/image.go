@@ -176,11 +176,18 @@ type ReplacedContent struct {
 	// band's edges fall depends on how long the gradient line is. See
 	// gradient.go.
 	Bands *bandedGradient
+
+	// gradient is set when the content is any other gradient: one whose colour
+	// interpolates, which only the FillGradient operation can paint. Like Bands
+	// it needs a size before it is a picture, and it is laid out for each tile
+	// it is painted in. See gradientparse.go.
+	gradient *gradientSpec
 }
 
 // Paints reports whether this content puts anything on the page.
 func (r *ReplacedContent) Paints() bool {
-	return r != nil && (r.Image != nil || r.Solid != nil || r.SVG != nil || r.Bands != nil)
+	return r != nil && (r.Image != nil || r.Solid != nil || r.SVG != nil || r.Bands != nil ||
+		r.gradient != nil)
 }
 
 // replacedLoader turns the references in a box tree into loaded content.

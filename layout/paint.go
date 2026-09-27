@@ -38,10 +38,13 @@ import (
 // rather than a "border" primitive, because a backend that had to understand
 // border-collapse would be a second layout engine.
 //
-// There are five: FillRect, DrawText, DrawImage and TileImage, which put ink on
-// the page, and Link, which puts none and says where a hyperlink is. A backend
-// that switches over them must have a case for each, and one that only draws
-// may skip Link.
+// There are six: FillRect, DrawText, DrawImage, TileImage and FillGradient,
+// which put ink on the page, and Link, which puts none and says where a
+// hyperlink is. A backend that switches over them must have a case for each, and
+// one that only draws may skip Link. The set grows only by addition — an
+// operation's meaning, once stated, is not changed — so a backend that meets a
+// kind it has no case for has met something new, and should say so rather than
+// draw around it.
 type Op interface{ isOp() }
 
 // FillRect paints a rectangle in a solid colour.
@@ -716,6 +719,17 @@ func (p *painter) backgroundImages(layers []bgPaint, who *Box) {
 			p.tiling(l, l.Bands, who)
 			continue
 		}
+		if l.Gradient != nil {
+			// One operation however many tiles, as a picture is: the count
+			// was checked against maxBackgroundTiles when the tiling was
+			// resolved, and nothing here multiplies it.
+			p.emit(FillGradient{
+				Clip: l.Clip, Tile: l.Tile,
+				StepX: l.StepX, StepY: l.StepY,
+				Gradient: *l.Gradient,
+			})
+			continue
+		}
 		if l.Image == nil {
 			continue
 		}
@@ -1349,6 +1363,15 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 			}
 			kept = append(kept, v)
 
+		case FillGradient:
+			// The same statement narrowed, as for a tiling of a picture: the
+			// gradient is laid out against its tiles, which do not move.
+			v.Clip = v.Clip.Intersect(c.Rect)
+			if v.Clip.Empty() {
+				continue
+			}
+			kept = append(kept, v)
+
 		case DrawImage:
 			if c.Rect.Intersect(v.Rect).Empty() {
 				continue
@@ -1747,12 +1770,14 @@ func (p *painter) inlineDecorations(f *Fragment, clip Clip) {
 	at := len(p.ops)
 	p.grouped(f, func() { p.clipping(clip, func() { p.decorationsIn(f) }) })
 	for i := at; i < len(p.ops); i++ {
-		r, ok := p.ops[i].(FillRect)
-		if !ok {
-			continue
+		switch r := p.ops[i].(type) {
+		case FillRect:
+			r.Overhang = true
+			p.ops[i] = r
+		case FillGradient:
+			r.Overhang = true
+			p.ops[i] = r
 		}
-		r.Overhang = true
-		p.ops[i] = r
 	}
 }
 

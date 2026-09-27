@@ -177,6 +177,10 @@ type bgPaint struct {
 	// tile is what the gradient's line spans, and the tiling repeats the whole
 	// stack of them. It is empty for every other layer.
 	Bands []bgBand
+
+	// Gradient is set instead of any of them when the layer paints a gradient
+	// whose colour interpolates, laid out for this layer's tile.
+	Gradient *Gradient
 }
 
 // bgBand is one stripe of a banded gradient, positioned within a tile.
@@ -511,7 +515,7 @@ func (l *layouter) tiling(b *Box, layer backgroundLayer, positioning, painting R
 	if !l.tilesWithinCap(b, clip, stepX, stepY) {
 		return bgPaint{}, false
 	}
-	return bgPaint{
+	out := bgPaint{
 		Clip:  clip,
 		Tile:  Rect{X: x, Y: y, W: w, H: h},
 		StepX: stepX, StepY: stepY,
@@ -519,7 +523,28 @@ func (l *layouter) tiling(b *Box, layer backgroundLayer, positioning, painting R
 		Key:   layerKey(layer),
 		Solid: layer.image.Solid,
 		Bands: tileBands(layer.image.Bands, w, h),
-	}, true
+	}
+	if spec := layer.image.gradient; spec != nil {
+		// Laid out now and not when it was read, because where its stops fall
+		// depends on the size of the tile — which is what CSS Images calls the
+		// gradient box, and which background-size has only just decided.
+		laid := spec.layOut(w, h)
+		if laid.tooFine != "" {
+			l.reportOnce("bg-image-fine:"+spec.source, Finding{
+				Rule:     RuleLimit,
+				Source:   AtHTML(offsetOf(b)),
+				Message:  "the repeating gradient " + quoteValue(spec.source) + " was drawn as its average colour: " + laid.tooFine,
+				Path:     PathOf(b.Element),
+				Property: "background-image",
+			})
+		}
+		if laid.solid != nil {
+			out.Solid = laid.solid
+		} else {
+			out.Gradient = &laid.gradient
+		}
+	}
+	return out, true
 }
 
 // tilesWithinCap refuses a tiling whose cell count is past what this engine will
@@ -650,7 +675,8 @@ func (l *layouter) tileSize(layer backgroundLayer, area Rect) (w, h style.Unit, 
 	if img.HeightPercent > 0 {
 		ih = area.H.Mul(img.HeightPercent)
 	}
-	if iw <= 0 && ih <= 0 && ratio <= 0 && img.Solid == nil && img.Bands == nil {
+	if iw <= 0 && ih <= 0 && ratio <= 0 && img.Solid == nil && img.Bands == nil &&
+		img.gradient == nil {
 		// A picture with no size at all is one that failed to load or decode.
 		// Content that paints a colour legitimately has none, and is sized
 		// below by the default object size like any other image without one.
@@ -883,10 +909,27 @@ func (l *layouter) backgroundImage(b *Box, raw string) *ReplacedContent {
 	if bands, ok := l.bandsOf(b, raw); ok {
 		return &ReplacedContent{Bands: bands}
 	}
-	// A real gradient, an image-set, element(). Each is a value this engine
-	// reads and cannot paint, and each leaves a box that looks as though the
-	// declaration were absent — which is the silent failure the whole finding
-	// vocabulary exists for.
+	// Any other gradient, which the FillGradient operation paints. See
+	// gradientfill.go.
+	spec, status := l.parseGradient(b, raw)
+	switch status {
+	case gradientRead:
+		return &ReplacedContent{gradient: spec}
+	case gradientTooManyStops:
+		l.reportOnce("bg-image-stops:"+raw, Finding{
+			Rule:   RuleLimit,
+			Source: AtHTML(offsetOf(b)),
+			Message: fmt.Sprintf("a gradient has more colour stops and hints than the %d "+
+				"this engine draws; no image was drawn", maxGradientStops),
+			Path:     PathOf(b.Element),
+			Property: "background-image",
+		})
+		return nil
+	}
+	// A gradient in a form this engine does not read, an image-set, element().
+	// Each is a value this engine cannot paint, and each leaves a box that
+	// looks as though the declaration were absent — which is the silent
+	// failure the whole finding vocabulary exists for.
 	l.reportOnce("bg-image:"+raw, Finding{
 		Rule:     RuleUnsupportedValue,
 		Source:   AtHTML(offsetOf(b)),

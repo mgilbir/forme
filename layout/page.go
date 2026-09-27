@@ -673,6 +673,12 @@ func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
 			// The clip is the area painted; nothing is drawn outside it,
 			// including the part of a tile that reaches past it.
 			consider(o.Clip)
+		case FillGradient:
+			// A tiling as well, and skipped when it is an inline box's
+			// background for the reason FillRect.Overhang gives.
+			if !o.Overhang {
+				consider(o.Clip)
+			}
 		case Link:
 			// Not ink, and not a box the scale was computed from: an inline
 			// <a>'s area is its content area, which §10.6.1 lets reach past

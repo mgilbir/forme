@@ -47,6 +47,8 @@ func Example() {
 			images++
 		case layout.TileImage: // op.Image, op.Clip, op.Tile — a repeated background
 			tiles++
+		case layout.FillGradient: // op.Gradient, op.Clip, op.Tile — a CSS gradient, tiled
+			tiles++
 		case layout.Link: // op.Rects, op.Href — a hyperlink's areas; draws nothing
 			links++
 		}

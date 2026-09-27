@@ -193,55 +193,64 @@ func TestEveryTileGetsTheWholeStack(t *testing.T) {
 	}
 }
 
-// TestAGradientThatInterpolatesIsStillReported is the line this draws, and the
-// far side of it has to hold. A gradient with two colours over a distance is one
-// this display list cannot express, and painting it as either colour would be
-// worse than painting nothing: nothing missing is visible and a wrong colour is
-// not.
-func TestAGradientThatInterpolatesIsStillReported(t *testing.T) {
-	for _, value := range []string{
-		"linear-gradient(to bottom, lime, green)",
-		"linear-gradient(to bottom, red 25%, green 75%)",
-		// An angle and a corner are read and refused: their bands would be
-		// diagonal strips, which a rectangle cannot express any better than the
-		// interpolation could.
-		"linear-gradient(45deg, red 50%, green 50%)",
-		"linear-gradient(to bottom right, red 50%, green 50%)",
-		// A repeating gradient's bands repeat along the line, which is a
-		// tiling of stripes and not a stack of them.
-		"repeating-linear-gradient(to bottom, red 50%, green 50%)",
+// TestAGradientThatInterpolatesIsNotBands is the line this draws, and the far
+// side of it has to hold. A gradient with two colours over a distance, or bands
+// that are not rectangles, is not a stack of fills — painting it as either colour
+// would be worse than not painting it — and is now the one FillGradient
+// operation, drawn and not reported. What is still not read is still reported,
+// and paints nothing.
+func TestAGradientThatInterpolatesIsNotBands(t *testing.T) {
+	for _, tc := range []struct {
+		value    string
+		gradient bool
+	}{
+		{"linear-gradient(to bottom, lime, green)", true},
+		{"linear-gradient(to bottom, red 25%, green 75%)", true},
+		// An angle and a corner: their bands would be diagonal strips, which a
+		// rectangle cannot express any better than the interpolation could.
+		{"linear-gradient(45deg, red 50%, green 50%)", true},
+		{"linear-gradient(to bottom right, red 50%, green 50%)", true},
+		// A repeating gradient's bands repeat along the line.
+		{"repeating-linear-gradient(to bottom, red 25%, green 25% 75%)", true},
 		// A length and a percentage in one gradient have an order that depends
-		// on the box, so whether this is a hard stop cannot be decided here.
-		"linear-gradient(to bottom, green 4em, red 50%)",
-		// A bare position between two stops is an interpolation hint, which
-		// says the colour between them is *not* either of theirs.
-		"linear-gradient(to bottom, red, 30%, green)",
-		// Not gradients this engine reads at all.
-		"radial-gradient(red 50%, green 50%)",
-		"linear-gradient(to nowhere, red 50%, green 50%)",
+		// on the box.
+		{"linear-gradient(to bottom, green 4em, red 50%)", true},
+		// A bare position between two stops is a transition hint.
+		{"linear-gradient(to bottom, red, 30%, green)", true},
+		{"radial-gradient(red 50%, green 50%)", true},
+		// Not a gradient any grammar has.
+		{"linear-gradient(to nowhere, red 50%, green 50%)", false},
 	} {
 		rec := NewRecorder(nil)
 		built := Build(Input{
 			HTML: bandBox,
 			CSS: []Stylesheet{{Source: `#d { width: 100px; height: 100px;
-				background-image: ` + value + ` }`}},
+				background-image: ` + tc.value + ` }`}},
 		})
 		if built.Root == nil {
-			t.Fatalf("%s: the document produced no boxes", value)
+			t.Fatalf("%s: the document produced no boxes", tc.value)
 		}
 		ops := Paint(Layout(built.Root, Size{W: bgpx(600), H: bgpx(10000)}, nil, rec))
+		gradients := 0
 		for _, op := range ops {
-			r, ok := op.(FillRect)
-			if !ok {
-				continue
-			}
-			if r.Color == green || r.Color == (style.RGBA{R: 255, A: 1}) ||
-				r.Color == (style.RGBA{G: 255, A: 1}) {
-				t.Errorf("%s: painted %v", value, r)
+			switch v := op.(type) {
+			case FillRect:
+				if v.Color == green || v.Color == (style.RGBA{R: 255, A: 1}) ||
+					v.Color == (style.RGBA{G: 255, A: 1}) {
+					t.Errorf("%s: painted as a band %v", tc.value, v)
+				}
+			case FillGradient:
+				gradients++
 			}
 		}
-		if !hasRule(rec.Findings(), RuleUnsupportedValue) {
-			t.Errorf("%s: painted nothing and said nothing", value)
+		reported := hasRule(rec.Findings(), RuleUnsupportedValue)
+		if tc.gradient && (gradients != 1 || reported) {
+			t.Errorf("%s: %d gradients and reported=%v, want one gradient and no report: %v",
+				tc.value, gradients, reported, rec.Findings())
+		}
+		if !tc.gradient && (gradients != 0 || !reported) {
+			t.Errorf("%s: %d gradients and reported=%v, want nothing painted and a report",
+				tc.value, gradients, reported)
 		}
 	}
 }

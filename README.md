@@ -35,11 +35,12 @@ backend.Begin(out.Page.Width, out.Page.Height, origin, out.Scale)
 
 for _, op := range out.Ops {
     switch op := op.(type) {
-    case layout.DrawText:  // op.Text, op.Face, op.Size, op.At, op.RTL …
-    case layout.FillRect:  // op.Rect, op.Color
-    case layout.DrawImage: // op.Image, op.Rect
-    case layout.TileImage: // op.Image, op.Clip, op.Tile — a repeated background
-    case layout.Link:      // op.Rects, op.Href — a hyperlink's areas; draws nothing
+    case layout.DrawText:     // op.Text, op.Face, op.Size, op.At, op.RTL …
+    case layout.FillRect:     // op.Rect, op.Color
+    case layout.DrawImage:    // op.Image, op.Rect
+    case layout.TileImage:    // op.Image, op.Clip, op.Tile — a repeated background
+    case layout.FillGradient: // op.Gradient, op.Clip, op.Tile — a CSS gradient, tiled
+    case layout.Link:         // op.Rects, op.Href — a hyperlink's areas; draws nothing
     }
 }
 ```

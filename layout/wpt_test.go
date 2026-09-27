@@ -2107,6 +2107,12 @@ func normaliseOps(ops []Op) string {
 			// drawing the same file draw the same key, and comparing decoded
 			// images pixel by pixel would make this a rasterizer.
 			lines = append(lines, fmt.Sprintf("image %s %s", v.Key, rectKey(v.Rect)))
+		case FillGradient:
+			// Only the blank-page check reads this too: a gradient that shows
+			// anywhere is something painted.
+			for _, f := range gradientFills(v) {
+				lines = append(lines, fmt.Sprintf("gradient %s", rectKey(f.r)))
+			}
 		case TileImage:
 			// Only the blank-page check reads this, so a tiling contributes one
 			// line however many tiles it puts down: what matters here is that

@@ -170,6 +170,22 @@ func dimOps(ops []Op, at int, alpha float64) ([]Op, []groupMark) {
 			}
 			v.Color.A *= alpha
 			kept = append(kept, v)
+		case FillGradient:
+			// A gradient carries colours, and they take an alpha exactly: every
+			// stop's is multiplied by it, and an interpolation in premultiplied
+			// alpha between two scaled colours is the scaled interpolation. So
+			// it is a mark like a fill, over the area it may paint.
+			marks = append(marks, groupMark{rect: v.Clip})
+			if alpha == 0 {
+				continue
+			}
+			stops := make([]GradientStop, len(v.Gradient.Stops))
+			copy(stops, v.Gradient.Stops)
+			for i := range stops {
+				stops[i].Color.A *= alpha
+			}
+			v.Gradient.Stops = stops
+			kept = append(kept, v)
 		case DrawImage:
 			marks = append(marks, groupMark{rect: v.Rect, image: true})
 			if alpha == 0 {
