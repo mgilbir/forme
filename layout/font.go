@@ -210,13 +210,18 @@ func standardName(base string, bold, italic bool) string {
 // does not fall back the way fontFor does: a size resolved against a substituted
 // face is a size the author never asked for, and CSS Values §5.1.1 already says
 // what to do when no x-height can be determined, which is to assume half an em.
-func faceForStyle(fonts FontSet, cs style.ComputedStyle) *shape.Face {
+//
+// The face is set where the style places it in a variable face's design space,
+// at size, as layout will set it (fontinstance.go): an "ex" is the x-height of
+// the instance the text is drawn in, which MVAR can move. The instance is the
+// document's, so the cascade and layout cut it once between them.
+func faceForStyle(fonts FontSet, rec *Recorder, cs style.ComputedStyle, size style.Unit) *shape.Face {
 	if fonts == nil || cs.IsZero() {
 		return nil
 	}
-	r := fontRequestOf(cs)
+	ask, _ := variationAskOf(cs, fontRequestOf(cs), size.Px())
 	for _, family := range parseFamilyList(cs.Get("font-family")) {
-		if f, ok := faceIn(fonts, family, r); ok {
+		if f, ok := styledFace(fonts, instancerOf(fonts), rec, NoSource, family, "", ask); ok {
 			return f
 		}
 	}
@@ -237,11 +242,12 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	if got, ok := l.fonts[key]; ok {
 		return got.face, got.face != nil
 	}
-	r := l.fontRequest(b)
+	ask := l.variationAsk(b)
+	src := sourceOf(boxElement(b))
 
 	families := parseFamilyList(key.families)
 	for _, family := range families {
-		if face, ok := faceIn(l.fontSet, family, r); ok {
+		if face, ok := styledFace(l.fontSet, l.inst, l.rec, src, family, "", ask); ok {
 			l.fonts[key] = resolvedFont{face: face}
 			l.noteFace(face)
 			return face, true
@@ -261,7 +267,7 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	//
 	// Taking it silently is what this whole design is against, which is what the
 	// finding below is for.
-	face, ok := faceIn(l.fontSet, initialFamily, r)
+	face, ok := styledFace(l.fontSet, l.inst, l.rec, src, initialFamily, "", ask)
 	l.fonts[key] = resolvedFont{face: face}
 	l.noteFace(face)
 	if !ok {
@@ -297,21 +303,27 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 // value the cascade hands out.
 const initialFamily = "serif"
 
-// fontKey is what fontFor's answer depends on: the family list and the three
-// properties a face is chosen by, as the cascade wrote them. The strings and
-// not the request they are read into, so that a box whose answer is known is
-// not read again.
+// fontKey is what fontFor's answer depends on: the family list, the three
+// properties a face is chosen by, and the three more that place a variable one
+// in its design space (fontinstance.go), as the cascade wrote them. The
+// strings and not the request they are read into, so that a box whose answer
+// is known is not read again.
 type fontKey struct {
 	families             string
 	weight, width, slope string
+	optical, variations  string
+	size                 style.Unit
 }
 
 func fontKeyOf(b *Box) fontKey {
 	return fontKey{
-		families: b.Style.Get("font-family"),
-		weight:   b.Style.Get("font-weight"),
-		width:    b.Style.Get("font-width"),
-		slope:    b.Style.Get("font-style"),
+		families:   b.Style.Get("font-family"),
+		weight:     b.Style.Get("font-weight"),
+		width:      b.Style.Get("font-width"),
+		slope:      b.Style.Get("font-style"),
+		optical:    b.Style.Get("font-optical-sizing"),
+		variations: b.Style.Get("font-variation-settings"),
+		size:       b.FontSize,
 	}
 }
 
@@ -359,10 +371,13 @@ func parseFamilyList(value string) []string {
 // x-height rather than six times the half-em CSS Values §5.1.1 says to assume
 // when none can be determined. The suite's numbers-units-012 sets 6ex against
 // Ahem, whose x-height is eight tenths of an em, and asks for an inch.
-type fontMetrics struct{ fonts FontSet }
+type fontMetrics struct {
+	fonts FontSet
+	rec   *Recorder
+}
 
 func (m fontMetrics) XHeight(cs style.ComputedStyle, size style.Unit) (float64, bool) {
-	return xHeightIn(faceForStyle(m.fonts, cs), size)
+	return xHeightIn(faceForStyle(m.fonts, m.rec, cs, size), size)
 }
 
 // faceWithGlyph is the first of a box's families whose face has a glyph for a
@@ -379,9 +394,9 @@ func (m fontMetrics) XHeight(cs style.ComputedStyle, size style.Unit) (float64, 
 // past the families the document named into the fallback set, because the
 // question is which of *those* sets the character.
 func (l *layouter) faceWithGlyph(b *Box, r rune) (*shape.Face, bool) {
-	req := l.fontRequest(b)
+	ask := l.variationAsk(b)
 	for _, family := range parseFamilyList(b.Style.Get("font-family")) {
-		face, ok := faceIn(l.fontSet, family, req)
+		face, ok := styledFace(l.fontSet, l.inst, l.rec, sourceOf(boxElement(b)), family, "", ask)
 		if !ok {
 			continue
 		}

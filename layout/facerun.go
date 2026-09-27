@@ -76,10 +76,9 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 	// A missing fallback set is not a reason to stop: the control-character cut
 	// below does not need one, and a caller with no fallback faces still gets a
 	// visible glyph for a character no face has.
-	fallback := fallbackLookup(l.fontSet)
+	fallback := l.instancedFallback(b)
 	canFall := fallback != nil
-	ranged := rangedLookup(l.fontSet)
-	hasRanges := ranged != nil
+	hasRanges := rangedLookup(l.fontSet) != nil
 	if hasRanges {
 		// Only worth walking the family list per cluster when some face in it
 		// is actually restricted. A document with no unicode-range anywhere —
@@ -103,7 +102,8 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 	if !canFall && !hasRanges && !hasVisibleControl(text) {
 		return one
 	}
-	r := l.fontRequest(b)
+	ask := l.variationAsk(b)
+	r := ask.r
 
 	// The cluster starts, so every cluster is [at[i], at[i+1]).
 	//
@@ -158,7 +158,7 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 			// faces all exclude this character has nothing for it and the next
 			// one the author named is asked — which is what a unicode-range is
 			// written to make happen.
-			if named, found := l.namedFaceFor(ranged, b, r, cluster); found {
+			if named, found := l.namedFaceFor(b, ask, cluster); found {
 				want = named
 			}
 		}
@@ -401,14 +401,36 @@ func (l *layouter) familyListIsRestricted(b *Box) bool {
 // for a font-family list and is what makes "high-a-only, deep-b-only" mean what
 // it says. A cluster no named family covers comes back false and is left to the
 // primary face and the fallback set, exactly as before.
-func (l *layouter) namedFaceFor(ranged func(family, text string, r FontRequest) (*shape.Face, bool),
-	b *Box, r FontRequest, cluster string) (*shape.Face, bool) {
+func (l *layouter) namedFaceFor(b *Box, ask variationAsk, cluster string) (*shape.Face, bool) {
+	src := sourceOf(boxElement(b))
 	for _, family := range parseFamilyList(b.Style.Get("font-family")) {
-		if face, ok := ranged(family, cluster, r); ok {
+		if face, ok := styledFace(l.fontSet, l.inst, l.rec, src, family, cluster, ask); ok {
 			return face, true
 		}
 	}
 	return nil, false
+}
+
+// instancedFallback is the set's fallback lookup for a box, with the face it
+// answers set where the box places a variable face (fontinstance.go) — a
+// fallback face is drawn at the weight the text asked for, like any other.
+// nil for a set with no fallback.
+func (l *layouter) instancedFallback(b *Box) func(text string, r FontRequest) (*shape.Face, bool) {
+	raw := fallbackLookup(l.fontSet)
+	if raw == nil {
+		return nil
+	}
+	ask := l.variationAsk(b)
+	src := sourceOf(boxElement(b))
+	return func(text string, r FontRequest) (*shape.Face, bool) {
+		face, ok := raw(text, r)
+		if !ok {
+			return nil, false
+		}
+		a := ask
+		a.r = r
+		return l.inst.instanced(face, a, l.rec, src), true
+	}
 }
 
 // namesOnlyGenericFamilies reports whether a font-family list asks for a kind of

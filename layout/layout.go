@@ -334,6 +334,9 @@ func newLayouter(root *Box, avail Size, set FontSet, rec *Recorder) *layouter {
 	if l.fontSet == nil {
 		l.fontSet = StandardFonts()
 	}
+	if l.inst = instancerOf(l.fontSet); l.inst == nil {
+		l.inst = newInstancer()
+	}
 	return l
 }
 
@@ -577,6 +580,10 @@ type layouter struct {
 
 	// fontSet is where faces come from.
 	fontSet FontSet
+	// inst is the document's instances of variable faces: the set's own
+	// where the set is the document's, one of the layouter's where a caller
+	// laid out with a set of its own. See fontinstance.go.
+	inst *instancer
 	// rootFontSize is the font-size of the root element, which is what "rem"
 	// resolves against. It is settled once, before the walk: the point of rem is
 	// that it does not compound as elements nest, so reading it from the box in

@@ -300,9 +300,11 @@ func TestFontStyleRightIsReported(t *testing.T) {
 // only in font-stretch are set in the two faces their widths choose, and two
 // that differ only in font-style: oblique's angle in the two its angles do.
 func TestABoxIsSetInTheFaceItsWidthChooses(t *testing.T) {
+	// Static faces, so that the face a run is set in is the face a rule
+	// loaded: a variable one would be set at an instance of itself.
 	res := &fileResolver{files: map[string][]byte{
-		"normal.ttf": realFont(), "condensed.ttf": realFont(),
-		"back.ttf": realFont(),
+		"normal.ttf": staticFont(t), "condensed.ttf": staticFont(t),
+		"back.ttf": staticFont(t),
 	}}
 	built := Build(Input{
 		HTML: `<style>
@@ -353,4 +355,15 @@ func formatRequest(r FontRequest) string {
 		b.WriteString("upright")
 	}
 	return b.String()
+}
+
+// staticFont is the bundled face cut at one location: a font with no design
+// space, for a test that needs a face to be used exactly as it loaded.
+func staticFont(t *testing.T) []byte {
+	t.Helper()
+	f, err := shape.LoadInstance(realFont(), map[string]float64{"wght": 450})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f.Program()
 }

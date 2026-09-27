@@ -42,6 +42,7 @@ import (
 // ones that decide what the letter is set in and what it says.
 var firstLetterApplies = []string{
 	"font-family", "font-size", "font-weight", "font-style", "font-width",
+	"font-variation-settings", "font-optical-sizing",
 	"line-height", "letter-spacing", "word-spacing", "color", "text-transform",
 }
 

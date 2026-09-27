@@ -88,6 +88,7 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `verticalinstance_fixture.py`, `fonts/VerticalVariable*.ttf`, `fonts/VerticalKern*.ttf` | the faces that oracle needs and no foundry made |
 | `instancevaried.py`, `instancevaried.expected.txt` | a variable face's font-wide metrics and its GPOS devices off its default — see below |
 | `variedlayout_fixture.py`, `fonts/VariedLayout*.ttf` | the faces that oracle needs and no foundry made |
+| `fonts/VariedAxes.ttf` | built by the same script: five axes and two named instances, which layout's tests of where CSS sets a variable face use |
 | `colrink.py`, `colrink.expected.txt` | the ink of colour glyphs, painted from COLR or read from CBDT — see below |
 | `colrink_fixture.py`, `fonts/ColourInk*.ttf`, `fonts/BitmapInk.ttf` | the faces that oracle needs and no foundry made |
 | `ignorables_fixture.py`, `fonts/Ignorables.ttf`, `ignorables.txt`, `ignorables.expected.txt` | a corpus of the characters nothing is drawn for, shaped by `shape.py` in the face it needs — see below |

@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"fmt"
 	"math"
 	"strings"
 
@@ -17,7 +18,8 @@ import (
 // (§2.2), a width as a percentage (§2.3), and a style that is normal, italic or
 // oblique at an angle (§2.4) — and §5.2 chooses between a family's faces by all
 // three, in that order, against the ranges each @font-face rule declares (see
-// fontmatch.go).
+// fontmatch.go). A variable face is then set at the weight, width and slope
+// asked for rather than at its default (see fontinstance.go).
 //
 // The booleans stay: FontSet is implemented outside this module, and a set
 // that has a regular and a bold face and nothing else is still answered
@@ -286,4 +288,22 @@ func (l *layouter) fontRequest(b *Box) FontRequest {
 		})
 	}
 	return r
+}
+
+// variationAsk is a box's request with the rest of what places a variable
+// face (fontinstance.go): font-optical-sizing at the box's used size, and its
+// font-variation-settings — a list past maxVariationSettings reported once.
+func (l *layouter) variationAsk(b *Box) variationAsk {
+	ask, over := variationAskOf(b.Style, l.fontRequest(b), b.FontSize.Px())
+	if over > 0 && !l.reportedOnce["font-variation-settings"] {
+		l.reportedOnce["font-variation-settings"] = true
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleLimit,
+			Source: sourceOf(boxElement(b)),
+			Message: fmt.Sprintf("font-variation-settings lists %d settings, more than the %d this engine "+
+				"reads; the first %d were not applied", len(ask.settings)+over, maxVariationSettings, over),
+			Property: "font-variation-settings",
+		})
+	}
+	return ask
 }

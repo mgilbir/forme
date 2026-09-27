@@ -659,10 +659,11 @@ func isIdentPart(part []css.ComponentValue) bool {
 // listed above plus font-size-adjust, font-kerning, all subproperties of
 // font-variant, font-feature-settings, font-language-override,
 // font-optical-sizing, font-variation-settings and font-palette" — of which
-// this engine has font-kerning, font-feature-settings and the five variant
-// longhands. It set six longhands, so "font: 12px serif" left an earlier
-// "font-variant-numeric: oldstyle-nums" and "font-kerning: none" in force, and
-// "font: inherit" inherited only six of them.
+// this engine has font-kerning, font-feature-settings, font-optical-sizing,
+// font-variation-settings and the five variant longhands. It set six
+// longhands, so "font: 12px serif" left an earlier "font-variant-numeric:
+// oldstyle-nums" and "font-kerning: none" in force, and "font: inherit"
+// inherited only six of them.
 func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
 	parts := splitOnWhitespace(vals)
 	if len(parts) == 0 {
@@ -774,6 +775,8 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 		"font-variant-position":   ident("normal"),
 		"font-kerning":            ident("auto"),
 		"font-feature-settings":   ident("normal"),
+		"font-optical-sizing":     ident("auto"),
+		"font-variation-settings": ident("normal"),
 	}
 	// The shorthand resets line-height whether or not it was written, which is
 	// what makes "font: 12px serif" undo an inherited one.

@@ -129,7 +129,9 @@ attachment, contextual and chained-contextual rules, mark filtering sets.
 
 **Fonts.** sfnt and CFF, Type 1, and the WOFF and WOFF 2 wrappers a web font
 arrives in; variable fonts instanced at a named or arbitrary point in their
-design space, subsetting, and the metrics a layout engine has to ask for —
+design space — where CSS's font-weight, font-width, font-style,
+font-optical-sizing and font-variation-settings place them — subsetting, and
+the metrics a layout engine has to ask for —
 including what the fourteen standard PDF faces state, which is not the same
 question.
 

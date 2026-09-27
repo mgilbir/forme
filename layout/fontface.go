@@ -132,6 +132,13 @@ type fontFaceRule struct {
 	// value that could be read. See withFeatureSettings.
 	features   []shape.FeatureSetting
 	featuresAt int
+
+	// namedInstance is the font-named-instance descriptor, the name of one of
+	// a variable face's named instances, or empty for auto; and variations
+	// the font-variation-settings descriptor. They are §7.2's fifth and sixth
+	// steps, applied where the face is set (fontinstance.go).
+	namedInstance string
+	variations    []variationSetting
 }
 
 // faceRange is a font-weight or font-width descriptor: a range, or auto.
@@ -257,6 +264,10 @@ type documentFace struct {
 	// match is the rule's descriptors as §5.2 reads them, worked out once.
 	match matchable
 	face  *shape.Face
+	// named is where the rule's font-named-instance is in the face's design
+	// space, found once when the face loads; nil where the rule names none or
+	// the face has none by that name.
+	named map[string]float64
 	// ref is the src entry that produced the face — the url for a url() entry,
 	// the name for a local() one. It is kept so that a caller can say which
 	// file a family came from.
@@ -286,6 +297,10 @@ type documentFonts struct {
 	// mine is this document's own copy of every face it has been handed,
 	// keyed by the face it was made from. See own.
 	mine map[*shape.Face]*shape.Face
+
+	// inst is the document's instances of variable faces, shared by the
+	// cascade and layout. See fontinstance.go.
+	inst *instancer
 }
 
 // own returns this document's copy of a face.
@@ -485,7 +500,7 @@ func (d *documentFonts) match(key string, candidates []*documentFace, r FontRequ
 // document that declared nothing still sets text in the caller's library, and
 // the caller's library is shared.
 func loadFontFaces(pending []pendingFontFace, res ResourceResolver, base FontSet, rec *Recorder) FontSet {
-	set := &documentFonts{base: base, byFamily: map[string][]*documentFace{}}
+	set := &documentFonts{base: base, byFamily: map[string][]*documentFace{}, inst: newInstancer()}
 	if len(pending) == 0 {
 		return wrapDocumentFonts(set)
 	}
@@ -510,7 +525,8 @@ func loadFontFaces(pending []pendingFontFace, res ResourceResolver, base FontSet
 			continue
 		}
 		face = l.withFeatureSettings(p, rule, face)
-		df := &documentFace{rule: rule, match: rule.matchable(), face: face, ref: ref}
+		df := &documentFace{rule: rule, match: rule.matchable(), face: face, ref: ref,
+			named: l.namedInstance(p, rule, face)}
 		set.faces = append(set.faces, df)
 		key := familyKey(rule.family)
 		set.byFamily[key] = append(set.byFamily[key], df)
@@ -624,6 +640,19 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 			if settings, ok := l.featureSettings(p, d); ok {
 				out.features, out.featuresAt = settings, d.Offset
 			}
+		case "font-variation-settings":
+			// §7.2's sixth step, between the variations font-weight, font-width
+			// and font-style ask for and the property's. Applied where the face
+			// is set, in that order — see fontinstance.go.
+			if settings, ok := l.variationSettings(p, d); ok {
+				out.variations = settings
+			}
+		case "font-named-instance":
+			if name, ok := parseNamedInstance(d.Value); ok {
+				out.namedInstance = name
+			} else {
+				l.badDescriptor(p, d, "font-named-instance")
+			}
 		case "font-display":
 			// A hint about what to show while a font is downloading. There is
 			// no download here and no moment at which a page is half-drawn, so
@@ -631,17 +660,8 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 		default:
 			// Every other descriptor changes how the face is used —
 			// size-adjust and the override descriptors change its metrics
-			// outright, font-variation-settings where in its design space it
-			// is drawn. Ignoring one silently would move the text on the page
+			// outright. Ignoring one silently would move the text on the page
 			// with nothing saying so.
-			//
-			// font-variation-settings is §7.2's fifth step, between the
-			// variations font-weight, font-width and font-style ask for and
-			// the ones the property asks for, and neither of those is applied:
-			// a face is drawn at the instance it was loaded at. Applied alone
-			// it would stand where the property is meant to override it, and
-			// the property is reported as not applied, so the descriptor is
-			// reported with it rather than applied out of its order.
 			l.rec.ReportDetail(Finding{
 				Rule:     RuleUnsupportedProperty,
 				Source:   Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
@@ -759,6 +779,79 @@ func (l *fontFaceLoader) withFeatureSettings(p pendingFontFace, r fontFaceRule, 
 		})
 	}
 	return out
+}
+
+// variationSettings reads the font-variation-settings descriptor, whose grammar
+// is the property's and is judged by the same code; ok is false, and the
+// rule's earlier value stands, where it cannot be read. A list longer than
+// maxVariationSettings keeps its last entries and says so.
+func (l *fontFaceLoader) variationSettings(p pendingFontFace, d css.Declaration) ([]variationSetting, bool) {
+	valid, unsupported := style.JudgeValue("font-variation-settings", d.Value)
+	switch {
+	case !valid:
+		l.badDescriptor(p, d, "font-variation-settings")
+		return nil, false
+	case unsupported != "":
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
+			Message: "the @font-face descriptor \"font-variation-settings\" uses " + unsupported +
+				", which this engine does not evaluate; the face was given no settings of its own",
+			Property: "font-variation-settings",
+		})
+		return nil, false
+	}
+	settings, over := variationSettingsIn(d.Value)
+	if over > 0 {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleLimit,
+			Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
+			Message: fmt.Sprintf("the @font-face descriptor \"font-variation-settings\" lists %d settings, "+
+				"more than the %d this engine reads; the first %d were not applied",
+				len(settings)+over, maxVariationSettings, over),
+			Property: "font-variation-settings",
+		})
+	}
+	return settings, true
+}
+
+// namedInstance finds the rule's font-named-instance in its face, by §5.1's
+// localized name matching — familyKey, over every spelling the font gives the
+// name. A name the face does not have applies nothing (§7.2) and is reported,
+// since the author asked for an instance and the text is not set at it.
+func (l *fontFaceLoader) namedInstance(p pendingFontFace, r fontFaceRule, face *shape.Face) map[string]float64 {
+	if r.namedInstance == "" {
+		return nil
+	}
+	want := familyKey(r.namedInstance)
+	coords, ok := face.NamedInstance(func(name string) bool { return familyKey(name) == want })
+	if !ok {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: p.at(),
+			Message: "the @font-face for " + quoteValue(r.family) + " names the instance " +
+				quoteValue(r.namedInstance) + ", which its face does not have; no named instance was applied",
+			Property: "font-named-instance",
+		})
+		return nil
+	}
+	return coords
+}
+
+// parseNamedInstance reads the font-named-instance descriptor: auto, which is
+// no instance and the empty string, or a string naming one.
+func parseNamedInstance(vals []css.ComponentValue) (string, bool) {
+	toks, ok := descriptorTokens(vals)
+	if !ok || len(toks) != 1 {
+		return "", false
+	}
+	switch t := toks[0]; {
+	case t.Kind == css.Ident && ascii.EqualFold(t.Value, "auto"):
+		return "", true
+	case t.Kind == css.String:
+		return t.Value, true
+	}
+	return "", false
 }
 
 // featuredFace is what withFeatureSettings keeps a face's copy under.

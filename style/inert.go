@@ -119,11 +119,6 @@ var inertValues = map[string]inertValue{
 	// a page laid out once offers no way to.
 	"resize": {produced: "none", because: "nothing here is resizable by anyone"},
 
-	// CSS Fonts 4 §6.4 and §6.5. Shaping applies the face's own kerning and its
-	// default features, which is what "auto" and "normal" ask for.
-	// TestKerningIsApplied in the shape package is what holds the first.
-	"font-variation-settings": {inherits: true, produced: "normal", because: "no variation is applied beyond the instance"},
-
 	// CSS Fragmentation 3's break properties are not here any more, and the
 	// reason they were is the one TestNothingIsFragmented was written to
 	// catch going stale. "avoid" was inert on the ground that "this engine does
@@ -265,8 +260,8 @@ var inertValues = map[string]inertValue{
 	// text-emphasis and text-emphasis-style were here and are implemented; see
 	// layout/emphasis.go.
 	//
-	// Two of these are the hyphens trap and the text-decoration-skip-ink case
-	// respectively, which is why they are written out rather than listed.
+	// One of these is the text-decoration-skip-ink case, which is why it is
+	// written out rather than listed.
 	//
 	// text-underline-position: "auto" leaves the position to the UA, and
 	// "from-font" requires it to come from the face's own metrics. This engine
@@ -275,17 +270,14 @@ var inertValues = map[string]inertValue{
 	// "also" is for. See TestUnderlineComesFromTheFaceThatStatesOne. "under" asks
 	// for the line below the descenders and is still reported.
 	//
-	// font-optical-sizing: the initial value is "auto", and it is *not* what this
-	// engine produces. "auto" asks for the face's optical size axis to be set from
-	// the font size, and this engine applies no variation beyond the instance it
-	// was given — see font-variation-settings above, and TestKerningIsApplied's
-	// neighbours in the shape package. So what it produces is "none", and "auto"
-	// is the value that is still reported. Exactly the hyphens case, found by
-	// looking for it.
+	// font-optical-sizing was here, with the hyphens case's shape: its initial
+	// value "auto" asked for the optical size axis to follow the font size,
+	// which this engine did not do, so "none" was inert and "auto" reported. It
+	// is a property now and both values are applied — see
+	// layout/fontinstance.go — and so is font-variation-settings, which was
+	// beside it.
 	"text-underline-position": {inherits: true, produced: "auto", also: "from-font",
 		because: "the underline is placed from the face's own metrics"},
-	"font-optical-sizing": {inherits: true, produced: "none", initial: "auto",
-		because: "no variation is applied beyond the instance, optical sizing included"},
 	"font-variant-alternates": {inherits: true, produced: "normal",
 		because: "no alternate glyphs are selected"},
 

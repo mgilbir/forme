@@ -100,6 +100,9 @@ func init() {
 	g["font-variant-east-asian"] = oneOf(single(kw("normal")), groups(eastAsianKeywordGroup))
 	g["font-variant-position"] = single(kw("normal", "sub", "super"))
 	g["font-feature-settings"] = oneOf(single(kw("normal")), commaList(featureTag))
+	// §8.2: normal | [ <opentype-tag> <number> ]#, and §8.1: auto | none.
+	g["font-variation-settings"] = oneOf(single(kw("normal")), commaList(variationTag))
+	g["font-optical-sizing"] = single(kw("auto", "none"))
 
 	// CSS 2.1 §10.8.1 and css-inline-3.
 	g["line-height"] = single(either(kw("normal"), num(numeric{number: true,
@@ -402,6 +405,26 @@ func featureTag(it []css.ComponentValue) verdict {
 		return either(kw("on", "off"), num(integerSlot.nonNeg()))(it[1])
 	}
 	return valid
+}
+
+// variationTag is one entry of font-variation-settings: "<opentype-tag>
+// <number>", the tag a string of four printable ASCII characters and the
+// number any number at all — an axis's range is the font's to say, and a
+// value outside it is clamped to it, not refused.
+func variationTag(it []css.ComponentValue) verdict {
+	if len(it) != 2 || !str(it[0]).ok {
+		return invalid
+	}
+	tag := it[0].Token.Value
+	if len(tag) != 4 {
+		return invalid
+	}
+	for i := 0; i < 4; i++ {
+		if tag[i] < 0x20 || tag[i] > 0x7e {
+			return invalid
+		}
+	}
+	return num(numberSlot)(it[1])
 }
 
 // groups is a "||" of keyword groups, each written at most once: the numeric,

@@ -1,5 +1,6 @@
 # Builds VariedLayout.ttf and VariedLayoutTypo.ttf, the faces instancevaried.py
-# asks HarfBuzz about, into the directory it is given:
+# asks HarfBuzz about, and VariedAxes.ttf, which layout's tests set, into the
+# directory it is given:
 #
 #   make hbinstancevaried
 #
@@ -170,6 +171,36 @@ def build(path, typo):
     fb.save(path)
 
 
+def axes(path):
+    """VariedAxes.ttf: five axes and no deltas, for the layout tests of where
+    CSS Fonts 4 §7.2 places a face in its design space (layout's
+    fontinstance_test.go) — weight, width, optical size, slant and italic,
+    each with its default somewhere a test can tell from its ends."""
+    order = [".notdef", "space", "A", "B"]
+    fb = FontBuilder(1000, isTTF=True)
+    fb.setupGlyphOrder(order)
+    fb.setupCharacterMap({0x20: "space", 0x41: "A", 0x42: "B"})
+    fb.setupGlyf({g: rect(50, 0, 550, 700) for g in order})
+    fb.setupHorizontalMetrics({g: (600, 50) for g in order})
+    fb.setupHorizontalHeader(ascent=880, descent=-120)
+    fb.setupOS2(version=4, sTypoAscender=880, sTypoDescender=-120, usWinAscent=880, usWinDescent=120,
+                sxHeight=500, sCapHeight=700)
+    fb.setupNameTable({"familyName": "VariedAxes", "styleName": "Regular", "psName": "VariedAxes-Regular"})
+    fb.setupPost()
+    fb.setupFvar([("wght", 100, 400, 900, "Weight"), ("wdth", 50, 100, 150, "Width"),
+                  ("opsz", 8, 14, 144, "Optical size"), ("slnt", -15, 0, 0, "Slant"),
+                  ("ital", 0, 0, 1, "Italic")], [
+        {"location": {"wght": 700, "wdth": 100, "opsz": 14, "slnt": 0, "ital": 0}, "stylename": "Bold"},
+        {"location": {"wght": 300, "wdth": 75, "opsz": 72, "slnt": 0, "ital": 0},
+         "stylename": "Display Light Condensed"},
+    ])
+    fb.setupGvar({})
+    fb.font["head"].created = fb.font["head"].modified = 3660681600
+    fb.font.recalcTimestamp = False
+    fb.save(path)
+
+
 if __name__ == "__main__":
     build(os.path.join(sys.argv[1], "VariedLayout.ttf"), False)
     build(os.path.join(sys.argv[1], "VariedLayoutTypo.ttf"), True)
+    axes(os.path.join(sys.argv[1], "VariedAxes.ttf"))

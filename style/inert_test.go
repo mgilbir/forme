@@ -125,11 +125,6 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		"backface-visibility: hidden",
 		"backface-visibility: visible",
 		"backface-visibility: HIDDEN",
-		// The hyphens case again, found this time by looking for it rather than
-		// by being caught out: what this engine produces is "none", because it
-		// applies no variation to a face at all. The initial value is "auto",
-		// and "auto" is in the list below.
-		"font-optical-sizing: none",
 	} {
 		if reportsUnsupported(t, decl) {
 			t.Errorf("%q was reported, and it asks for the page that is already there", decl)
@@ -245,13 +240,6 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 		"perspective: 500px",
 		"font-variant-alternates: historical-forms",
 		"text-underline-position: under",
-		// And the hyphens case from the other side. "auto" asks for the face's
-		// optical size axis to be set from the font size, and this sets no axis;
-		// "initial" stands for "auto" and is reported with it. A table written
-		// from the specifications rather than from this engine would have these
-		// two silent and "none" reported, which is exactly backwards.
-		"font-optical-sizing: auto",
-		"font-optical-sizing: initial",
 	} {
 		if !reportsUnsupported(t, decl) {
 			t.Errorf("%q was not reported, and it asks for a page this engine does "+
@@ -303,11 +291,11 @@ func TestACSSWideKeywordIsResolvedBeforeItIsJudgedInert(t *testing.T) {
 			t.Errorf("%q was reported; it is the page this engine already draws", decl)
 		}
 	}
-	// "font-variation-settings" does inherit, so the parent's value decides and
+	// "font-variant-alternates" does inherit, so the parent's value decides and
 	// this cannot know it.
 	for _, decl := range []string{
-		"font-variation-settings: unset", "font-variation-settings: revert",
-		"font-variation-settings: revert-layer",
+		"font-variant-alternates: unset", "font-variant-alternates: revert",
+		"font-variant-alternates: revert-layer",
 		"text-decoration-skip-ink: unset",
 	} {
 		if !reportsUnsupported(t, decl) {
@@ -316,7 +304,7 @@ func TestACSSWideKeywordIsResolvedBeforeItIsJudgedInert(t *testing.T) {
 		}
 	}
 	// And "inherit" is never resolvable, whichever half the property is in.
-	for _, decl := range []string{"resize: inherit", "font-variation-settings: inherit"} {
+	for _, decl := range []string{"resize: inherit", "font-variant-alternates: inherit"} {
 		if !reportsUnsupported(t, decl) {
 			t.Errorf("%q was not reported; the parent's value can be anything", decl)
 		}
@@ -539,5 +527,35 @@ func TestAPropertyWithNoEffectInThisMediumIsInertWhateverItSays(t *testing.T) {
 	if !properties["writing-mode"].inherits {
 		t.Error("writing-mode does not inherit, so a rule on a container leaves " +
 			"its paragraphs horizontal")
+	}
+}
+
+// TestFontVariationPropertiesAreApplied: font-optical-sizing and
+// font-variation-settings left the table above when layout began applying
+// them, and every value of either is a property's value now — none reported
+// as asking for something undone, and an ill-formed one refused as invalid.
+func TestFontVariationPropertiesAreApplied(t *testing.T) {
+	for _, decl := range []string{
+		"font-optical-sizing: auto", "font-optical-sizing: none", "font-optical-sizing: initial",
+		"font-variation-settings: normal", `font-variation-settings: "wght" 650`,
+		`font-variation-settings: "wdth" 75.5, "XHGT" -0.2, "opsz" 1e2`,
+		"font-variation-settings: inherit",
+	} {
+		if reportsUnsupported(t, decl) {
+			t.Errorf("%q was reported as unsupported", decl)
+		}
+	}
+	for _, decl := range []string{
+		`font-variation-settings: "wght"`, `font-variation-settings: "wgh" 1`,
+		`font-variation-settings: wght 1`, `font-variation-settings: "wght" 1 2`,
+		"font-optical-sizing: sometimes",
+	} {
+		doc := parseDoc(t, `<p id="p">x</p>`)
+		styled := Apply(doc, []Sheet{author(t, `#p { `+decl+` }`)})
+		name := decl[:strings.Index(decl, ":")]
+		if got := styled.Styles[elementFor(t, doc, "#p")].Get(name); got != map[string]string{
+			"font-variation-settings": "normal", "font-optical-sizing": "auto"}[name] {
+			t.Errorf("%q was applied as %q; it is not a value of the property", decl, got)
+		}
 	}
 }

@@ -41,6 +41,7 @@ import (
 // firstLineApplies are the properties this engine takes from a ::first-line.
 var firstLineApplies = []string{
 	"font-family", "font-size", "font-weight", "font-style", "font-width",
+	"font-variation-settings", "font-optical-sizing",
 	"line-height", "letter-spacing", "word-spacing", "color", "text-shadow",
 	"text-emphasis-style", "text-emphasis-color", "text-emphasis-position",
 }

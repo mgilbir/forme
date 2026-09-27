@@ -161,8 +161,8 @@ var properties = map[string]property{
 	// percentage of its normal width. It inherits like the rest of the font,
 	// and font-stretch is its legacy name (see the shorthands table). Layout
 	// chooses a face by it — §5.2 tries it before the style and the weight —
-	// and nothing geometrically stretches a face that has no width to offer,
-	// which §2.3 forbids.
+	// and a variable face's 'wdth' axis is set from it; nothing geometrically
+	// stretches a face that has no width to offer, which §2.3 forbids.
 	"font-width":     {true, "normal"},
 	"line-height":    {true, "normal"},
 	"letter-spacing": {true, "normal"},
@@ -268,6 +268,12 @@ var properties = map[string]property{
 	// font's own rules, applied as the font states them.
 	"font-variant-ligatures": {true, "normal"},
 	"font-feature-settings":  {true, "normal"},
+	// CSS Fonts 4 §8.2 and §8.1: the axes of a variable face set by tag, and
+	// whether its optical size axis follows the font size. Both inherit, and
+	// both are the last of §7.2's steps that place a variable face in its
+	// design space — see layout/fontinstance.go, which applies them.
+	"font-variation-settings": {true, "normal"},
+	"font-optical-sizing":     {true, "auto"},
 	// CSS Fonts 4 §6.6. It inherits like the rest of the family, and its
 	// initial value is "normal" — the letters the text is written with.
 	//
@@ -699,7 +705,7 @@ var shorthands = map[string]shorthand{
 		"font-style", "font-weight", "font-width", "font-size", "font-family", "line-height",
 		"font-variant-caps", "font-variant-ligatures", "font-variant-numeric",
 		"font-variant-east-asian", "font-variant-position", "font-kerning",
-		"font-feature-settings"}},
+		"font-feature-settings", "font-optical-sizing", "font-variation-settings"}},
 
 	// CSS Fonts 4 §6.10, for the five longhands this engine has. See
 	// fontVariantShorthand for why the property is expanded rather than read.
