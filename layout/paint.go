@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -124,13 +126,16 @@ type DrawText struct {
 	// Layout measures the run by what shaping reports for it with
 	// shape.Features.Vertical, per glyph — Glyph.YAdvance, and VOriginX and
 	// VOriginY across — where the face states vertical metrics (its vmtx: see
-	// shape.Face.StatesVerticalMetrics). A backend that shapes the run the same
-	// way and steps its pen by YAdvance draws the glyphs where layout placed
-	// them. Where the face states none the pen moves one em a character and
-	// the run is one em across, because CSS Writing Modes §4.4 says to
-	// synthesize the vertical metrics a face does not state and the em box is
-	// the synthesis; shaping's own synthesis for such a face, the height of its
-	// line, is HarfBuzz's and not CSS's, and a backend has to use the em.
+	// shape.Face.StatesVerticalMetrics). Where the face states none the pen
+	// moves one em a character and the run is one em across, because CSS
+	// Writing Modes §4.4 says to synthesize the vertical metrics a face does
+	// not state and the em box is the synthesis; shaping's own synthesis for
+	// such a face, the height of its line, is HarfBuzz's and not CSS's.
+	//
+	// ShapedGlyphs gives a backend both: an upright run comes back shaped with
+	// Features.Vertical, and with the em as its advances where the face states
+	// no vertical metrics. A backend that draws its glyphs and steps its pen
+	// down by -YAdvance draws them where layout placed them.
 	Upright bool
 	Face    *shape.Face
 	Size    style.Unit
@@ -1529,9 +1534,9 @@ func uprightExtent(v DrawText) (along, above, below style.Unit) {
 	if !v.Face.StatesVerticalMetrics() {
 		return v.Size.Mul(float64(uprightUnits(v.Text))), half, half
 	}
-	off := v.Features
-	off.Vertical = true
-	glyphs, _ := v.Face.ShapeGlyphsInContext(v.Text, v.PreContext, v.PostContext, off)
+	// The glyphs a backend draws: see ShapedGlyphs, which is what makes the
+	// run's extent and its drawing one answer.
+	glyphs, _ := shapedUpright(v)
 	if len(glyphs) == 0 {
 		return 0, half, half
 	}
@@ -2487,9 +2492,24 @@ func ShapedText(v DrawText) string {
 // run after it is drawn in the wrong place too. A backend calling ShapeGlyphs
 // directly gets that wrong silently, which is why the pairing is stated here
 // rather than left as something every backend has to remember.
+//
+// An upright run (DrawText.Upright) is shaped as layout measured it: with
+// shape.Features.Vertical and the run's own features, its text and its context,
+// so each glyph comes back with YAdvance, VOriginX and VOriginY and an XAdvance
+// of zero, and the pen steps down by -YAdvance. Where the face states no
+// vertical metrics the advances are the em CSS Writing Modes §4.4 has layout
+// synthesize rather than shaping's own synthesis: each character that takes
+// an advance upright (paragraph.UprightUnits) gives one em to the first of its
+// glyphs, and every other glyph advances nothing. Either way the advances sum
+// to the extent layout gave the run. It shaped an upright run as a horizontal
+// one before, so a backend that followed it drew the run at the face's
+// horizontal advances, down a column layout had measured by the vertical ones.
 func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 	if v.Face == nil {
 		return nil, 0
+	}
+	if v.Upright {
+		return shapedUpright(v)
 	}
 	if !v.ContextKerns {
 		// The neighbour is set in another face, so its characters decide this
@@ -2502,6 +2522,59 @@ func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 	return v.Face.ShapeGlyphsMerged(ShapedText(v), v.PreContext, v.PostContext,
 		v.MergePre, v.MergePost, true,
 		v.Features)
+}
+
+// shapedUpright is ShapedGlyphs for an upright run.
+//
+// The text is the run's own and not ShapedText's. An upright run is not cut by
+// direction — every character of it is set in the order it is written, as CSS
+// Writing Modes §5.1 has them treated as strong left-to-right — and layout
+// measured the text as it is (see paragraph's uprightKey); an override in
+// front of it would be one more character than the run layout measured.
+func shapedUpright(v DrawText) ([]shape.Glyph, int) {
+	off := v.Features
+	off.Vertical = true
+	glyphs, missing := v.Face.ShapeGlyphsInContext(v.Text, v.PreContext, v.PostContext, off)
+	if !v.Face.StatesVerticalMetrics() {
+		emPerUnit(glyphs, v.Text)
+	}
+	return glyphs, missing
+}
+
+// emPerUnit sets the advances of an upright run in a face with no vertical
+// metrics: one em, in the thousandths a glyph is measured in, for each
+// character UprightUnits counts, given to the first glyph of the ones that
+// character's cluster is drawn with, and nothing to any other glyph.
+//
+// A character's glyph is the one whose cluster is the last at or before it:
+// where a character was drawn into the glyph of the one before it — shaping
+// merged the two — its em goes to that glyph, so the total is kept whatever
+// the face did. The glyphs are taken in order of their cluster, which is the
+// order they come in already for an upright run, and "first" is the earliest
+// of those with one cluster.
+func emPerUnit(glyphs []shape.Glyph, text string) {
+	if len(glyphs) == 0 {
+		return
+	}
+	order := make([]int, len(glyphs))
+	for i := range order {
+		order[i] = i
+		glyphs[i].YAdvance = 0
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return glyphs[a].Cluster - glyphs[b].Cluster })
+	// k is the last glyph whose cluster is at or before the character, and
+	// first the earliest glyph with k's cluster. Both only move forward, so
+	// the walk is linear in the glyphs and the characters together.
+	k, first := 0, 0
+	for _, start := range paragraph.AppendUprightUnitStarts(nil, text) {
+		for k+1 < len(order) && glyphs[order[k+1]].Cluster <= start {
+			k++
+			if glyphs[order[k]].Cluster != glyphs[order[k-1]].Cluster {
+				first = k
+			}
+		}
+		glyphs[order[first]].YAdvance -= 1000
+	}
 }
 
 // maxLayerMarks bounds the rectangles one background layer is drawn as.

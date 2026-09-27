@@ -48,3 +48,35 @@ func TestWhichCharactersStandUprightInVerticalText(t *testing.T) {
 		t.Error("the empty string does")
 	}
 }
+
+// TestUprightUnitStartsAreTheUnitsCounted: the starts are where the characters
+// UprightUnits counts begin, and there are as many as it counts — a mark and a
+// default ignorable are in the cluster before them or in none.
+func TestUprightUnitStartsAreTheUnitsCounted(t *testing.T) {
+	for _, c := range []struct {
+		text string
+		want []int
+	}{
+		{"", nil},
+		{"abc", []int{0, 1, 2}},
+		{"ab́cd", []int{0, 1, 4, 5}},
+		{"a‍b", []int{0, 4}},
+		{"́a", []int{2}},
+		{"กิx", []int{0, 6}},
+	} {
+		got := AppendUprightUnitStarts(nil, c.text)
+		if len(got) != len(c.want) {
+			t.Errorf("%q: starts %v, want %v", c.text, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%q: starts %v, want %v", c.text, got, c.want)
+				break
+			}
+		}
+		if n := UprightUnits(c.text); n != len(got) {
+			t.Errorf("%q: %d starts and UprightUnits counts %d", c.text, len(got), n)
+		}
+	}
+}

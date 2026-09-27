@@ -855,17 +855,15 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 		}}
 	}
 	text := ShapedText(v)
-	glyphs, _ := ShapedGlyphs(v)
-	// An upright run in a face that states vertical metrics is drawn as a
-	// backend following DrawText.Upright draws it: shaped with
-	// shape.Features.Vertical, the pen stepping down by each glyph's
-	// YAdvance.
-	vertical := v.Upright && v.Face.StatesVerticalMetrics()
-	if vertical {
-		off := v.Features
-		off.Vertical = true
-		glyphs, _ = v.Face.ShapeGlyphsInContext(text, v.PreContext, v.PostContext, off)
+	// An upright run is drawn as a backend following DrawText.Upright draws
+	// it: its glyphs are ShapedGlyphs', shaped with shape.Features.Vertical and
+	// with the em as their advances where the face states no vertical metrics,
+	// and the pen steps down by each glyph's YAdvance. Its text is its own —
+	// see shapedUpright.
+	if v.Upright {
+		text = v.Text
 	}
+	glyphs, _ := ShapedGlyphs(v)
 	var out []textMark
 	// How far along the run each glyph is. Along, and not "x": a sideways run
 	// advances down the page, so the pen moves in y and the baseline's x is
@@ -881,17 +879,8 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 	spaceAfter := spacingAfterGlyph(v, text, glyphs)
 	for i, g := range glyphs {
 		adv, _ := style.FromPx(g.XAdvance * v.Size.Px() / 1000)
-		if vertical {
+		if v.Upright {
 			adv, _ = style.FromPx(-g.YAdvance * v.Size.Px() / 1000)
-		} else if v.Upright {
-			// One em per character, whatever the face's horizontal advance
-			// for it is, and nothing for a mark that is drawn on the character
-			// in front of it. See DrawText.Upright and paragraph.UprightUnits,
-			// which is the same count in the aggregate.
-			adv = 0
-			if uprightUnits(clusterText(text, g.Cluster)) > 0 {
-				adv = v.Size
-			}
 		}
 		if !blankCluster(text, g.Cluster) {
 			off, _ := style.FromPx(g.XOffset * v.Size.Px() / 1000)

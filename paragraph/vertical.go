@@ -84,6 +84,27 @@ func OrientationMix(text string) (upright, rotated bool) {
 // rules are one definition and would be a bug apart.
 func UprightUnits(text string) int {
 	n := 0
+	eachUprightUnit(text, func(int) { n++ })
+	return n
+}
+
+// AppendUprightUnitStarts appends where each of the characters UprightUnits
+// counts begins in text, as a byte offset, in order.
+//
+// It is the same count, placed: what a caller needs to hand each of those
+// characters its em when it holds the glyphs rather than the total — a
+// backend stepping a pen down an upright run in a face with no vertical
+// metrics. The two are one walk so that they cannot disagree about what a
+// character is.
+func AppendUprightUnitStarts(dst []int, text string) []int {
+	eachUprightUnit(text, func(start int) { dst = append(dst, start) })
+	return dst
+}
+
+// eachUprightUnit calls f with the start of each grapheme cluster of text that
+// takes an advance upright: one that holds a character other than a default
+// ignorable or a combining mark.
+func eachUprightUnit(text string, f func(start int)) {
 	// The cluster boundaries are found once. They were found inside the loop —
 	// the whole string walked again per cluster, which is the same answer every
 	// time and quadratic in the length of the run.
@@ -97,10 +118,9 @@ func UprightUnits(text string) int {
 			if IsDefaultIgnorable(r) || charprop.Is(r, charprop.Mn|charprop.Me) {
 				continue
 			}
-			n++
+			f(start)
 			break
 		}
 		start = end
 	}
-	return n
 }
