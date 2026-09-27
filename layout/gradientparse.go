@@ -31,8 +31,11 @@ import (
 // always was, and painted as nothing:
 //
 //   - CSS Images 4's two additions to <radial-size>, a percentage circle and
-//     two extent keywords, which no browser reads yet either;
-//   - an angle written as calc().
+//     two extent keywords, which no browser reads yet either.
+//
+// An angle anywhere in a gradient — a direction, a conic gradient's "from", a
+// conic stop's position — may be a calc(), which style.ParseAngle evaluates
+// with the arithmetic lengths have.
 
 // maxGradientStops bounds the colour stops and transition hints one gradient may
 // have.
@@ -420,39 +423,16 @@ func isLengthPercentage(l style.Length) bool {
 	return false
 }
 
-// gradientAngle reads an <angle>, or the <zero> CSS Images 4 allows in its
-// place, in degrees.
+// gradientAngle reads an <angle>, a calc() of one, or the <zero> CSS Images 4
+// allows in its place, in degrees.
 func gradientAngle(part []css.ComponentValue) (float64, bool) {
-	if len(part) != 1 || !part[0].IsToken() {
+	if len(part) != 1 {
 		return 0, false
 	}
-	t := part[0].Token
-	switch t.Kind {
-	case css.Number:
-		return 0, t.Number == 0
-	case css.Dimension:
-		deg, ok := degreesPer(t.Unit)
-		if !ok || math.IsNaN(t.Number) || math.IsInf(t.Number, 0) {
-			return 0, false
-		}
-		return t.Number * deg, true
+	if part[0].IsToken() && part[0].Token.Kind == css.Number {
+		return 0, part[0].Token.Number == 0
 	}
-	return 0, false
-}
-
-// degreesPer is how many degrees one of an angle unit is.
-func degreesPer(unit string) (float64, bool) {
-	switch ascii.Lower(unit) {
-	case "deg":
-		return 1, true
-	case "grad":
-		return 0.9, true
-	case "rad":
-		return 180 / math.Pi, true
-	case "turn":
-		return 360, true
-	}
-	return 0, false
+	return style.ParseAngle(part)
 }
 
 // gradientColour reads a stop's colour. "currentcolor" is the box's own colour,
@@ -513,14 +493,15 @@ func (l *layouter) readColourStops(b *Box, s *gradientSpec, args [][]css.Compone
 // a conic gradient an angle-percentage, which is held as a percentage of a turn.
 func (l *layouter) stopPosition(b *Box, s *gradientSpec, part []css.ComponentValue) (style.Length, bool) {
 	if s.kind == ConicGradient {
-		if len(part) == 1 && part[0].IsToken() && part[0].Token.Kind == css.Percentage {
-			return style.Length{Kind: style.LengthPercent, Percent: part[0].Token.Number}, true
-		}
-		deg, ok := gradientAngle(part)
+		// An <angle-percentage>, a calc() summing an angle and a percentage
+		// among them: a percentage is of a turn, so the two add as that.
+		deg, pct, ok := style.ParseAnglePercentage(part)
 		if !ok {
-			return style.Length{}, false
+			if deg, ok = gradientAngle(part); !ok {
+				return style.Length{}, false
+			}
 		}
-		return style.Length{Kind: style.LengthPercent, Percent: deg / 360 * 100}, true
+		return style.Length{Kind: style.LengthPercent, Percent: pct + deg/360*100}, true
 	}
 	length, ok := l.lengthOfValues(b, part)
 	if !ok || !isLengthPercentage(length) {

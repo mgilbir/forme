@@ -10,6 +10,12 @@ import (
 
 // calc(), from CSS Values and Units.
 //
+// An expression here is a length, or an angle. The two share the grammar and
+// the arithmetic and differ only in the unit their dimensions measure: a
+// length's is resolved against the LengthContext, and an angle's is a number of
+// degrees wherever it is written. Adding one to the other is a type error, as
+// adding either to a number is.
+//
 // # Why it is evaluated here and not later
 //
 // A calc() is a length like any other, and this file's job is to turn one into
@@ -41,16 +47,21 @@ import (
 // here is calc() and the parentheses inside it.
 
 // calcTerm is a value part-way through an expression: a plain number, or a
-// length with an absolute part and a percentage part.
+// dimension — a length or an angle — with a percentage part beside it.
 //
-// The two are kept apart because the grammar treats them differently — a number
-// may multiply a length and a length may not multiply a length — and because
-// "calc(2 * 3)" is a number, which is not a length and not accepted as one.
+// The kinds are kept apart because the grammar treats them differently — a
+// number may multiply a length and a length may not multiply a length — and
+// because "calc(2 * 3)" is a number, which is not a length and not accepted as
+// one. A bare percentage is neither a length nor an angle until it is added to
+// one, and so has neither flag.
 type calcTerm struct {
 	number   float64
 	abs      Unit
+	deg      float64
 	pct      float64
 	isNumber bool
+	isLength bool
+	isAngle  bool
 }
 
 // evalCalc reads a calc() function's arguments into a length.
@@ -60,7 +71,7 @@ type calcTerm struct {
 // is invalid and the caller drops it.
 func evalCalc(vals []css.ComponentValue, ctx LengthContext) (Length, bool) {
 	t, rest, ok := calcSum(vals, ctx)
-	if !ok || len(skipSpace(rest)) != 0 || t.isNumber {
+	if !ok || len(skipSpace(rest)) != 0 || t.isNumber || t.isAngle {
 		return Length{}, false
 	}
 	t.pct = censored(t.pct)
@@ -201,6 +212,12 @@ func calcValue(vals []css.ComponentValue, ctx LengthContext) (calcTerm, []css.Co
 		return calcTerm{pct: v.Token.Number}, vals[1:], true
 
 	case v.IsToken() && v.Token.Kind == css.Dimension:
+		if deg, ok := degreesPer(v.Token.Unit); ok {
+			if math.IsNaN(v.Token.Number) || math.IsInf(v.Token.Number, 0) {
+				return calcTerm{}, nil, false
+			}
+			return calcTerm{deg: v.Token.Number * deg, isAngle: true}, vals[1:], true
+		}
 		px, known, supported := pxPerUnit(v.Token.Unit, ctx)
 		if !supported || !known {
 			return calcTerm{}, nil, false
@@ -209,7 +226,7 @@ func calcValue(vals []css.ComponentValue, ctx LengthContext) (calcTerm, []css.Co
 		if !ok {
 			return calcTerm{}, nil, false
 		}
-		return calcTerm{abs: u}, vals[1:], true
+		return calcTerm{abs: u, isLength: true}, vals[1:], true
 	}
 	return calcTerm{}, nil, false
 }
@@ -226,18 +243,23 @@ func calcOperator(v css.ComponentValue, of string) (byte, bool) {
 	return c, true
 }
 
-// calcAdd is "+" and "-": both operands have to be the same kind of thing.
+// calcAdd is "+" and "-": both operands have to be the same kind of thing, and
+// a percentage takes the kind of what it is added to. A length added to an
+// angle is carried as both, and refused where the expression is read, since
+// nothing reads both: evalCalc refuses an angle and ParseAnglePercentage a
+// length.
 func calcAdd(a, b calcTerm, minus bool) (calcTerm, bool) {
 	if a.isNumber != b.isNumber {
 		return calcTerm{}, false
 	}
 	if minus {
-		b.number, b.abs, b.pct = -b.number, Unit(0).Sub(b.abs), -b.pct
+		b.number, b.abs, b.deg, b.pct = -b.number, Unit(0).Sub(b.abs), -b.deg, -b.pct
 	}
 	if a.isNumber {
 		return calcTerm{number: a.number + b.number, isNumber: true}, true
 	}
-	return calcTerm{abs: a.abs.Add(b.abs), pct: a.pct + b.pct}, true
+	return calcTerm{abs: a.abs.Add(b.abs), deg: a.deg + b.deg, pct: a.pct + b.pct,
+		isLength: a.isLength || b.isLength, isAngle: a.isAngle || b.isAngle}, true
 }
 
 // calcMul is "*": one side has to be a number, since a length times a length is
@@ -247,11 +269,17 @@ func calcMul(a, b calcTerm) (calcTerm, bool) {
 	case a.isNumber && b.isNumber:
 		return calcTerm{number: a.number * b.number, isNumber: true}, true
 	case a.isNumber:
-		return calcTerm{abs: b.abs.Mul(a.number), pct: b.pct * a.number}, true
+		return scaled(b, a.number), true
 	case b.isNumber:
-		return calcTerm{abs: a.abs.Mul(b.number), pct: a.pct * b.number}, true
+		return scaled(a, b.number), true
 	}
 	return calcTerm{}, false
+}
+
+// scaled is a dimension or a percentage multiplied by a number.
+func scaled(t calcTerm, by float64) calcTerm {
+	return calcTerm{abs: t.abs.Mul(by), deg: t.deg * by, pct: t.pct * by,
+		isLength: t.isLength, isAngle: t.isAngle}
 }
 
 // calcDiv is "/": the divisor has to be a number, and not zero.
@@ -262,7 +290,69 @@ func calcDiv(a, b calcTerm) (calcTerm, bool) {
 	if a.isNumber {
 		return calcTerm{number: a.number / b.number, isNumber: true}, true
 	}
-	return calcTerm{abs: a.abs.Div(b.number), pct: a.pct / b.number}, true
+	return calcTerm{abs: a.abs.Div(b.number), deg: a.deg / b.number, pct: a.pct / b.number,
+		isLength: a.isLength, isAngle: a.isAngle}, true
+}
+
+// ParseAngle reads an <angle>: a dimension in deg, grad, rad or turn, or a
+// calc() whose type is <angle>, in degrees. The <zero> some grammars allow in
+// an angle's place is theirs to read; "calc(0)" is a number and not an angle.
+func ParseAngle(vals []css.ComponentValue) (float64, bool) {
+	deg, pct, ok := ParseAnglePercentage(vals)
+	if !ok || pct != 0 {
+		return 0, false
+	}
+	return deg, true
+}
+
+// ParseAnglePercentage reads an <angle-percentage>: an angle, a percentage, or a
+// calc() that sums them, as its degrees and its percentage apart, since what
+// the percentage is of is the caller's. A NaN or an infinity the arithmetic
+// makes is refused rather than censored as a length's is: an angle has no
+// largest value to stand for one.
+func ParseAnglePercentage(vals []css.ComponentValue) (deg, pct float64, ok bool) {
+	vals = skipSpace(vals)
+	if len(vals) == 0 {
+		return 0, 0, false
+	}
+	var t calcTerm
+	switch v := vals[0]; {
+	case v.IsFunction() && ascii.EqualFold(v.Token.Value, "calc"):
+		var rest []css.ComponentValue
+		t, rest, ok = calcSum(v.Values, LengthContext{})
+		if !ok || len(skipSpace(rest)) != 0 {
+			return 0, 0, false
+		}
+	case v.IsToken() && (v.Token.Kind == css.Dimension || v.Token.Kind == css.Percentage):
+		t, _, ok = calcValue(vals[:1], LengthContext{})
+		if !ok {
+			return 0, 0, false
+		}
+	default:
+		return 0, 0, false
+	}
+	if len(skipSpace(vals[1:])) != 0 || t.isNumber || t.isLength {
+		return 0, 0, false
+	}
+	if math.IsNaN(t.deg) || math.IsInf(t.deg, 0) || math.IsNaN(t.pct) || math.IsInf(t.pct, 0) {
+		return 0, 0, false
+	}
+	return t.deg, t.pct, true
+}
+
+// degreesPer is how many degrees one of an angle unit is.
+func degreesPer(unit string) (float64, bool) {
+	switch ascii.Lower(unit) {
+	case "deg":
+		return 1, true
+	case "grad":
+		return 0.9, true
+	case "rad":
+		return 180 / math.Pi, true
+	case "turn":
+		return 360, true
+	}
+	return 0, false
 }
 
 // skipSpace drops the white space in front of a value.

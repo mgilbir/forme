@@ -443,7 +443,8 @@ func TestAGradientIsReportedWhereItIsNotRead(t *testing.T) {
 		{"radial-gradient(circle 50%, red, blue)", false},                  // Images 3: no percentage circle
 		{"radial-gradient(ellipse 50px, red, blue)", false},
 		{"radial-gradient(circle 10px 20px, red, blue)", false},
-		{"linear-gradient(calc(10deg), red, blue)", false},
+		{"linear-gradient(calc(10deg), red, blue)", true},
+		{"linear-gradient(calc(10deg + 1px), red, blue)", false},
 		{"linear-gradient(red, 20%, 40%, blue)", false}, // two hints in a row
 		{"linear-gradient(20%, red, blue)", false},      // a hint first
 		{"linear-gradient(red, blue, 20%)", false},      // and last
@@ -605,5 +606,38 @@ func TestAGradientIsTiledByBackgroundSize(t *testing.T) {
 	}
 	if c := colourIn(g, 25, 10); !near(c, rgb(127.5, 0, 127.5)) {
 		t.Errorf("the middle of a tile is %v, want the even blend", c)
+	}
+}
+
+// TestAGradientAngleMayBeCalc: the angles of a gradient — a linear direction,
+// a conic gradient's "from" and a conic stop's position — may be calc(), and
+// each is the picture of the angle it computes to.
+func TestAGradientAngleMayBeCalc(t *testing.T) {
+	sameGradientPicture(t, `linear-gradient(calc(45deg + 0.1turn), red, blue)`, `linear-gradient(81deg, red, blue)`)
+	sameGradientPicture(t, `linear-gradient(calc(100grad * 2 - 90deg), red, blue)`, `linear-gradient(90deg, red, blue)`)
+	sameGradientPicture(t, `conic-gradient(from calc(1turn - 90deg), red, blue)`, `conic-gradient(from 270deg, red, blue)`)
+	sameGradientPicture(t, `conic-gradient(red, lime calc(25% + 45deg), blue)`, `conic-gradient(red, lime 37.5%, blue)`)
+	sameGradientPicture(t, `conic-gradient(red calc(10deg * 2), blue)`, `conic-gradient(red 20deg, blue)`)
+	// The suite's conic-gradient-calc-angle-percentage, a hint among them.
+	sameGradientPicture(t, `conic-gradient(lime, calc(0deg + 100%), blue)`, `conic-gradient(lime, 360deg, blue)`)
+	sameGradientPicture(t, `conic-gradient(lime calc(0deg + 100%), blue)`, `conic-gradient(lime 360deg, blue)`)
+	sameGradientPicture(t, `conic-gradient(lime calc(90deg + 0%), blue 0)`, `conic-gradient(lime 90deg, blue 0)`)
+	for _, v := range []string{
+		`linear-gradient(calc(45deg + 10px), red, blue)`,
+		`linear-gradient(calc(10%), red, blue)`,
+		`linear-gradient(calc(45), red, blue)`,
+		`conic-gradient(from calc(10deg + 1px), red, blue)`,
+	} {
+		if _, ok := tryGradientOf(t, v, ""); ok {
+			t.Errorf("%s was drawn", v)
+		}
+		fs := paintFindingsOf(t, `<div id="d"></div>`, noDefaults+`#d { width: 200px; height: 100px; background-image: `+v+` }`)
+		if !hasRule(fs, RuleUnsupportedValue) {
+			t.Errorf("%s was not reported: %v", v, fs)
+		}
+	}
+	if fs := paintFindingsOf(t, `<div id="d"></div>`, noDefaults+`#d { width: 200px; height: 100px;
+		background-image: linear-gradient(calc(45deg + 0.1turn), red, blue) }`); hasRule(fs, RuleUnsupportedValue) {
+		t.Errorf("a calc() angle was reported: %v", fs)
 	}
 }
