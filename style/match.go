@@ -517,7 +517,7 @@ func (m *Matcher) pseudo(p css.Pseudo, n *html.Node) bool {
 // link" — the same set this selects, and a second reading of "is a link" is a
 // second answer waiting to differ from this one.
 func isLink(n *html.Node) bool {
-	if !ascii.EqualFold(n.Name, "a") && !ascii.EqualFold(n.Name, "area") {
+	if n.Namespace != html.NamespaceHTML || !ascii.EqualFold(n.Name, "a") && !ascii.EqualFold(n.Name, "area") {
 		return false
 	}
 	return n.HasAttr("href")

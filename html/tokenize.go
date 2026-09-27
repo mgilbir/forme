@@ -93,6 +93,10 @@ type token struct {
 	text        string
 	selfClosing bool
 	offset      int
+	// ns is the namespace a prefix on the tag's name was bound to, before the
+	// parser dropped the prefix (see parser.resolveName), and empty where it
+	// had none or one this engine does not know.
+	ns string
 }
 
 type tokenizer struct {
@@ -108,9 +112,10 @@ type tokenizer struct {
 	// thing here: <style> and <script> hold ordinary character data, so "&gt;"
 	// in a stylesheet is a ">". See looksLikeXML.
 	xml bool
-	// foreign says the markup being read is inside an <svg> or a <math>, which
-	// the parser sets while it skips one. It changes one thing: a CDATA section
-	// is a CDATA section there in HTML as well as in XML.
+	// foreign says the markup being read is inside an <svg> or a <math>: the
+	// parser sets it while it skips an <svg>, and while a MathML element is
+	// the current node. It changes one thing: a CDATA section is a CDATA
+	// section there in HTML as well as in XML.
 	foreign bool
 }
 

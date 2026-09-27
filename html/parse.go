@@ -217,12 +217,17 @@ func (p *parser) run() {
 			p.text(tk)
 		case tokStartTag:
 			p.bindNamespaces(tk.attrs)
+			tk.ns = p.prefixNamespace(tk.name)
 			tk.name = p.resolveName(tk.name)
 			p.startTag(tk)
 		case tokEndTag:
 			tk.name = p.resolveName(tk.name)
 			p.endTag(tk)
 		}
+		// What the next token is read in: a CDATA section is text where the
+		// current node is not an HTML element (the tokenizer's "adjusted
+		// current node" clause), which inside MathML it may be.
+		p.tok.foreign = p.current().Namespace != NamespaceHTML
 		if p.truncated {
 			p.finish()
 			return
@@ -289,6 +294,19 @@ func (p *parser) resolveName(name string) string {
 	return name
 }
 
+// prefixNamespace is the namespace a prefix on a name was bound to, where it
+// is one of the namespaces this engine knows, and empty otherwise.
+func (p *parser) prefixNamespace(name string) string {
+	i := strings.IndexByte(name, ':')
+	if i < 0 {
+		return ""
+	}
+	if uri := p.ns[name[:i]]; knownNamespaces[uri] {
+		return uri
+	}
+	return ""
+}
+
 func (p *parser) element(name string, offset int) *Node {
 	p.nodes++
 	return &Node{Type: ElementNode, Name: name, Offset: offset}
@@ -327,7 +345,7 @@ func (p *parser) fosterParentOf(name string) (parent, before *Node, ok bool) {
 	// from the top of the stack.
 	for i := len(p.open) - 1; i >= 0; i-- {
 		el := p.open[i]
-		if !tableContexts[el.Name] {
+		if !isIn(tableContexts, el) {
 			return nil, nil, false
 		}
 		if el.Name == "table" {
@@ -382,7 +400,7 @@ func onlyWhiteSpace(s string) bool {
 // mode: a <noscript> is open and the body has not begun, which can only be a
 // <noscript> in the head.
 func (p *parser) inHeadNoscript() bool {
-	return !p.bodyStarted && len(p.open) > 0 && p.open[len(p.open)-1].Name == "noscript"
+	return !p.bodyStarted && len(p.open) > 0 && isHTML(p.open[len(p.open)-1], "noscript")
 }
 
 func (p *parser) text(tk token) {
@@ -527,7 +545,17 @@ func (p *parser) tooDeep(off int) {
 	}
 }
 
+// startTag is §13.2.6's dispatcher for a start tag: the rules for foreign
+// content inside MathML, and HTML's everywhere else. See mathml.go.
 func (p *parser) startTag(tk token) {
+	if p.foreignRules(tk) {
+		p.foreignStartTag(tk)
+		return
+	}
+	p.htmlStartTag(tk)
+}
+
+func (p *parser) htmlStartTag(tk token) {
 	name := tk.name
 
 	if p.inHeadNoscript() {
@@ -589,10 +617,11 @@ func (p *parser) startTag(tk token) {
 	}
 
 	if foreignElements[name] {
-		// A foreign element is a replaced element: it has a box, and its content
-		// is not HTML. The element stays, its source is kept for whoever can
-		// read it, and the subtree is not parsed on — which is what used to
-		// splice an SVG's text into the paragraph around it.
+		// An <svg> is a replaced element: it has a box, and its content is not
+		// HTML. The element stays, its source is kept for whoever can read it,
+		// and the subtree is not parsed on — which is what used to splice an
+		// SVG's text into the paragraph around it. A <math> is the other
+		// foreign root, and its content is parsed on: see mathml.go.
 		//
 		// It is content, so it starts the body, which every other content
 		// element does on the line below its own insertion and this one did
@@ -619,6 +648,20 @@ func (p *parser) startTag(tk token) {
 			for i := range el.Attrs {
 				el.Attrs[i].Name = adjust(el.Attrs[i].Name)
 			}
+		}
+		if el != nil && name == "math" {
+			// MathML is parsed on, as a tree: see mathml.go. What is inside
+			// the element is read by the rules for foreign content while it is
+			// the current node.
+			el.Namespace = NamespaceMathML
+			if !tk.selfClosing {
+				p.open = append(p.open, el)
+				p.tooDeep(tk.offset)
+			}
+			return
+		}
+		if el != nil {
+			el.Namespace = NamespaceSVG
 		}
 		if el != nil && !tk.selfClosing {
 			start := p.tok.pos
@@ -952,11 +995,11 @@ func (p *parser) enterBody() {
 // met first, looking outward, or the element is not open at all.
 func (p *parser) inScope(name string, scope map[string]bool) int {
 	for i := len(p.open) - 1; i >= 0; i-- {
-		n := p.open[i].Name
-		if n == name {
+		n := p.open[i]
+		if isHTML(n, name) {
 			return i
 		}
-		if scope[n] {
+		if isIn(scope, n) {
 			return -1
 		}
 	}
@@ -980,11 +1023,11 @@ func (p *parser) inScope(name string, scope map[string]bool) int {
 // "clear the stack back to a table context" say nothing about them either.
 func (p *parser) closeTo(at int, by string, off int, tableQuiet bool) {
 	for i := len(p.open) - 1; i > at; i-- {
-		n := p.open[i].Name
-		if impliedEndTags[n] || tableQuiet && tableStructure[n] {
+		n := p.open[i]
+		if isIn(impliedEndTags, n) || tableQuiet && isIn(tableStructure, n) {
 			continue
 		}
-		p.tok.fail(off, by+" closes <"+shown(p.open[at].Name)+">, and <"+shown(n)+
+		p.tok.fail(off, by+" closes <"+shown(p.open[at].Name)+">, and <"+shown(n.Name)+
 			"> inside it is still open; tags have to nest")
 		break
 	}
@@ -1111,12 +1154,12 @@ func (p *parser) closeFor(name string, off int) {
 // <address>, <div> or <p> stands between it and the tag.
 func (p *parser) closeListItem(off int, by string, isItem func(string) bool) {
 	for i := len(p.open) - 1; i >= 0; i-- {
-		n := p.open[i].Name
-		if isItem(n) {
+		n := p.open[i]
+		if n.Namespace == NamespaceHTML && isItem(n.Name) {
 			p.closeTo(i, by, off, false)
 			return
 		}
-		if specialElements[n] && n != "address" && n != "div" && n != "p" {
+		if isIn(specialElements, n) && !isHTML(n, "address") && !isHTML(n, "div") && !isHTML(n, "p") {
 			return
 		}
 	}
@@ -1147,12 +1190,12 @@ func (p *parser) closeForTablePart(name string, off int) {
 	for {
 		at := -1
 		for i := len(p.open) - 1; i >= 0; i-- {
-			n := p.open[i].Name
-			if tableStructure[n] {
+			n := p.open[i]
+			if isIn(tableStructure, n) {
 				at = i
 				break
 			}
-			if tableScope[n] {
+			if isIn(tableScope, n) {
 				return
 			}
 		}
@@ -1181,7 +1224,16 @@ func (p *parser) closeForTablePart(name string, off int) {
 	}
 }
 
+// endTag is the dispatcher for an end tag, as startTag is for a start tag.
 func (p *parser) endTag(tk token) {
+	if p.foreignRules(tk) {
+		p.foreignEndTag(tk)
+		return
+	}
+	p.htmlEndTag(tk)
+}
+
+func (p *parser) htmlEndTag(tk token) {
 	name := tk.name
 
 	if name == "br" && !p.tok.xml {
@@ -1286,13 +1338,13 @@ func (p *parser) endTag(tk token) {
 	}
 	at, boundary := -1, ""
 	for i := len(p.open) - 1; i >= 0; i-- {
-		n := p.open[i].Name
-		if isTarget(n) {
+		n := p.open[i]
+		if n.Namespace == NamespaceHTML && isTarget(n.Name) {
 			at = i
 			break
 		}
-		if stop[n] {
-			boundary = n
+		if isIn(stop, n) {
+			boundary = n.Name
 			break
 		}
 	}
@@ -1312,7 +1364,7 @@ func (p *parser) endTag(tk token) {
 // further out than the tag can reach, past the element named by boundary.
 func (p *parser) endTagClosesNothing(name, boundary string, isTarget func(string) bool, off int) {
 	for _, el := range p.open {
-		if isTarget(el.Name) {
+		if el.Namespace == NamespaceHTML && isTarget(el.Name) {
 			p.tok.fail(off, "</"+shown(name)+"> cannot close the <"+shown(el.Name)+"> outside the <"+
 				shown(boundary)+"> it is written in, and is ignored")
 			return
@@ -1373,7 +1425,7 @@ func (p *parser) finish() {
 		if el == p.html || el == p.head || el == p.body {
 			continue
 		}
-		if closedAtEnd[el.Name] {
+		if isIn(closedAtEnd, el) {
 			continue
 		}
 		p.tok.fail(el.Offset, "<"+shown(el.Name)+"> is never closed")

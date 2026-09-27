@@ -140,6 +140,11 @@ func documentStylesheets(doc *html.Node, l *sheetLoader) []authorSheet {
 			return true
 		}
 		l.styleAttributeTooLarge(n)
+		if n.Namespace != html.NamespaceHTML {
+			// A <style> or a <link> inside MathML is an element of MathML's
+			// that happens to share the name, and is no stylesheet.
+			return true
+		}
 		switch ascii.Lower(n.Name) {
 		case "style":
 			// HTML §4.2.6 gives <style> a media attribute and means by it what

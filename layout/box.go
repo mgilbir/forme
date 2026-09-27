@@ -940,6 +940,15 @@ func replacedFallback(n *html.Node) bool {
 	if n == nil || n.Type != html.ElementNode {
 		return false
 	}
+	if n.Namespace == html.NamespaceMathML {
+		// A <math> is laid out by nothing yet: it stays the empty box it was
+		// when its content was source, reported as such (see
+		// replacedLoader.foreign), and its content is not laid out as HTML.
+		return ascii.EqualFold(n.Name, "math")
+	}
+	if n.Namespace != html.NamespaceHTML {
+		return false
+	}
 	return ascii.EqualFold(n.Name, "canvas") || ascii.EqualFold(n.Name, "video")
 }
 
@@ -1460,15 +1469,21 @@ func replacesItsOwnContent(n *html.Node) bool {
 	if n == nil {
 		return false
 	}
-	switch ascii.Lower(n.Name) {
-	case "img", "object":
-		return true
-	case "svg", "math":
-		// A foreign root is a replaced element: it has a box, and its content is
-		// not HTML but a picture the element carries with it. The parser keeps
+	switch n.Namespace {
+	case html.NamespaceHTML:
+		switch ascii.Lower(n.Name) {
+		case "img", "object":
+			return true
+		}
+	case html.NamespaceSVG:
+		// An <svg> is a replaced element: it has a box, and its content is not
+		// HTML but a picture the element carries with it. The parser keeps
 		// that content as source rather than parsing it — see html.Node.Foreign
 		// — and layout reads it exactly as it reads an SVG an <img> points at.
 		return true
+	case html.NamespaceMathML:
+		// A <math> is drawn as nothing yet, and as an empty replaced box.
+		return ascii.EqualFold(n.Name, "math")
 	}
 	return false
 }

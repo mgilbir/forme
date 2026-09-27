@@ -53,6 +53,14 @@ func FuzzParse(f *testing.F) {
 		"<A\x93", "<p \u00c0=1 a\u212a=2>", "<?xml version='1.0'?><P>x</P>",
 		// And control characters in names, which a message quotes.
 		"<a\x01b c\x1b=1>", "</x\u0085>",
+		// MathML, whose content is parsed by the rules for foreign content:
+		// break-outs, integration points, end tags that reach past it, and an
+		// XHTML formula whose namespaces are declared.
+		"<p><math><mi>x</mi><mfrac><mn>1</mn><div>y</div></mfrac></math></p>",
+		"<math><mtext><p>a</mtext><annotation-xml encoding=text/html><div>b</math></div>",
+		"<math><mrow><![CDATA[x]]></p></mrow><mglyph/><font color=red>",
+		`<?xml version="1.0"?><math xmlns="http://www.w3.org/1998/Math/MathML"><mi xmlns="urn:x">x</mi></math>`,
+		"<table><math><mtd><td>x",
 	}
 	for _, s := range seeds {
 		f.Add(s)

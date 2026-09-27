@@ -336,8 +336,10 @@ var closedAtEnd = setOf(
 
 // specialElements are HTML's "special" category: the elements an end tag for
 // some other name does not reach past, and the ones that end the search for an
-// open <li>, <dd> or <dt>. §13.2.4.2, without the MathML and SVG entries —
-// foreign content is never on this parser's stack.
+// open <li>, <dd> or <dt>. §13.2.4.2, with its MathML entries — the token
+// elements and <annotation-xml> — which isIn reads only of MathML elements;
+// SVG's are left out because an <svg>'s content is never on this parser's
+// stack.
 var specialElements = setOf(
 	"address", "applet", "area", "article", "aside", "base", "basefont",
 	"bgsound", "blockquote", "body", "br", "button", "caption", "center", "col",
@@ -350,6 +352,7 @@ var specialElements = setOf(
 	"source", "style", "summary", "table", "tbody", "td", "template",
 	"textarea", "tfoot", "th", "thead", "title", "tr", "track", "ul", "wbr",
 	"xmp",
+	"mi", "mo", "mn", "ms", "mtext", "annotation-xml",
 )
 
 // The four scopes of §13.2.4.2. Each is the set of elements at which the search
@@ -358,19 +361,25 @@ var specialElements = setOf(
 //
 // That is what keeps a cell's content from ending things outside the cell: a
 // "<p>" written in a table cell does not close a paragraph the table itself is
-// inside, because td is a boundary of every scope that p is looked for in.
+// inside, because td is a boundary of every scope that p is looked for in. The
+// MathML token elements and <annotation-xml> are boundaries of the first three
+// for the same reason: HTML written in an <mtext> does not reach the paragraph
+// the formula is in. isIn reads those names only of MathML elements.
 var (
 	defaultScope = setOf(
 		"applet", "caption", "html", "table", "td", "th", "marquee", "object",
 		"template",
+		"mi", "mo", "mn", "ms", "mtext", "annotation-xml",
 	)
 	listItemScope = setOf(
 		"applet", "caption", "html", "table", "td", "th", "marquee", "object",
 		"template", "ol", "ul",
+		"mi", "mo", "mn", "ms", "mtext", "annotation-xml",
 	)
 	buttonScope = setOf(
 		"applet", "caption", "html", "table", "td", "th", "marquee", "object",
 		"template", "button",
+		"mi", "mo", "mn", "ms", "mtext", "annotation-xml",
 	)
 	tableScope = setOf("html", "table", "template")
 
@@ -521,18 +530,16 @@ func setOf(names ...string) map[string]bool {
 // An unknown HTML element keeps its place in the tree and its content is parsed
 // on (see insertUnknown), which is right: the content *is* HTML, a browser
 // shows it, and a <fancy-callout> this engine has no style for has not lost its
-// words. A foreign element is the opposite case. Its children are SVG or
-// MathML, they mean nothing to an HTML layout, and their text is not text of
-// the document — so parsing on splices it into the flow, which is what
-// "<svg><text>x</text></svg>" did: an x in the surrounding paragraph's font, on
-// the paragraph's baseline, nowhere near the picture.
+// words. An <svg> is the opposite case. Its children are SVG, they mean nothing
+// to an HTML layout, and their text is not text of the document — so parsing
+// on splices it into the flow, which is what "<svg><text>x</text></svg>" did:
+// an x in the surrounding paragraph's font, on the paragraph's baseline,
+// nowhere near the picture. Its subtree is kept as source and skipped by
+// name-matched depth, which is what makes a nested <svg> inside an <svg> end
+// the right one.
 //
-// That is worse than the missing picture. A hole is visibly a hole; a stray
-// letter reads as the document's own and is what a reader would have to know the
-// source to catch.
-//
-// The subtree is skipped by name-matched depth, which is what makes a nested
-// <svg> inside an <svg> end the right one.
+// A <math> is the other root, and its subtree is parsed on as MathML, which
+// is laid out: see mathml.go.
 var foreignElements = map[string]bool{
 	"svg":  true,
 	"math": true,
