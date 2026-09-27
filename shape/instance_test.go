@@ -913,7 +913,12 @@ func TestInstanceIsAStaticFont(t *testing.T) {
 		avar: [][][2]float64{{{-1, -1}, {0, 0}, {1, 1}}, {{-1, -1}, {0, 0}, {1, 1}}},
 		hvar: oneRegionHVAR(50),
 		extra: map[string][]byte{
-			"MVAR": dummy, "STAT": dummy, "VVAR": dummy, "cvar": dummy,
+			// MVAR is read now — its deltas are applied before it is dropped,
+			// and one that cannot be read refuses the instance, as HVAR's does
+			// — so it is a table that says nothing rather than eight bytes of
+			// nothing: version 1.0, eight-byte records, none of them, no store.
+			"MVAR": {0, 1, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0},
+			"STAT": dummy, "VVAR": dummy, "cvar": dummy,
 			"cvt ": dummy, "fpgm": dummy, "prep": dummy,
 		},
 	}.build(t)

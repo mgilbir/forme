@@ -432,6 +432,10 @@ func useFace(face *Face) {
 	_ = face.Program()
 	_ = face.GlyphAdvances()
 	_ = face.StatesVerticalMetrics()
+	// Every instance's name is looked at: a match that accepts nothing walks
+	// the whole of fvar and the name table.
+	_, _ = face.NamedInstance(func(string) bool { return false })
+	_, _ = face.NamedInstance(func(string) bool { return true })
 
 	// Per glyph, past the end of the table as well: a count a font states and a
 	// table that does not hold it is the shape of the bug this is looking for.

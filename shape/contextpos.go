@@ -82,21 +82,21 @@ func (sh shaper) singlePosAt(sub []byte, buf []Glyph, at int) int {
 		return 0
 	}
 	format := font.Be16(sub, 4)
-	var rec []byte
+	var rec int
 	switch font.Be16(sub, 0) {
 	case 1:
-		rec = sub[6:]
+		rec = 6
 	case 2:
 		size := valueSize(format)
 		off := 8 + covered*size
 		if covered >= font.Be16(sub, 6) || off+size > len(sub) {
 			return 0
 		}
-		rec = sub[off:]
+		rec = off
 	default:
 		return 0
 	}
-	sh.applyValue(&buf[at], rec, format)
+	sh.applyValue(&buf[at], sub, rec, format)
 	return 1
 }
 
@@ -106,12 +106,17 @@ func (sh shaper) singlePosAt(sub []byte, buf []Glyph, at int) int {
 // states growing up. The advance for the other axis is read past and not
 // applied, as HarfBuzz applies it: a font's kerning does not shorten an
 // upright run, and its 'vkrn' does not widen a horizontal one.
-func (sh shaper) applyValue(g *Glyph, rec []byte, format int) {
-	adj := readValueRecord(rec, format)
+//
+// The record is the one at sub[rec:], sub being the table that holds it — the
+// subtable, or a pair set of a listed pair subtable — because a record's Device
+// offsets are from there, and on a face cut away from its default instance
+// they say how each number moves. See gposvar.go.
+func (sh shaper) applyValue(g *Glyph, sub []byte, rec, format int) {
+	adj := valueRecordAt(sub, rec, format, sh.l.dv)
 	g.XOffset += sh.f.scale(adj.xPlacement)
 	g.YOffset += sh.f.scale(adj.yPlacement)
 	if sh.features.Vertical {
-		g.YAdvance -= sh.f.scale(valueYAdvance(rec, format))
+		g.YAdvance -= sh.f.scale(yAdvanceAt(sub, rec, format, sh.l.dv))
 		return
 	}
 	g.XAdvance += sh.f.scale(adj.xAdvance)
@@ -149,7 +154,11 @@ func (sh shaper) pairPosAt(sub []byte, buf []Glyph, at, flags int) int {
 		return 0
 	}
 	format1, format2 := font.Be16(sub, 4), font.Be16(sub, 6)
-	var rec []byte
+	// rec is where the pair's two records are in base, or -1. They are found by
+	// offset rather than cut out, because their Device offsets are measured
+	// from the table that holds them (see applyValue): the pair set in the
+	// listed form, and the subtable itself in the class form.
+	base, rec, size := sub, -1, valueSize(format1)+valueSize(format2)
 	switch font.Be16(sub, 0) {
 	case 1:
 		if covered >= font.Be16(sub, 8) || 10+2*covered+2 > len(sub) {
@@ -160,25 +169,24 @@ func (sh shaper) pairPosAt(sub []byte, buf []Glyph, at, flags int) int {
 			return 0
 		}
 		set := sub[off:]
-		size := 2 + valueSize(format1) + valueSize(format2)
-		n := min(font.Be16(set, 0), (len(set)-2)/size)
+		n := min(font.Be16(set, 0), (len(set)-2)/(2+size))
 		// The records are in order of their second glyph, which the format
 		// requires, and are searched as HarfBuzz searches them.
 		lo, hi := 0, n-1
 		for lo <= hi {
 			mid := int(uint(lo+hi) >> 1)
-			r := 2 + mid*size
+			r := 2 + mid*(2+size)
 			switch g := font.Be16(set, r); {
 			case buf[next].GID < g:
 				hi = mid - 1
 			case buf[next].GID > g:
 				lo = mid + 1
 			default:
-				rec = set[r+2 : r+size]
+				base, rec = set, r+2
 				lo = hi + 1
 			}
 		}
-		if rec == nil {
+		if rec < 0 {
 			return 0
 		}
 	case 2:
@@ -190,19 +198,16 @@ func (sh shaper) pairPosAt(sub []byte, buf []Glyph, at, flags int) int {
 		c1 := classAt(sub, font.Be16(sub, 8), buf[at].GID)
 		c2 := classAt(sub, font.Be16(sub, 10), buf[next].GID)
 		n1, n2 := font.Be16(sub, 12), font.Be16(sub, 14)
-		size := valueSize(format1) + valueSize(format2)
 		off := 16 + (c1*n2+c2)*size
 		if c1 >= n1 || c2 >= n2 || off+size > len(sub) {
 			return 0
 		}
-		rec = sub[off : off+size]
+		rec = off
 	default:
 		return 0
 	}
-	sh.applyValue(&buf[at], rec, format1)
-	if size1 := valueSize(format1); size1 <= len(rec) {
-		sh.applyValue(&buf[next], rec[size1:], format2)
-	}
+	sh.applyValue(&buf[at], base, rec, format1)
+	sh.applyValue(&buf[next], base, rec+valueSize(format1), format2)
 	if format2 != 0 {
 		return next - at + 1
 	}
@@ -243,7 +248,7 @@ func (sh shaper) cursiveAt(sub []byte, buf []Glyph, at, flags int) int {
 	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
 		return 0
 	}
-	entry, ok := cursiveAnchorAt(sub, buf[at].GID, 0)
+	entry, ok := cursiveAnchorAt(sub, buf[at].GID, 0, sh.l.dv)
 	if !ok {
 		return 0
 	}
@@ -251,7 +256,7 @@ func (sh shaper) cursiveAt(sub []byte, buf []Glyph, at, flags int) int {
 	if prev < 0 {
 		return 0
 	}
-	exit, ok := cursiveAnchorAt(sub, buf[prev].GID, 2)
+	exit, ok := cursiveAnchorAt(sub, buf[prev].GID, 2, sh.l.dv)
 	if !ok {
 		return 0
 	}
@@ -338,13 +343,13 @@ func (sh shaper) reverseCursive(buf []Glyph, i, newParent, nesting int) {
 
 // cursiveAnchorAt is a glyph's entry anchor (at 0) or exit anchor (at 2) in a
 // cursive subtable, if the subtable covers the glyph and states one.
-func cursiveAnchorAt(sub []byte, gid, which int) (anchor, bool) {
+func cursiveAnchorAt(sub []byte, gid, which int, dv *deviceDeltas) (anchor, bool) {
 	i, ok := coverageIndex(sub, font.Be16(sub, 2), gid)
 	rec := 6 + 4*i + which
 	if !ok || i >= font.Be16(sub, 4) || rec+2 > len(sub) {
 		return anchor{}, false
 	}
-	return readAnchor(sub, font.Be16(sub, rec))
+	return readAnchor(sub, font.Be16(sub, rec), dv)
 }
 
 // markToBaseAt applies a mark-to-base (type 4) or mark-to-ligature (type 5)
@@ -377,7 +382,7 @@ func (sh shaper) markToBaseAt(sub []byte, buf []Glyph, at int, ligature bool) in
 	if classCount <= 0 {
 		return 0
 	}
-	mark, covered := markRecordAt(sub, buf[at].GID, classCount)
+	mark, covered := markRecordAt(sub, buf[at].GID, classCount, sh.l.dv)
 	if !covered {
 		return 0
 	}
@@ -392,9 +397,9 @@ func (sh shaper) markToBaseAt(sub []byte, buf []Glyph, at int, ligature bool) in
 	var base anchor
 	if ligature {
 		base, ok = ligatureAnchorAt(sub, baseIdx, mark.class, classCount,
-			markLigatureComponent(buf, at, j))
+			markLigatureComponent(buf, at, j), sh.l.dv)
 	} else {
-		base, ok = baseAnchorAt(sub, baseIdx, mark.class, classCount)
+		base, ok = baseAnchorAt(sub, baseIdx, mark.class, classCount, sh.l.dv)
 	}
 	if !ok {
 		return 0
@@ -500,7 +505,7 @@ func (sh shaper) markToMarkAt(sub []byte, buf []Glyph, at, flags int) int {
 	if classCount <= 0 {
 		return 0
 	}
-	mark, covered := markRecordAt(sub, buf[at].GID, classCount)
+	mark, covered := markRecordAt(sub, buf[at].GID, classCount, sh.l.dv)
 	if !covered {
 		return 0
 	}
@@ -523,7 +528,7 @@ func (sh shaper) markToMarkAt(sub []byte, buf []Glyph, at, flags int) int {
 	if !ok {
 		return 0
 	}
-	base, ok := baseAnchorAt(sub, baseIdx, mark.class, classCount)
+	base, ok := baseAnchorAt(sub, baseIdx, mark.class, classCount, sh.l.dv)
 	if !ok {
 		return 0
 	}
@@ -539,7 +544,7 @@ const markStackIgnore = flagIgnoreBaseGlyphs | flagIgnoreLigatures | flagIgnoreM
 
 // markRecordAt is a mark's class and anchor in a mark-attachment subtable, if
 // the subtable covers it.
-func markRecordAt(sub []byte, gid, classCount int) (markAnchor, bool) {
+func markRecordAt(sub []byte, gid, classCount int, dv *deviceDeltas) (markAnchor, bool) {
 	i, ok := coverageIndex(sub, font.Be16(sub, 2), gid)
 	off := font.Be16(sub, 8)
 	if !ok || off <= 0 || off+2 > len(sub) {
@@ -551,7 +556,7 @@ func markRecordAt(sub []byte, gid, classCount int) (markAnchor, bool) {
 		return markAnchor{}, false
 	}
 	class := font.Be16(ma, rec)
-	a, ok := readAnchor(ma, font.Be16(ma, rec+2))
+	a, ok := readAnchor(ma, font.Be16(ma, rec+2), dv)
 	if !ok || class >= classCount {
 		return markAnchor{}, false
 	}
@@ -560,7 +565,7 @@ func markRecordAt(sub []byte, gid, classCount int) (markAnchor, bool) {
 
 // baseAnchorAt is where a mark-to-base or mark-to-mark subtable says the glyph
 // at a coverage index receives a mark of a class, if it states one.
-func baseAnchorAt(sub []byte, i, class, classCount int) (anchor, bool) {
+func baseAnchorAt(sub []byte, i, class, classCount int, dv *deviceDeltas) (anchor, bool) {
 	off := font.Be16(sub, 10)
 	if off <= 0 || off+2 > len(sub) {
 		return anchor{}, false
@@ -570,7 +575,7 @@ func baseAnchorAt(sub []byte, i, class, classCount int) (anchor, bool) {
 	if i >= font.Be16(ba, 0) || rec+2 > len(ba) {
 		return anchor{}, false
 	}
-	return readAnchor(ba, font.Be16(ba, rec))
+	return readAnchor(ba, font.Be16(ba, rec), dv)
 }
 
 // ligatureAnchorAt is where a mark-to-ligature subtable says a component of
@@ -582,7 +587,7 @@ func baseAnchorAt(sub []byte, i, class, classCount int) (anchor, bool) {
 // somewhere quite different from a dot under the second. The font answers by
 // giving each ligature not one anchor per class but one per component per
 // class.
-func ligatureAnchorAt(sub []byte, i, class, classCount, component int) (anchor, bool) {
+func ligatureAnchorAt(sub []byte, i, class, classCount, component int, dv *deviceDeltas) (anchor, bool) {
 	off := font.Be16(sub, 10)
 	if off <= 0 || off+2 > len(sub) {
 		return anchor{}, false
@@ -608,5 +613,5 @@ func ligatureAnchorAt(sub []byte, i, class, classCount, component int) (anchor, 
 	if at+2 > len(attach) {
 		return anchor{}, false
 	}
-	return readAnchor(attach, font.Be16(attach, at))
+	return readAnchor(attach, font.Be16(attach, at), dv)
 }

@@ -78,7 +78,7 @@ func (l *layout) halfWidthSubtable(sub []byte) {
 	size := valueSize(valueFormat)
 	switch format {
 	case 1:
-		adj := readValueRecord(sub[6:], valueFormat)
+		adj := valueRecordAt(sub, 6, valueFormat, l.dv)
 		if adj == (singleAdjust{}) {
 			return
 		}
@@ -93,7 +93,7 @@ func (l *layout) halfWidthSubtable(sub []byte) {
 			if i >= n || off+size > len(sub) {
 				return true
 			}
-			if adj := readValueRecord(sub[off:], valueFormat); adj != (singleAdjust{}) {
+			if adj := valueRecordAt(sub, off, valueFormat, l.dv); adj != (singleAdjust{}) {
 				l.setHalfWidth(gid, adj)
 			}
 			return true

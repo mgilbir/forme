@@ -86,6 +86,8 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `cffink_fixture.py`, `fonts/CFFInk.otf` | the face that oracle needs and no foundry made |
 | `verticalinstance.py`, `verticalinstance.expected.txt` | a variable face set upright off its default, and a kern table's vertical subtables — see below |
 | `verticalinstance_fixture.py`, `fonts/VerticalVariable*.ttf`, `fonts/VerticalKern*.ttf` | the faces that oracle needs and no foundry made |
+| `instancevaried.py`, `instancevaried.expected.txt` | a variable face's font-wide metrics and its GPOS devices off its default — see below |
+| `variedlayout_fixture.py`, `fonts/VariedLayout*.ttf` | the faces that oracle needs and no foundry made |
 | `colrink.py`, `colrink.expected.txt` | the ink of colour glyphs, painted from COLR or read from CBDT — see below |
 | `colrink_fixture.py`, `fonts/ColourInk*.ttf`, `fonts/BitmapInk.ttf` | the faces that oracle needs and no foundry made |
 | `ignorables_fixture.py`, `fonts/Ignorables.ttf`, `ignorables.txt`, `ignorables.expected.txt` | a corpus of the characters nothing is drawn for, shaped by `shape.py` in the face it needs — see below |
@@ -212,6 +214,28 @@ by fontTools' instancer. This package follows HarfBuzz, by the user's choice;
 weight 700 where it departs from fontTools there.
 
 `make hbverticalinstance` regenerates it.
+
+## Metrics and positioning away from the default instance
+
+An instance moves more than its outlines. MVAR moves its font-wide numbers —
+the ascent, the x-height, the underline and the strikeout — and GPOS's Device
+tables, where they are VariationIndexes into GDEF's item variation store, move
+its kerning and its mark and cursive anchors. `instancevaried.py` asks HarfBuzz
+for every `hb_ot_metrics_tag_t` it reports and for strings shaped across, at
+several locations of `fonts/VariedLayout.ttf` and `fonts/VariedLayoutTypo.ttf`
+— built by `variedlayout_fixture.py` to state every MVAR tag and a device on
+every kind of GPOS record, with deltas that land on half units, the second with
+USE_TYPO_METRICS set — of the bundled Noto Sans and of `fonts/NotoSansArabic.ttf`.
+`shape/instancevaried_test.go` holds `LoadInstance` to all of it: the metrics
+read out of the instance's own tables as HarfBuzz reads a static face's, and the
+strings shaped in the instance, whole and cut into two runs.
+
+HarfBuzz moves hhea's ascender, descender and line gap by MVAR's 'hasc', 'hdsc'
+and 'hlgp' as well as OS/2's; fontTools' instancer moves hhea's only where it
+stated the same numbers as OS/2's. This package follows HarfBuzz, and the
+fixture's two tables differ so that the choice shows.
+
+`make hbinstancevaried` regenerates it.
 
 ## The ink of a colour glyph
 

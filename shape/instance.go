@@ -65,12 +65,12 @@ import (
 //     and 594 by HarfBuzz and 875 and 592 by fontTools. Following HarfBuzz
 //     was chosen, since what a face advances by is what it is shaped with;
 //     testdata/varinstance records the two as fontTools' disagreement.
-//   - The font-wide vertical metrics do *not* move. MVAR — which varies ascent,
-//     descent, cap height and the rest of the font-wide numbers — is dropped
-//     rather than applied, so those stay at the default instance's values. For
-//     the bundled face the whole of MVAR moves the ascent by at most a few
-//     units across the weight axis; it is a real gap and a small one, and it is
-//     stated here rather than guessed at in the code.
+//   - The font-wide numbers move by MVAR: the ascent, descent and line gap,
+//     the x-height and cap height, the underline, the strikeout, the sub- and
+//     superscript boxes and the caret. They are written as HarfBuzz reads them
+//     at the location, which for the ascent, descent and line gap is not where
+//     fontTools' instancer writes them — see mvar.go. The table itself is then
+//     dropped with the other variation tables.
 //   - Hinting is dropped: cvt, fpgm, prep and every glyph's instructions go,
 //     because 'cvar' — which varies the control values — is not read, and hinting
 //     a bold face by a thin one's control values is worse than not hinting it.
@@ -344,6 +344,9 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 	}
 	out["head"] = instanceHead(head, bounds)
 	instanceDesign(out, axes, want)
+	if err := applyMVAR(out, tables["MVAR"], coords); err != nil {
+		return nil, nil, err
+	}
 	name, err := instanceName(tables["name"], fvar, axes, want)
 	if err != nil {
 		return nil, nil, err
