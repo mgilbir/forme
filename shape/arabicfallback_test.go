@@ -245,17 +245,18 @@ func TestArabicFallsBackToPresentationForms(t *testing.T) {
 //
 // The strings are every Arabic letter the code page has, isolated, initial,
 // medial and final beside a beh; each lam-alef isolated and medial, with a
-// mark between its parts or not; each shadda ligature, and a mark the forms
-// step over. Out of tree, forty thousand random strings of those letters and
-// marks, tatweel, the joiners and space were shaped through both engines on
-// every face here. Every string that differs on the Windows-1256 face and not
-// on the one whose sukun is elsewhere — the table's difference, and no other —
-// is a mark placed on a lam-alef the table made, and neither cause is the
-// table's. A shadda ligature made of marks inside the lam-alef loses the
-// ligature record its first mark had, which HarfBuzz's ligate_input keeps, so
-// it is placed on the ligature's last part rather than on the lam; and a mark
-// after a zero width joiner the ligature stepped over is placed around the
-// joiner's glyph by HarfBuzz and around the ligature here.
+// mark between its parts or not; each shadda ligature, alone and inside a
+// lam-alef; and a mark the forms step over. Out of tree, a hundred and forty
+// thousand random strings of those letters and marks, tatweel, the joiners and
+// space were shaped through both engines on every face here. Every string that
+// differs on the Windows-1256 face and not on the one whose sukun is elsewhere
+// — the table's difference, and no other — is a mark after a zero width joiner
+// that a lam-alef stepped over, which HarfBuzz places around the joiner's
+// glyph and this engine around the ligature. That is not the table's.
+//
+// A shadda ligature made inside a lam-alef differed too, until formLigature
+// kept the ligature record of the shadda it was made from: see there. The six
+// strings that hold it are the ones after the shadda ligatures on their own.
 func TestAWindows1256FaceIsShapedByHarfBuzzsTable(t *testing.T) {
 	fonts := win1256Fixtures()
 	faces := map[string]*Face{}
@@ -291,8 +292,8 @@ func TestAWindows1256FaceIsShapedByHarfBuzzsTable(t *testing.T) {
 		checkShaped(t, font+" "+text, got, want)
 		cases++
 	}
-	if cases != 263 {
-		t.Fatalf("read %d cases; the table holds 263", cases)
+	if cases != 269 {
+		t.Fatalf("read %d cases; the table holds 269", cases)
 	}
 }
 
@@ -635,6 +636,12 @@ win1256
 \u0628\u0651\u0650	175,0,-150,862|200,500,0,0
 \u0628\u0651\u0650\u0628	200,500,0,0|175,0,-248,862|4,304,0,0
 \u0628\u0650\u0651	175,0,-150,862|200,500,0,0
+\u0644\u0651\u064e\u0627	172,0,-52,862|165,465,0,0
+\u0644\u064e\u0651\u0627	172,0,-52,862|165,465,0,0
+\u0628\u0644\u0651\u064f\u0627	173,0,-47,862|170,470,0,0|4,304,0,0
+\u0644\u0650\u0651\u0625	175,0,14,862|252,552,0,0
+\u0628\u0644\u0651\u0650\u0623	175,0,-41,862|179,479,0,0|4,304,0,0
+\u0644\u0651\u064f\u0622	173,0,-40,862|180,480,0,0
 \u0628\u064e\u0628\u0652\u0628	200,500,0,0|250,0,-248,862|4,304,0,0|243,0,-248,862|4,304,0,0
 \u0627\u0627	199,499,0,0|199,499,0,0
 \u0628\u0627	0,0,0,0|4,304,0,0

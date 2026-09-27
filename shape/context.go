@@ -413,13 +413,24 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 			break
 		}
 	}
-	id, comps0 := 0, 1
+	// What the product records of the ligature it belongs to. One that joined
+	// something is a new ligature with a number of its own. One that did not
+	// keeps what its first part recorded, as HarfBuzz's ligate_input leaves a
+	// "mark ligature" its ligature id and component: a shadda and a fatha
+	// inside a lam-alef that are then made one glyph are still on the lam, and
+	// a mark placed on a ligature is placed on its component. Recording
+	// nothing moved the pair to the ligature's last part.
+	//
+	// id is the number the marks it stepped over are given, which is none
+	// where nothing was joined: they keep what they had too.
+	lig, id := buf[at].lig, 0
 	if joined {
 		id = sh.nextLigatureID()
+		lig = ligatureRef{id: id, comps: 1}
 		for _, p := range comps {
-			comps0 += componentsOf(buf[p])
+			lig.comps += componentsOf(buf[p])
 		}
-		comps0-- // the count started at one for the first component
+		lig.comps-- // the count started at one for the first component
 	}
 
 	product := sh.product(last - at + 1)
@@ -443,7 +454,7 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 	}
 	product = append(product, Glyph{
 		GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid),
-		lig: ligatureRef{id: id, comps: comps0}, class: class, mask: buf[at].mask,
+		lig: lig, class: class, mask: buf[at].mask,
 		substituted: true, umark: umark,
 		// What its first part was, as HarfBuzz keeps the first part's record
 		// for the ligature — all but its standing in for a space, which a
