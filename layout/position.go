@@ -117,6 +117,47 @@ func (p PositionScheme) outOfFlow() bool {
 	return p == PositionAbsolute || p == PositionFixed
 }
 
+// # Which boxes are containing blocks for the boxes taken out of the flow
+//
+// CSS 2.1 §10.1 makes a positioned box the containing block of the absolutely
+// positioned boxes inside it, and the viewport — here the page — that of the
+// fixed ones. Filter Effects 1 §5 adds one more: "A value other than none for
+// the filter property results in the creation of a containing block for
+// absolute and fixed positioned descendants unless the element it applies to
+// is a document root element". And css-will-change 1 §3 makes a box whose
+// will-change names filter one too, since a value of filter would: "If any
+// non-initial value of a property would cause the element to generate a
+// containing block for absolutely positioned elements, specifying that
+// property in will-change must cause the element to generate a containing
+// block for absolutely positioned elements", and the same for fixed ones.
+//
+// The rectangle is the same either way: the padding box of a block, and of an
+// inline box the bounding box of the padding boxes of its first and last
+// fragments. So the question of which box it is is asked of these two
+// predicates, everywhere it is asked: where the rectangle is found
+// (containingBlockFor), which clip a box escapes to (clipFromContainingBlock
+// and clippingAncestor), and which block and inline boxes' fragments are kept
+// for the purpose (layBlock's setPositioned, and the inline chains and
+// addInlineFragment). Four readings of one sentence would drift, and a box
+// positioned against one rectangle and clipped by another is a box in a place
+// nothing chose. A replaced box holds no boxes to be the containing block of,
+// and its fragment is kept only where it is positioned, as it was.
+
+// containsAbsolutes reports whether a box is the containing block of the
+// absolutely positioned boxes inside it.
+func containsAbsolutes(b *Box) bool { return b.Position.positioned() || filterContains(b) }
+
+// containsFixed reports whether a box is the containing block of the fixed
+// positioned boxes inside it, which only a filter makes one.
+func containsFixed(b *Box) bool { return filterContains(b) }
+
+// filterContains reports whether a box's filter, or a will-change naming
+// filter, makes it a containing block: on any box but the root. See
+// willChangeNames for the second.
+func filterContains(b *Box) bool {
+	return b != nil && b.Parent != nil && (filtersItsPaint(b) || willChangeNames(b, "filter"))
+}
+
 // positionOf reads the position property.
 //
 // An unrecognised value gives the initial one, which is what the cascade would
@@ -561,14 +602,16 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 // containingBlockFor finds the rectangle an out-of-flow box resolves against:
 // §10.1's third and fourth cases.
 //
-// For "fixed" it is the page box. For "absolute" it is the *padding* box of the
-// nearest ancestor whose position is anything but static, and the padding box
-// rather than the content box is not a detail — it is what makes a positioned
-// box with padding hold an absolutely positioned child inside its padding rather
-// than inset by it, which is the difference every "position: relative" wrapper
-// in the world depends on.
+// For "absolute" it is the *padding* box of the nearest ancestor that
+// containsAbsolutes — whose position is anything but static, or which has a
+// filter — and the padding box rather than the content box is not a detail —
+// it is what makes a positioned box with padding hold an absolutely positioned
+// child inside its padding rather than inset by it, which is the difference
+// every "position: relative" wrapper in the world depends on. For "fixed" it is
+// the padding box of the nearest ancestor that containsFixed — one with a
+// filter, or whose will-change names filter — and otherwise the page box.
 //
-// With no positioned ancestor the answer is the initial containing block, which
+// With no such ancestor the answer is the initial containing block, which
 // in this engine is the page box: there is one page, its size is settled before
 // layout, and the root's content box is laid out to fill it.
 //
@@ -577,11 +620,12 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 // answer: which way it runs. A nil box means the initial containing block, whose
 // direction is the root element's.
 func (l *layouter) containingBlockFor(b *Box, page Rect) (Rect, *Box) {
+	contains := containsAbsolutes
 	if b.Position == PositionFixed {
-		return page, nil
+		contains = containsFixed
 	}
 	for anc := b.Parent; anc != nil; anc = anc.Parent {
-		if !anc.Position.positioned() {
+		if !contains(anc) {
 			continue
 		}
 		if f, ok := l.positioned[anc]; ok {
@@ -611,10 +655,10 @@ func (l *layouter) containingBlockFor(b *Box, page Rect) (Rect, *Box) {
 		l.rec.ReportDetail(Finding{
 			Rule:   RulePositionApproximated,
 			Source: AtHTML(offsetOf(b)),
-			Message: "the containing block for this absolutely positioned box is an " +
-				"inline box that generated no fragments, so there are no padding " +
-				"boxes to form one from; it was positioned against the next " +
-				"positioned ancestor instead",
+			Message: "the containing block for this " + b.Position.String() +
+				" positioned box is an inline box that generated no fragments, so " +
+				"there are no padding boxes to form one from; it was positioned " +
+				"against the next containing block up instead",
 			Path:     PathOf(b.Element),
 			Property: "position",
 		})

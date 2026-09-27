@@ -232,22 +232,24 @@ func (l *layouter) resolveClips(root *Fragment) {
 //
 // The depth returned is how many clipping boxes that chain already has in it,
 // so that the bound counts a chain rather than a path through the fragment
-// tree. A box with no positioned ancestor is clipped by nothing — its
-// containing block is the page — and that is the case abspos-overflow-001 is.
+// tree. A box with no ancestor that is its containing block (see
+// containsAbsolutes and containsFixed) is clipped by nothing — its containing
+// block is the page — and that is the case abspos-overflow-001 is.
 //
 // The box it returns is the containing block the clip came from, or nil when
 // it came from the page, which is what the rounded corners of that clip are
 // looked up by.
 func (l *layouter) clipFromContainingBlock(b *Box, inherited map[*Box]Clip) (Clip, int, *Box) {
+	contains := containsAbsolutes
 	if b.Position == PositionFixed {
-		return Clip{}, 0, nil
+		contains = containsFixed
 	}
 	for anc := b.Parent; anc != nil; anc = anc.Parent {
-		if !anc.Position.positioned() {
+		if !contains(anc) {
 			continue
 		}
 		if _, ok := l.positioned[anc]; !ok {
-			// An inline-level positioned ancestor, which produces no fragment.
+			// An inline-level containing block, which produces no fragment.
 			// containingBlockFor skips it and reports; this must skip it too,
 			// silently, since the report has already been made there.
 			continue

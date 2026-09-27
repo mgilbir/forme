@@ -202,7 +202,6 @@ var inertValues = map[string]inertValue{
 
 	// Properties about interaction and animation, none of which a page laid out
 	// once has any of.
-	"will-change":         {produced: "auto", because: "nothing is optimised for change"},
 	"transition":          {produced: "none", because: "nothing transitions"},
 	"animation":           {produced: "none", because: "nothing animates"},
 	"pointer-events":      {inherits: true, produced: "auto", because: "there is no pointer"},

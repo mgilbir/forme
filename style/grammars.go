@@ -251,6 +251,12 @@ func init() {
 	g["opacity"] = single(num(numeric{number: true, percent: true}))
 	// filter-effects-1 §5: none | <filter-value-list>.
 	g["filter"] = filterValue
+	// css-will-change-1 §3: auto | <animateable-feature>#, a feature being
+	// scroll-position, contents or a <custom-ident> that is none of the
+	// words below.
+	g["will-change"] = oneOf(single(kw("auto")), commaList(single(either(
+		kw("scroll-position", "contents"),
+		customIdent("will-change", "none", "all", "auto", "scroll-position", "contents")))))
 	// css-images-3 §5.5-6.
 	g["object-fit"] = single(kw("fill", "contain", "cover", "none", "scale-down"))
 	g["object-position"] = position

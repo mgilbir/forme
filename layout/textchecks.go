@@ -97,10 +97,11 @@ func (l *layouter) overflowFate(b *Box) string {
 //
 // It is resolveClips's chain read upwards: a box's content is clipped by its
 // own overflow and by everything its parent's content is, except where the box
-// is out of flow. An absolutely positioned box takes its clip from its
-// containing block — the nearest positioned ancestor that is not an inline box
-// with no fragment of its own, which is the ancestor clipFromContainingBlock
-// reads — and a fixed one from nothing on the page at all.
+// is out of flow. An out-of-flow box takes its clip from its containing block
+// — the nearest ancestor that containsAbsolutes, or for a fixed box
+// containsFixed, and is not an inline box with no fragment of its own, which
+// is the ancestor clipFromContainingBlock reads — and from nothing on the page
+// at all where there is none.
 //
 // resolveClips asks overflowClips only of boxes with a fragment, so this asks
 // it of no other: a text box carries its element's whole style, "overflow"
@@ -113,10 +114,8 @@ func (l *layouter) clippingAncestor(b *Box) *Box {
 			return cur
 		}
 		switch {
-		case cur.Position == PositionFixed:
-			return nil
 		case cur.Position.outOfFlow():
-			cur = positionedContainer(cur)
+			cur = outOfFlowContainer(cur)
 		default:
 			cur = cur.Parent
 		}
@@ -124,12 +123,16 @@ func (l *layouter) clippingAncestor(b *Box) *Box {
 	return nil
 }
 
-// positionedContainer is the nearest positioned ancestor that has a fragment
-// to clip from: a block-level or atomic one. A positioned non-atomic inline has
-// none, and resolveClips steps over it.
-func positionedContainer(b *Box) *Box {
+// outOfFlowContainer is the nearest ancestor of an out-of-flow box that is
+// its containing block and has a fragment to clip from: a block-level or
+// atomic one. A non-atomic inline has none, and resolveClips steps over it.
+func outOfFlowContainer(b *Box) *Box {
+	contains := containsAbsolutes
+	if b.Position == PositionFixed {
+		contains = containsFixed
+	}
 	for anc := b.Parent; anc != nil; anc = anc.Parent {
-		if !anc.Position.positioned() {
+		if !contains(anc) {
 			continue
 		}
 		if anc.Outer == OuterInline && !isAtomicInline(anc) && anc.Replaced == nil {

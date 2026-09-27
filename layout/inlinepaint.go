@@ -414,19 +414,20 @@ func (d *inlineDecor) finish(parent *Fragment) {
 			// absolutise. See LineFragment.links.
 			lf := *frag
 			parent.Lines[p.line].links = append(parent.Lines[p.line].links, &lf)
-			if !d.l.inlinePaints(b) && !b.Position.positioned() {
+			if !d.l.inlinePaints(b) && !containsAbsolutes(b) {
 				// In the chain for its link and for nothing else: it has no
 				// ink, and a Boxes entry is ink to everything that reads one.
 				continue
 			}
 		}
 		parent.Lines[p.line].Boxes = append(parent.Lines[p.line].Boxes, frag)
-		if b.Position.positioned() {
+		if containsAbsolutes(b) {
 			// Recorded for §10.1: an absolutely positioned descendant of this
 			// box is placed against the bounding box of its first and last
-			// fragments. They are in the line's coordinates here and are made
-			// absolute with everything else — see absolutise — and the
-			// candidates that read them are placed after that.
+			// fragments, and so is a fixed one of a box with a filter. They
+			// are in the line's coordinates here and are made absolute with
+			// everything else — see absolutise — and the candidates that read
+			// them are placed after that.
 			//
 			// Through the journal, because a pass that is thrown away has to take
 			// them back: an item laid out to be measured recorded its fragments
@@ -595,11 +596,13 @@ func (l *layouter) paintedInlines(b *Box) []*Box {
 			if cur.contentsLink != nil {
 				out = append(out[:len(out):len(out)], cur)
 			}
-		case l.inlinePaints(cur) || cur.Position.positioned() || cur.areaLink() != nil:
+		case l.inlinePaints(cur) || containsAbsolutes(cur) || cur.areaLink() != nil:
 			// A *positioned* inline box is kept whether or not it draws
 			// anything, because §10.1 forms the containing block of an
 			// absolutely positioned descendant from the padding boxes of this
-			// box's own fragments — so the fragments have to exist. It paints
+			// box's own fragments — so the fragments have to exist. So is one
+			// with a filter, which is a containing block as well (see
+			// containsAbsolutes). It paints
 			// nothing extra: a fragment with no background and no border draws
 			// nothing, exactly as it did when there was no fragment at all.
 			//

@@ -564,8 +564,9 @@ type layouter struct {
 	// bounded by an invariant rather than by an answer, the count is the only
 	// witness there is. See TestAligningTableCellsIsLinearInTheOutOfFlowBoxes.
 	absScans int
-	// positioned maps each positioned box to its fragment, which is how an
-	// absolutely positioned box finds the containing block §10.1 gives it. It is
+	// positioned maps each positioned box to its fragment, and each box a
+	// filter makes a containing block (see containsAbsolutes), which is how an
+	// out-of-flow box finds the containing block §10.1 gives it. It is
 	// a map rather than a walk up the fragment tree because a fragment does not
 	// know its parent — layout builds downwards — and giving it one would add a
 	// pointer to every fragment to answer a question a handful of boxes ask.
@@ -637,9 +638,10 @@ type layouter struct {
 	// both answer "nothing" for almost every box in an ordinary document.
 	inlineDraws  map[*Box]bool
 	inlineChains map[*Box][]*Box
-	// inlineFragments are the fragments a *positioned* inline box produced, in
-	// line order. §10.1 forms the containing block of an absolutely positioned
-	// descendant from the first and last of them — see inlineContainingBlock.
+	// inlineFragments are the fragments a *positioned* or filtered inline box
+	// produced, in line order. §10.1 forms the containing block of an
+	// out-of-flow descendant from the first and last of them — see
+	// inlineContainingBlock and containsAbsolutes.
 	inlineFragments map[*Box][]*Fragment
 	// inlineOffsets is §9.4.3's accumulated displacement at each inline box that
 	// has one, which is what its background and border are drawn at. It is
@@ -1054,11 +1056,12 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 		frag.Offset.X = frag.Offset.X.Add(d.X)
 		frag.Offset.Y = frag.Offset.Y.Add(d.Y)
 	}
-	if b.Position.positioned() {
+	if containsAbsolutes(b) {
 		// Recorded even for a box that is only relatively positioned, because
 		// §10.1 makes any positioned ancestor a containing block — that is the
 		// entire reason the "position: relative with no offsets" wrapper is an
-		// idiom rather than a no-op.
+		// idiom rather than a no-op — and for a box with a filter, which Filter
+		// Effects 1 §5 makes one too. See containsAbsolutes.
 		l.setPositioned(b, frag)
 	}
 

@@ -1032,7 +1032,7 @@ func (p *painter) stackLevel(s stackLevel) {
 // sealed by its opacity and not by the number.
 func sealsItsDescendants(b *Box) bool {
 	_, auto := usedZIndex(b)
-	return !auto || b.Position == PositionFixed || groupsItsPaint(b) || filtersItsPaint(b)
+	return !auto || b.Position == PositionFixed || groupsItsPaint(b) || stacksAsAFilter(b)
 }
 
 // # Who stacks where
@@ -1087,7 +1087,8 @@ func usedZIndex(b *Box) (z int, auto bool) {
 // implements: a box with an opacity below one, which CSS Color 4 paints
 // at the stacking order a positioned element with "z-index: 0" would have; a
 // box with a filter, which Filter Effects 1 §5 makes one "the same way that CSS
-// opacity does"; and a flex or grid item with a z-index. The first two stack at
+// opacity does", or whose will-change names filter (see willchange.go); and a
+// flex or grid item with a z-index. The first two stack at
 // zero whatever their z-index says, because z-index does not apply to them; the
 // third stacks at its number.
 //
@@ -1097,7 +1098,7 @@ func usedZIndex(b *Box) (z int, auto bool) {
 // part of the inline's level, which is how it comes to be painted where the
 // inline is. See inlinestacking.go.
 func stacksAsLevel(b *Box) bool {
-	if b.Position.positioned() || groupsItsPaint(b) || filtersItsPaint(b) {
+	if b.Position.positioned() || groupsItsPaint(b) || stacksAsAFilter(b) {
 		return true
 	}
 	_, auto := usedZIndex(b)

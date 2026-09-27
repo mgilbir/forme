@@ -193,21 +193,28 @@ func TestAFilteredInlineBoxIsAGroup(t *testing.T) {
 	}
 }
 
-// TestAFilterIsNotYetAContainingBlock: what §5 asks of layout, reported for
-// the positioned box it applies to, and not where something else is its
-// containing block.
-func TestAFilterIsNotYetAContainingBlock(t *testing.T) {
+// TestAFilterIsAContainingBlockItReportsOnlyWhereItIsNot: §5's containing
+// block is made (see filtercontainingblock_test.go), and what is reported is
+// the one case that is not: a positioned box in a block lifted out of a
+// filtered inline box, which is not above the block in the box tree. Nothing
+// is reported where the filter is the containing block, where a positioned
+// box between is, or at the root, which §5 exempts.
+func TestAFilterIsAContainingBlockItReportsOnlyWhereItIsNot(t *testing.T) {
 	for _, tc := range []struct {
 		doc, css string
 		want     bool
 	}{
-		{`<div id="f"><div id="a"></div></div>`, `#f { filter: blur(1px) } #a { position: absolute }`, true},
-		{`<div id="f"><div id="a"></div></div>`, `#f { filter: blur(1px) } #a { position: fixed }`, true},
+		{`<div id="f"><div id="a"></div></div>`, `#f { filter: blur(1px) } #a { position: absolute }`, false},
+		{`<div id="f"><div id="a"></div></div>`, `#f { filter: blur(1px) } #a { position: fixed }`, false},
 		{`<div id="f"><div id="p"><div id="a"></div></div></div>`,
 			`#f { filter: blur(1px) } #p { position: relative } #a { position: absolute }`, false},
 		{`<div id="f"><div id="a"></div></div>`, `#f { filter: blur(1px); position: relative } #a { position: absolute }`, false},
 		{`<div id="a"></div>`, `html { filter: blur(1px) } #a { position: absolute }`, false},
 		{`<span id="f"><div><div id="a"></div></div></span>`, `#f { filter: blur(1px) } #a { position: absolute }`, true},
+		{`<span id="f"><div><div id="a"></div></div></span>`, `#f { filter: blur(1px) } #a { position: fixed }`, true},
+		{`<span id="f"><div id="p"><div id="a"></div></div></span>`,
+			`#f { filter: blur(1px) } #p { position: relative } #a { position: absolute }`, false},
+		{`<span id="f"><div><div id="a"></div></div></span>`, `#f { will-change: filter } #a { position: absolute }`, true},
 	} {
 		_, findings := filterFindings(t, tc.doc, tc.css)
 		got := false

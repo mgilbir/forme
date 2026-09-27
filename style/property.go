@@ -566,6 +566,10 @@ var properties = map[string]property{
 	// Filter Effects 1 §5. It does not inherit, and "none" filters nothing. See
 	// layout/filter.go for which functions are applied.
 	"filter": {false, "none"},
+	// css-will-change 1 §3. It does not inherit. Layout reads it for what it
+	// does to a page: naming filter makes the box the stacking context and the
+	// containing block a filter does. See layout/willchange.go.
+	"will-change": {false, "auto"},
 	// CSS Images 3 §5.5 and §5.6. They are about a replaced element's *content*
 	// rather than about its box: the box is sized by the rules above, and these
 	// two say what the picture inside it does with the rectangle it was given
