@@ -592,3 +592,107 @@ func TestABackendEmbedsTheInstance(t *testing.T) {
 		t.Error("no glyph of the bold run advances differently from the regular one, so this test tells nothing apart")
 	}
 }
+
+// TestAnAutoStyleIsSearchedOverTheFacesOwnAxes: where the @font-face rule's
+// font-style is auto — its initial value — the face is chosen as if upright
+// (§4.4), and the style it is then set at is the one §5.2 finds among what
+// the face's own axes offer: 'ital' 1 for italic, 'slnt' at the angle for an
+// oblique. A rule that states "normal" clamps italic to upright instead.
+func TestAnAutoStyleIsSearchedOverTheFacesOwnAxes(t *testing.T) {
+	face := axesFont(t)
+	for _, tc := range []struct {
+		name  string
+		style faceStyle
+		r     FontRequest
+		want  map[string]float64
+		unset string
+	}{
+		{"auto, italic", faceStyle{kind: styleAuto},
+			FontRequest{Weight: 400, Width: 100, Slope: SlopeItalic}, map[string]float64{"ital": 1}, "slnt"},
+		{"auto, oblique", faceStyle{kind: styleAuto},
+			FontRequest{Weight: 400, Width: 100, Slope: SlopeOblique, Angle: 10}, map[string]float64{"slnt": -10}, "ital"},
+		{"normal, italic", faceStyle{kind: styleNormal},
+			FontRequest{Weight: 400, Width: 100, Slope: SlopeItalic}, map[string]float64{"ital": 0}, "slnt"},
+	} {
+		rule := fontFaceRule{weight: faceRange{auto: true}, width: faceRange{auto: true}, style: tc.style}
+		df := &documentFace{rule: rule, match: rule.matchable()}
+		_, m := matchFaces([]matchable{df.match}, tc.r)
+		got := instanceCoords(face, variationAsk{r: tc.r, df: df, match: m, size: 16})
+		for tag, want := range tc.want {
+			if v, ok := got[tag]; !ok || v != want {
+				t.Errorf("%s: %s is %v (set %v), want %v; all %v", tc.name, tag, v, ok, want, got)
+			}
+		}
+		if _, set := got[tc.unset]; set {
+			t.Errorf("%s: %s was set as well: %v", tc.name, tc.unset, got)
+		}
+	}
+}
+
+// TestATabIsMeasuredInTheInstancesSpace: tab-size counts spaces of the face
+// that sets a space (faceWithGlyph), and that face is the instance the block
+// is set in. Noto Sans's space is 260 units at its default and 185 at width
+// 62.5, so a tab stop of four spaces in condensed text is four of the 185.
+func TestATabIsMeasuredInTheInstancesSpace(t *testing.T) {
+	root, _, _ := variedDoc(t, `<pre id="p" style="font-stretch: 62.5%; tab-size: 4; font-size: 100px; margin: 0">`+"\tb</pre>")
+	condensed, err := shape.LoadInstance(realFont(), map[string]float64{"wdth": 62.5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	regular, err := shape.Load(realFont())
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, ok := condensed.GlyphID(' ')
+	if !ok {
+		t.Fatal("the face has no space")
+	}
+	want := 4 * condensed.GlyphAdvance(space) / 1000 * 100
+	if other := 4 * regular.GlyphAdvance(space) / 1000 * 100; other == want {
+		t.Fatal("the condensed space is the regular one, so this test can tell nothing apart")
+	}
+	found := false
+	for _, r := range linesOf(t, root, "p")[0].Runs {
+		if r.Text != "b" {
+			continue
+		}
+		found = true
+		if got := r.X.Px(); math.Abs(got-want) > 0.05 {
+			t.Errorf("the text after the tab starts at %vpx, want four condensed spaces, %vpx", got, want)
+		}
+	}
+	if !found {
+		t.Fatalf("no run holds the text after the tab: %v", linesOf(t, root, "p")[0].Runs)
+	}
+}
+
+// TestARangedFamilyIsSetAtTheWeightAsked: where a family's faces carry a
+// unicode-range the family list is walked cluster by cluster (namedFaceFor),
+// and the face each cluster gets is set where the box places it, like the
+// box's own: bold capitals from a variable face limited to A-Z are its 700
+// instance.
+func TestARangedFamilyIsSetAtTheWeightAsked(t *testing.T) {
+	res := &fileResolver{files: map[string][]byte{"v.ttf": realFont()}}
+	built := Build(Input{
+		HTML: `<style>@font-face { font-family: Caps; src: url(v.ttf); unicode-range: U+41-5A; }</style>
+			<p id="p" style="font-family: Caps, serif; font-weight: 700">ABC def</p>`,
+		Resources: res,
+	})
+	w, _ := style.FromPx(800)
+	h, _ := style.FromPx(800)
+	root := Layout(built.Root, Size{W: w, H: h}, built.Fonts, NewRecorder(nil))
+	seen := false
+	for _, r := range linesOf(t, root, "p")[0].Runs {
+		if !strings.Contains(r.Text, "ABC") {
+			continue
+		}
+		seen = true
+		if r.Face.IsVariable() || r.Face.Descriptor().Weight != 700 {
+			t.Errorf("the capitals are set in %q at weight %d (variable %v), want the 700 instance",
+				r.Face.Name(), r.Face.Descriptor().Weight, r.Face.IsVariable())
+		}
+	}
+	if !seen {
+		t.Fatal("no run holds the capitals")
+	}
+}

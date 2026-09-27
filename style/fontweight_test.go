@@ -62,3 +62,19 @@ func TestRelativeWeightsComputeAgainstTheParent(t *testing.T) {
 	}
 	t.Error("no ::first-line style was computed")
 }
+
+// TestTheFontShorthandResetsTheVariations: CSS Fonts 4 §2.8's font resets
+// font-optical-sizing and font-variation-settings to their initial values, as
+// it does every other font longhand it does not set.
+func TestTheFontShorthandResetsTheVariations(t *testing.T) {
+	for property, want := range map[string]string{
+		"font-optical-sizing":     "auto",
+		"font-variation-settings": "normal",
+	} {
+		got, _ := winner(t, `#p { font-optical-sizing: none; font-variation-settings: "wght" 700 }
+			#p { font: 12px serif }`, property)
+		if got != want {
+			t.Errorf("font: 12px serif left %s %q, want it reset to %q", property, got, want)
+		}
+	}
+}
