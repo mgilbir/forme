@@ -320,14 +320,23 @@ func TestLoadInstanceRefuses(t *testing.T) {
 			}(), bold,
 			"it names point 99 and the glyph has 8"},
 
-		{"a composite placed by matching points rather than at an offset",
+		// A composite placed by matching points is instanced (pointmatch.go),
+		// and one whose match an instance cannot keep is placed at an offset
+		// instead — which is right only where its points start the glyph
+		// drawn, since the match counts from there. Glyph 3 matches its
+		// rectangle's right phantom point; glyph 4 has it after a rectangle.
+		{"a composite whose match an instance cannot keep, inside another after other points",
 			func() []byte {
 				f := good
-				f.glyphs = [][]byte{nil, rectGlyph(),
-					fonttest.CompositeGlyph([]fonttest.CompositeComponent{{Glyph: 1, DX: 2, DY: 3, MatchPoints: true}})}
+				f.glyphs = append(f.glyphs,
+					fonttest.CompositeGlyph([]fonttest.CompositeComponent{{Glyph: 1}, {Glyph: 1, DX: 0, DY: 5, MatchPoints: true}}),
+					fonttest.CompositeGlyph([]fonttest.CompositeComponent{{Glyph: 1}, {Glyph: 3}}))
+				f.advances = append(f.advances, 600, 700)
+				f.tuples = append(f.tuples, nil, nil)
 				return f.build(t)
 			}(), bold,
-			"matching points, which cannot be instanced"},
+			"glyph 3 places a component by matching points in a way an instance cannot keep, " +
+				"and glyph 4 has it as a component after other points"},
 		{"a composite naming a component the font does not have",
 			func() []byte {
 				f := good

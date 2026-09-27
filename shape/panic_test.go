@@ -253,11 +253,13 @@ func FuzzLoadAndUse(f *testing.F) {
 	// The largest is left out on purpose: it is 2 MB, and a fuzzer spends its
 	// time proportionally to the size of what it mutates.
 	for _, name := range []string{
-		"NotoSansBalinese.ttf", // 338 contextual positioning subtables
-		"NotoSansJavanese.ttf", // the universal engine's features
-		"NotoSansArabic.ttf",   // cursive joining and mark filtering
-		"CFF2Blend.otf",        // CFF2: blends, Font DICTs, HVAR, VVAR and VORG
-		"SbixInk.ttf",          // sbix strikes, duplicates and image formats
+		"NotoSansBalinese.ttf",  // 338 contextual positioning subtables
+		"NotoSansJavanese.ttf",  // the universal engine's features
+		"NotoSansArabic.ttf",    // cursive joining and mark filtering
+		"CFF2Blend.otf",         // CFF2: blends, Font DICTs, HVAR, VVAR and VORG
+		"SbixInk.ttf",           // sbix strikes, duplicates and image formats
+		"PointMatchPhantom.ttf", // components placed by matching points, instanced
+		"PointMatch.ttf",        // and matched as an instance keeps them
 	} {
 		if data, err := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", name)); err == nil {
 			f.Add(data)

@@ -42,7 +42,10 @@ import (
 //   - Outlines move, by gvar, including the points no tuple lists (glyfpoints.go
 //     and gvar.go).
 //   - Composite components move: their offsets are the points gvar varies for a
-//     composite.
+//     composite. A component placed by matching points is matched among the
+//     points as they are at the location, and kept as a match where the
+//     instance's own points make the same one, and placed at an offset where
+//     they would not (pointmatch.go).
 //   - Advances come from HVAR where the font has it and from gvar's phantom
 //     points otherwise (varstore.go says why that order). A font with neither
 //     keeps the advances hmtx already states.
@@ -262,6 +265,16 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 	// side bearings are read from these once every glyph has them.
 	phantoms := make([][4][2]float64, numGlyphs)
 	useMetrics := make([]int, numGlyphs)
+	// Every glyph at the location, kept until each has been moved: a component
+	// placed by matching points is placed by the points of other glyphs as
+	// they are there (pointmatch.go).
+	varied := make([]*varGlyph, numGlyphs)
+	// The em HarfBuzz reads, which is a thousand units where head states one
+	// outside the range the format allows.
+	upem := font.Be16(head, 18)
+	if upem < 16 || upem > 16384 {
+		upem = 1000
+	}
 	for gid := 0; gid < numGlyphs; gid++ {
 		start, end := offsets[gid], offsets[gid+1]
 		if start > end || int(end) > len(glyf) {
@@ -279,6 +292,11 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 		g.setPhantoms(xMin, bearings[gid], advances[gid])
 		if vAdvances != nil {
 			g.setVerticalPhantoms(yMax+vBearings[gid], vAdvances[gid])
+		} else {
+			// Where the face states no vertical metrics HarfBuzz hangs a glyph
+			// from the top of its box, and gives it an em. Nothing reads
+			// these but a match naming one.
+			g.setVerticalPhantoms(yMax, upem)
 		}
 		if gvar != nil {
 			if err := gvar.applyGlyph(gid, g, coords, &budget); err != nil {
@@ -287,6 +305,12 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 		}
 		phantoms[gid] = g.phantoms()
 		useMetrics[gid] = g.metricsComponent()
+		varied[gid] = g
+	}
+	if err := placeMatchedComponents(varied, &budget); err != nil {
+		return nil, nil, err
+	}
+	for gid, g := range varied {
 		b, err := encodeVarGlyph(g)
 		if err != nil {
 			return nil, nil, fmt.Errorf("fonts: glyph %d: %w", gid, err)
@@ -638,6 +662,7 @@ type glyphBounds struct {
 // measure it from.
 func fillCompositeBounds(glyf []byte, loca []uint32, numGlyphs int, budget *int64) ([]glyphBounds, error) {
 	bounds := make([]glyphBounds, numGlyphs)
+	matches := &matchIndex{glyf: glyf, loca: loca, numGlyphs: numGlyphs, known: make([]int8, numGlyphs)}
 	for gid := 0; gid < numGlyphs; gid++ {
 		start, end := loca[gid], loca[gid+1]
 		if start >= end {
@@ -655,7 +680,18 @@ func fillCompositeBounds(glyf []byte, loca []uint32, numGlyphs int, budget *int6
 			continue
 		}
 		var box floatBounds
-		if err := accumulateBounds(glyf, loca, numGlyphs, gid, identityTransform, &box, 0, budget); err != nil {
+		matched, err := matches.has(gid, 0)
+		if err != nil {
+			return nil, fmt.Errorf("fonts: glyph %d: %w", gid, err)
+		}
+		if matched {
+			// A component placed by matching points is placed by points,
+			// which a transform composed down the tree does not have.
+			box, err = matchedBounds(glyf, loca, numGlyphs, gid, budget)
+		} else {
+			err = accumulateBounds(glyf, loca, numGlyphs, gid, identityTransform, &box, 0, budget)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("fonts: glyph %d: %w", gid, err)
 		}
 		if !box.set {

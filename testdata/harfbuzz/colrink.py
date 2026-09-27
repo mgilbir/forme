@@ -17,12 +17,13 @@
 #                      — and every glyph again at three weights, since the
 #                      face varies and its variable paints move with it
 #   ColourInkStatic.ttf  the same face not varying, whose composite glyph has
-#                      a component placed by matching points, which a face
-#                      from LoadInstance cannot have
+#                      a component placed by matching points, which the
+#                      variable face leaves out (pointmatch.py is where
+#                      LoadInstance is held to such components)
 #   BitmapInk.ttf      a CBDT with two strikes, every glyph asked about
-#   SbixInk.ttf        an sbix with four strikes, one null, every glyph asked
-#                      about: images, duplicates, formats HarfBuzz does not
-#                      read, and boxes rounding by halves
+#   SbixInk.ttf        an sbix with a null strike and four others, every
+#                      glyph asked about: images, duplicates, formats HarfBuzz
+#                      does not read, and boxes rounding by halves
 #   SbixInkLarge.ttf   sbix images millions of units across, where single
 #                      precision rounds
 #   SbixInkRejected.ttf  an sbix HarfBuzz's sanitizer refuses, a strike

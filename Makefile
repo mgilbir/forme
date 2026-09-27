@@ -1,4 +1,4 @@
-.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbpointmatch hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -186,7 +186,7 @@ hbenv:
 # indiccategories.expected.txt — are read from a source checkout of the same
 # release: HarfBuzz's own generators, and its own source; see
 # usecategories.py, usescripts.py and indiccategories.py.
-hboracles: hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbverticalinstance hbinstancevaried hblanguages varinstance
+hboracles: hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbpointmatch hbverticalinstance hbinstancevaried hblanguages varinstance
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
@@ -290,6 +290,15 @@ hbcolrink:
 		SbixInkRejected.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkRejected.ttf \
 		SbixInkOps.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkOps.ttf \
 		SbixInkOpsEdge.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkOpsEdge.ttf
+
+# Components placed by matching points, instanced: two variable faces built
+# here (see pointmatch_fixture.py), asked of HarfBuzz at five weights, of its
+# instancer and of fontTools'. See pointmatch.py.
+hbpointmatch:
+	$(PYTHON) $(HARFBUZZ_DIR)/pointmatch_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/pointmatch.py $(HARFBUZZ_DIR)/pointmatch.expected.txt \
+		PointMatch.ttf=$(HARFBUZZ_DIR)/fonts/PointMatch.ttf \
+		PointMatchPhantom.ttf=$(HARFBUZZ_DIR)/fonts/PointMatchPhantom.ttf
 
 # A variable face set upright away from its default instance, and a kern
 # table's vertical subtables: two faces built here with VVAR and without, and

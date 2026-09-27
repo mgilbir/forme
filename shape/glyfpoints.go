@@ -67,6 +67,14 @@ type varComponent struct {
 	// scale is the 2×2 the transform bytes decode to, which the bounding-box
 	// pass needs; it is the identity when there are no transform bytes.
 	scale [4]float64
+	// matched is set for a component placed by matching points rather than
+	// at an offset (ARGS_ARE_XY_VALUES clear): p1 is a point already gathered
+	// for the composite, p2 one of the component's, and the component is
+	// moved so that the second lands on the first. Its "point" in x and y is
+	// then no offset: it starts at zero and holds what gvar moves it by,
+	// which HarfBuzz applies before the match. See pointmatch.go.
+	matched bool
+	p1, p2  int
 }
 
 // Component flags (OpenType, "Composite glyph description").
@@ -225,23 +233,20 @@ func decodeComposite(g *varGlyph, b []byte, numGlyphs int) error {
 		if gid >= numGlyphs {
 			return fmt.Errorf("fonts: a composite glyph names component %d, which the font does not have", gid)
 		}
-		if flags&compArgsAreXY == 0 {
-			// The arguments are point numbers to match, not an offset: the
-			// component is placed by making one of its points coincide with one
-			// of the composite's. Nothing here can move that — the point it
-			// would move is in another glyph — and a gvar delta for such a
-			// component has no meaning this can honour. Refusing is the honest
-			// answer; instancing it as though the arguments were an offset would
-			// move the component to an arbitrary place on the page.
-			return fmt.Errorf("fonts: a composite glyph places component %d by matching points, which cannot be instanced", gid)
-		}
+		// The arguments are an offset, or for a component placed by matching
+		// points the two point numbers, which are unsigned where an offset is
+		// not; such a component's point starts at zero, and is what gvar
+		// moves.
+		matched := flags&compArgsAreXY == 0
 		var a1, a2 float64
+		var p1, p2 int
 		if flags&compArgsAreWords != 0 {
 			if at+4 > len(b) {
 				return fmt.Errorf("fonts: a composite glyph's component offsets run past its entry")
 			}
 			a1 = float64(int16(uint16(font.Be16(b, at))))
 			a2 = float64(int16(uint16(font.Be16(b, at+2))))
+			p1, p2 = font.Be16(b, at), font.Be16(b, at+2)
 			at += 4
 		} else {
 			if at+2 > len(b) {
@@ -249,9 +254,13 @@ func decodeComposite(g *varGlyph, b []byte, numGlyphs int) error {
 			}
 			a1 = float64(int8(b[at]))
 			a2 = float64(int8(b[at+1]))
+			p1, p2 = int(b[at]), int(b[at+1])
 			at += 2
 		}
-		c := varComponent{flags: flags, glyph: gid, scale: [4]float64{1, 0, 0, 1}}
+		if matched {
+			a1, a2 = 0, 0
+		}
+		c := varComponent{flags: flags, glyph: gid, scale: [4]float64{1, 0, 0, 1}, matched: matched, p1: p1, p2: p2}
 		size := 0
 		switch {
 		case flags&compHaveScale != 0:
@@ -469,6 +478,10 @@ func encodeComposite(g *varGlyph) ([]byte, error) {
 	out := make([]byte, 10)
 	binary.BigEndian.PutUint16(out[0:], 0xFFFF) // numberOfContours: -1, a composite
 	for i, c := range g.comps {
+		if c.matched {
+			out = appendMatchedComponent(out, c, i < len(g.comps)-1)
+			continue
+		}
 		a1, a2 := otRound(g.x[i]), otRound(g.y[i])
 		if a1 < math.MinInt16 || a1 > math.MaxInt16 || a2 < math.MinInt16 || a2 > math.MaxInt16 {
 			return nil, fmt.Errorf("fonts: an instanced component offset of (%d, %d) is outside the range glyf can store", a1, a2)
@@ -499,6 +512,30 @@ func encodeComposite(g *varGlyph) ([]byte, error) {
 		out = append(out, c.transform...)
 	}
 	return out, nil
+}
+
+// appendMatchedComponent writes a component placed by matching points as it
+// was: its flags less the ones this rewrite decides, and its two point numbers,
+// in a byte each where both fit one — the choice fontTools' compiler makes, so
+// that the record comes out as its instancer writes it.
+func appendMatchedComponent(out []byte, c varComponent, more bool) []byte {
+	flags := c.flags &^ (compArgsAreWords | compHaveInstructions | compMoreComponents)
+	words := c.p1 > 0xFF || c.p2 > 0xFF
+	if words {
+		flags |= compArgsAreWords
+	}
+	if more {
+		flags |= compMoreComponents
+	}
+	out = binary.BigEndian.AppendUint16(out, uint16(flags))
+	out = binary.BigEndian.AppendUint16(out, uint16(c.glyph))
+	if words {
+		out = binary.BigEndian.AppendUint16(out, uint16(c.p1))
+		out = binary.BigEndian.AppendUint16(out, uint16(c.p2))
+	} else {
+		out = append(out, byte(c.p1), byte(c.p2))
+	}
+	return append(out, c.transform...)
 }
 
 func putBounds(out []byte, xMin, yMin, xMax, yMax int) {

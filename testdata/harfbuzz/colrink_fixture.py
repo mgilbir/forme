@@ -276,8 +276,9 @@ def composite(with_matched):
 def build(path, variable):
     """ColourInk, variable along its weight axis; or, not variable,
     ColourInkStatic, whose composite has a component placed by matching
-    points, which LoadInstance cannot instance and so is not in the variable
-    face."""
+    points, which the variable face leaves out: it was built when
+    LoadInstance could not instance one, and pointmatch_fixture.py's faces
+    are where it is held to such components now."""
     order = list(OUTLINES) + ["comp"] + sorted(COLOR) + sorted(V0)
     fb = FontBuilder(1000, isTTF=True)
     fb.setupGlyphOrder(order)

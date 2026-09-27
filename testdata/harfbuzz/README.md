@@ -94,6 +94,8 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `fonts/VariedAxes.ttf` | built by the same script: five axes and two named instances, which layout's tests of where CSS sets a variable face use |
 | `colrink.py`, `colrink.expected.txt` | the ink of colour glyphs, painted from COLR or read from CBDT or sbix — see below |
 | `colrink_fixture.py`, `fonts/ColourInk*.ttf`, `fonts/BitmapInk.ttf`, `fonts/SbixInk*.ttf` | the faces that oracle needs and no foundry made |
+| `pointmatch.py`, `pointmatch.expected.txt` | components placed by matching points, instanced — see below |
+| `pointmatch_fixture.py`, `fonts/PointMatch*.ttf` | the faces that oracle needs and no foundry made |
 | `ignorables_fixture.py`, `fonts/Ignorables.ttf`, `ignorables.txt`, `ignorables.expected.txt` | a corpus of the characters nothing is drawn for, shaped by `shape.py` in the face it needs — see below |
 
 Each corpus is weighted towards the places shaping decides something rather than
@@ -301,7 +303,7 @@ the offsets in front of it, in the largest strike. `shape/colrink.go`,
 `colrink.py` asks HarfBuzz for the extents of every glyph of
 `fonts/ColourInk.ttf` — at its default and at three weights, since its
 variable paints move — of `fonts/ColourInkStatic.ttf`, the same face not
-varying with a composite LoadInstance cannot instance, of
+varying with a composite placed by matching points, of
 `fonts/BitmapInk.ttf`, and of `fonts/SbixInk*.ttf` — an sbix face, one whose
 boxes are millions of units across, and three whose tables HarfBuzz's
 sanitizer refuses or takes by a byte — all built by `colrink_fixture.py`, and
@@ -314,6 +316,22 @@ tree when the readers were written, and every one agrees; the fixtures cover
 the paint formats and the cases those faces do not reach.
 
 `make hbcolrink` regenerates it.
+
+## Components placed by matching points
+
+A composite may place a component by matching one of its points to a point
+already gathered, and in a variable face both points move. `pointmatch.py`
+instances the two faces `pointmatch_fixture.py` builds at five weights with
+HarfBuzz's instancer and with fontTools', draws every glyph with HarfBuzz at
+each weight, and draws fontTools' instance with HarfBuzz too.
+`shape/pointmatch_test.go` holds `LoadInstance` to all of it: the ordinary
+matches kept as both instancers keep them, record for record, box for box and
+point for point; the instance read as HarfBuzz reads it, including a nested
+match that HarfBuzz and fontTools count differently; and the matches no
+instance can keep — a phantom point, the component's own point, a point
+nobody has — placed at an offset, where HarfBuzz draws the variable face.
+
+`make hbpointmatch` regenerates it.
 
 ## The characters nothing is drawn for
 

@@ -276,9 +276,8 @@ type CompositeComponent struct {
 	// Scale, when not zero, is a uniform scale the component is drawn through.
 	Scale float64
 	// MatchPoints writes the arguments as point numbers to be made to coincide
-	// rather than as an offset. It is the placement an instancer cannot honour,
-	// since the point it would have to move is in another glyph, and a fixture
-	// needs to be able to state it in order to check that it is refused.
+	// rather than as an offset: DX the composite's point and DY the
+	// component's.
 	MatchPoints bool
 }
 
