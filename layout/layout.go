@@ -444,6 +444,10 @@ type layouter struct {
 	// document. See reportAspectRatio.
 	reportedAspect map[string]bool
 
+	// emphases memoizes emphasisOf: what a box's emphasis marks are, at the
+	// size its text is set at. See emphasis.go.
+	emphases map[emphasisKey]*runEmphasis
+
 	rec   *Recorder
 	avail Size
 

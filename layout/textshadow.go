@@ -181,8 +181,10 @@ func readShadow(item []css.ComponentValue, ctx style.LengthContext, text style.R
 // paintShadows paints a run's shadows, the last first so that the first is on
 // top. Each shadow is §5.1's stack again, moved and recoloured: the underlines
 // and overlines, then the text — its glyphs, or for a control character the box
-// drawn in its place — then the line-throughs.
-func (p *painter) paintShadows(shadows []textShadow, under []Rect, text *DrawText, glyphs []Rect, over []Rect) {
+// drawn in its place — then its emphasis marks, then the line-throughs. A mark
+// is glyphs, so its shadow is a DrawTextShadow like the text's.
+func (p *painter) paintShadows(shadows []textShadow, under []Rect, text *DrawText, glyphs []Rect,
+	marks []DrawText, over []Rect) {
 	for i := len(shadows) - 1; i >= 0; i-- {
 		s := shadows[i]
 		if s.colour.A == 0 {
@@ -205,6 +207,11 @@ func (p *painter) paintShadows(shadows []textShadow, under []Rect, text *DrawTex
 			run.At = Point{X: run.At.X.Add(s.dx), Y: run.At.Y.Add(s.dy)}
 			run.Color = s.colour
 			p.emit(DrawTextShadow{Run: run, StdDev: s.stdDev})
+		}
+		for _, m := range marks {
+			m.At = Point{X: m.At.X.Add(s.dx), Y: m.At.Y.Add(s.dy)}
+			m.Color = s.colour
+			p.emit(DrawTextShadow{Run: m, StdDev: s.stdDev})
 		}
 		p.shadowFills(moved(over), s)
 	}

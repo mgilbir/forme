@@ -19,15 +19,18 @@ import (
 //
 // §5.12.1 lists what may apply: the font properties, colour, the background
 // properties, word-spacing, letter-spacing, text-decoration, vertical-align,
-// text-transform, line-height and text-shadow. Everything else is not merely
+// text-transform, line-height and text-shadow — and CSS Pseudo 4 §2.1.3 adds
+// "all text decoration properties", which the emphasis marks of CSS Text
+// Decoration 3 §3 are among. Everything else is not merely
 // ignored here, it does not apply at all — "margin" on a ::first-line is not a
 // dropped declaration, it is a declaration CSS says has no meaning, and there is
 // nothing to tell an author about it.
 //
 // Of the ones that do apply, this engine acts on the font properties, the
-// line-height, the two spacings, the colour and the text shadow: the ones that
-// decide how the line is measured and what it comes out looking like. The rest are reported, because
-// an author who writes them will not see them and has no other way to find out.
+// line-height, the two spacings, the colour, the text shadow and the emphasis
+// marks: the ones that decide how the line is measured and what it comes out
+// looking like. The rest are reported, because an author who writes them will
+// not see them and has no other way to find out.
 //
 // text-transform is on the reported list and it is worth saying why, since it
 // looks like the others. The transform is applied when the text of a box is
@@ -39,6 +42,7 @@ import (
 var firstLineApplies = []string{
 	"font-family", "font-size", "font-weight", "font-style",
 	"line-height", "letter-spacing", "word-spacing", "color", "text-shadow",
+	"text-emphasis-style", "text-emphasis-color", "text-emphasis-position",
 }
 
 // firstLinePaints are the ones that are drawn behind the line rather than

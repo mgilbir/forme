@@ -38,12 +38,12 @@ import (
 // rather than a "border" primitive, because a backend that had to understand
 // border-collapse would be a second layout engine.
 //
-// There are ten: FillRect, DrawText, DrawTextShadow, DrawImage, TileImage,
-// FillGradient and FillPath, which put ink on the page; ClipPath and
-// FilterGroup, which hold operations and clip what they put there to a shape or
-// filter it as a group; and Link, which puts none and says where a hyperlink
-// is. A backend that switches over them must have a case for each, and
-// one that only draws may skip Link. The set grows only by addition — an
+// There are eleven: FillRect, DrawText, DrawTextShadow, DrawEmphasisMark,
+// DrawImage, TileImage, FillGradient and FillPath, which put ink on the page;
+// ClipPath and FilterGroup, which hold operations and clip what they put there
+// to a shape or filter it as a group; and Link, which puts none and says where
+// a hyperlink is. A backend that switches over them must have a case for each,
+// and one that only draws may skip Link. The set grows only by addition — an
 // operation's meaning, once stated, is not changed — so a backend that meets a
 // kind it has no case for has met something new, and should say so rather than
 // draw around it.
@@ -1461,6 +1461,19 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 			}
 			kept = append(kept, v)
 
+		case DrawEmphasisMark:
+			// A mark is glyphs, and is cut as a run of text is, by the same
+			// two questions: see the DrawText case below.
+			if ink := textInk(v.Mark); !ink.Empty() {
+				if c.hides(textInkReserved(v.Mark)) {
+					continue
+				}
+				if !c.admits(ink) {
+					v.Mark.Clip = v.Mark.Clip.meet(c)
+				}
+			}
+			kept = append(kept, v)
+
 		case FilterGroup:
 			// A filter is applied before the clip, so the clip goes on the
 			// group and not into what it holds: a blur cut by a rectangle is
@@ -2449,7 +2462,7 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 			for _, op := range box {
 				rects = append(rects, op.(FillRect).Rect)
 			}
-			p.paintShadows(shadows, nil, nil, rects, nil)
+			p.paintShadows(shadows, nil, nil, rects, nil, nil)
 		}
 		p.emit(box...)
 		return
@@ -2480,12 +2493,35 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 		Color:         colour,
 		CharSpacing:   run.LetterSpacing,
 	}
+	// The emphasis marks, which CSS Text Decoration 3 §5.1 paints over the
+	// text and under the line-through. See emphasis.go.
+	marks := p.emphasisMarks(run, text, turn)
 	if len(shadows) > 0 {
-		p.paintShadows(shadows, rectsOf(under), &text, nil, rectsOf(over))
+		p.paintShadows(shadows, rectsOf(under), &text, nil, marks, rectsOf(over))
 	}
 	p.decorate(under)
 	p.emit(text)
+	for _, m := range marks {
+		// One of a transparent colour is not drawn and is still shadowed, as
+		// a decoration line is: the shadow is of its shape.
+		if m.Color.A > 0 {
+			p.emit(DrawEmphasisMark{Mark: m})
+		}
+	}
 	p.decorate(over)
+}
+
+// emphasisMarks is a run's emphasis marks in text-emphasis-color, which is the
+// text's colour where it says "currentcolor".
+func (p *painter) emphasisMarks(run TextRun, text DrawText, turn runTurn) []DrawText {
+	if run.emphasis == nil || run.Width <= 0 {
+		return nil
+	}
+	colour, ok := p.color(run.Box, "text-emphasis-color")
+	if !ok {
+		colour = text.Color
+	}
+	return run.emphasis.marks(text, colour, turn)
 }
 
 // decorationMarks is the lines ruled across one run, where they go and in what

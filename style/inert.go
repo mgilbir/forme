@@ -263,6 +263,8 @@ var inertValues = map[string]inertValue{
 	"transform-origin": {always: true, because: "nothing is transformed, so no transformation has an origin"},
 
 	// CSS Text Decoration 4 §3.2 and §2.5, and CSS Fonts 4 §4.5 and §6.9.
+	// text-emphasis and text-emphasis-style were here and are implemented; see
+	// layout/emphasis.go.
 	//
 	// Two of these are the hyphens trap and the text-decoration-skip-ink case
 	// respectively, which is why they are written out rather than listed.
@@ -285,8 +287,6 @@ var inertValues = map[string]inertValue{
 		because: "the underline is placed from the face's own metrics"},
 	"font-optical-sizing": {inherits: true, produced: "none", initial: "auto",
 		because: "no variation is applied beyond the instance, optical sizing included"},
-	"text-emphasis":       {inherits: true, produced: "none", because: "no emphasis mark is drawn"},
-	"text-emphasis-style": {inherits: true, produced: "none", because: "no emphasis mark is drawn"},
 	"font-variant-alternates": {inherits: true, produced: "normal",
 		because: "no alternate glyphs are selected"},
 

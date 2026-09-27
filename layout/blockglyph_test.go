@@ -119,7 +119,12 @@ func blockFills(ops []Op) []Op {
 	var out []Op
 	changed := false
 	for i, op := range ops {
+		// An emphasis mark is glyphs like a run's, and a mark set in a face of
+		// rectangles inks rectangles as the run does.
 		v, ok := op.(DrawText)
+		if m, isMark := op.(DrawEmphasisMark); isMark {
+			v, ok = m.Mark, true
+		}
 		if !ok {
 			if changed {
 				out = append(out, op)

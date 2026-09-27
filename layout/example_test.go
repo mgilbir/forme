@@ -43,6 +43,8 @@ func Example() {
 			texts++
 		case layout.DrawTextShadow: // op.Run, op.StdDev — a shadow of text; not text itself
 			texts++
+		case layout.DrawEmphasisMark: // op.Mark — an emphasis mark, drawn as a run; not text itself
+			texts++
 		case layout.FillRect: // op.Rect, op.Color
 			fills++
 		case layout.DrawImage: // op.Image, op.Rect

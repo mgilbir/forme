@@ -197,6 +197,18 @@ func dimOps(ops []Op, at int, alpha float64) ([]Op, []groupMark) {
 			}
 			v.Color.A *= alpha
 			kept = append(kept, v)
+		case DrawEmphasisMark:
+			// A mark carries a colour, as the run beside it does.
+			if v.Mark.Color.A == 0 || v.Mark.Text == "" {
+				kept = append(kept, op)
+				continue
+			}
+			marks = append(marks, groupMark{text: true})
+			if alpha == 0 {
+				continue
+			}
+			v.Mark.Color.A *= alpha
+			kept = append(kept, v)
 		case DrawTextShadow:
 			// A shadow carries a colour, and a blur is linear, so the alpha
 			// folds into it exactly as into the run it shadows.

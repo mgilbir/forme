@@ -719,9 +719,11 @@ func checkOp(op Op, consider func(Rect), checkOps func([]Op)) {
 		// ink away. Nested no deeper than the clipping boxes that made it,
 		// which resolveClips bounds.
 		checkOps(o.Ops)
-	case DrawText, DrawTextShadow:
+	case DrawText, DrawTextShadow, DrawEmphasisMark:
 		// Text is not checked, for the reason FillRect.Overhang gives, and a
 		// shadow of text is text moved by an offset nothing in layout placed.
+		// An emphasis mark is beside its text, where the line's height was
+		// made to hold it, and is text's for the same reason.
 	case Link:
 		// Not ink, and not a box the scale was computed from: an inline
 		// <a>'s area is its content area, which §10.6.1 lets reach past

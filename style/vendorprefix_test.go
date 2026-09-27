@@ -62,8 +62,9 @@ func TestAnUnprefixedPropertyNobodyImplementsIsStillUnsupported(t *testing.T) {
 	for _, decl := range []string{
 		// "scroll-snap-type" was here and moved to nomedium.go: nothing on a
 		// page snaps, so its absence changes no rendering. What is left are
-		// properties whose absence really does change one.
-		"text-emphasis: filled dot",
+		// properties whose absence really does change one. "text-emphasis"
+		// was the first of them until emphasis marks were drawn.
+		"shape-outside: circle(50%)",
 		"mix-blend-mode: multiply",
 		"not-a-property-xyzzy: 1px",
 		// A leading dash with no vendor identifier after it is not the reserved

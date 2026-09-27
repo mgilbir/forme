@@ -1466,7 +1466,17 @@ const wptEnv = "WPT_TESTS"
 // hyphen so styled. The pages matched while text-shadow was unimplemented, and
 // both carried the finding. The shadow is drawn now, a DrawTextShadow under the
 // run, and the two hyphens cast the same one. wpt.fyi: all three browsers pass.
-const wptCleanPassBaseline = 5990
+//
+// **5990 to 5991, for text-emphasis** (issue #26). letter-spacing/
+// letter-spacing-211 asks for emphasis marks to be centred on a character and
+// not on the character and the letter-spacing after it: "ABC" spaced by an em
+// against a reference that writes "A B C", both under "text-emphasis: dot".
+// The pages matched while emphasis marks were unimplemented, since neither drew
+// any, and both carried the finding. The marks are drawn now — a
+// DrawEmphasisMark per character, in Ahem a 10px square over each 20px one —
+// and each lands over its own letter on both pages. wpt.fyi: all three
+// browsers pass.
+const wptCleanPassBaseline = 5991
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -2138,6 +2148,12 @@ func normaliseOps(ops []Op) string {
 				continue
 			}
 			lines = append(lines, fmt.Sprintf("path %s %s", v.Path, v.Color))
+		case DrawEmphasisMark:
+			if strings.TrimSpace(v.Mark.Text) == "" || v.Mark.Color.A == 0 {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("mark %q at %s,%s size %s",
+				v.Mark.Text, num(v.Mark.At.X), num(v.Mark.At.Y), num(v.Mark.Size)))
 		case DrawTextShadow:
 			if strings.TrimSpace(v.Run.Text) == "" || v.Run.Color.A == 0 {
 				continue

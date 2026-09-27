@@ -154,7 +154,7 @@ func isColourProperty(name string) bool {
 	switch name {
 	case "color", "background-color", "border-top-color", "border-right-color",
 		"border-bottom-color", "border-left-color", "outline-color",
-		"text-decoration-color":
+		"text-decoration-color", "text-emphasis-color":
 		return true
 	}
 	return false

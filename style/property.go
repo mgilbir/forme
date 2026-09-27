@@ -345,6 +345,16 @@ var properties = map[string]property{
 	// shadow replaces its paragraph's rather than adding to it. See
 	// layout/textshadow.go.
 	"text-shadow": {true, "none"},
+	// CSS Text Decoration 3 §3: emphasis marks. All three inherit, which is
+	// what sets them apart from the decorations beside them — a <span> with
+	// "text-emphasis: none" inside an emphasised paragraph has no marks, where
+	// a span cannot take its paragraph's underline off. The position is a
+	// property of its own and not part of the shorthand, because it is a fact
+	// about the language rather than about the emphasis. See
+	// layout/emphasis.go.
+	"text-emphasis-style":    {true, "none"},
+	"text-emphasis-color":    {true, "currentcolor"},
+	"text-emphasis-position": {true, "over right"},
 	// CSS Text Decoration 4 §2.2 and §2.3, and the two of them do not inherit
 	// the same way: the thickness is part of the decoration, which reaches a
 	// descendant by being *drawn across* it rather than by being inherited,
@@ -680,6 +690,10 @@ var shorthands = map[string]shorthand{
 	"text-decoration": {textDecorationShorthand,
 		[]string{"text-decoration-line", "text-decoration-color",
 			"text-decoration-thickness"}},
+	// CSS Text Decoration 3 §3.3. The position is not among its longhands:
+	// "text-emphasis: dot" leaves text-emphasis-position as it was.
+	"text-emphasis": {textEmphasisShorthand,
+		[]string{"text-emphasis-style", "text-emphasis-color"}},
 
 	// CSS Text 4 makes white-space a shorthand, and that is not a reshuffle for
 	// its own sake: "text-wrap: nowrap" and "white-space: nowrap" set the same

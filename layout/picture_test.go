@@ -782,6 +782,10 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 		switch o := op.(type) {
 		case DrawText:
 			v = o
+		case DrawEmphasisMark:
+			// A mark is its glyphs in its colour, which is the ink a run of
+			// the same character drawn there makes: it is compared as that.
+			v = o.Mark
 		case DrawTextShadow:
 			v, blur = o.Run, o.StdDev
 			if blur > 0 {

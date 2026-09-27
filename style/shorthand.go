@@ -891,6 +891,51 @@ func isDecorationLine(part []css.ComponentValue) bool {
 	return false
 }
 
+// textEmphasisShorthand expands CSS Text Decoration 3 §3.3's "text-emphasis":
+// <'text-emphasis-style'> || <'text-emphasis-color'>.
+//
+// The colour is one component and is told apart by being a colour, which none
+// of the style's words and no string is. The style may be two words — "filled
+// dot" — and "||" takes each of its two operands whole, so the style's words
+// are one piece of the value and the colour cannot stand between them: "filled
+// red dot" is not a declaration. The style's words are then judged by the
+// longhand's own grammar, which is what refuses "dot circle" and "open 'x'".
+//
+// What the value leaves out is reset, as every shorthand resets: "text-emphasis:
+// red" turns the marks off, since the style it did not name is "none".
+func textEmphasisShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	styleVal, colour := ident("none"), ident("currentcolor")
+	var styleParts [][]css.ComponentValue
+	seenColour, styleClosed := false, false
+	for _, part := range splitOnWhitespace(vals) {
+		if isColour(part) {
+			if seenColour {
+				return nil, nil, false
+			}
+			colour, seenColour = part, true
+			// Whatever style came before the colour is all of it.
+			styleClosed = len(styleParts) > 0
+			continue
+		}
+		if styleClosed {
+			return nil, nil, false
+		}
+		styleParts = append(styleParts, part)
+	}
+	if len(styleParts) > 0 {
+		styleVal = joinParts(styleParts...)
+		if !judgeValue("text-emphasis-style", styleVal).ok {
+			return nil, nil, false
+		}
+	} else if !seenColour {
+		return nil, nil, false
+	}
+	return map[string][]css.ComponentValue{
+		"text-emphasis-style": styleVal,
+		"text-emphasis-color": colour,
+	}, nil, true
+}
+
 // whiteSpaceShorthand is CSS Text 4 §3's white-space: one of the legacy
 // keywords, or its longhands' own values in any order.
 //

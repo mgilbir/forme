@@ -513,6 +513,8 @@ func opBounds(op Op) (Rect, bool) {
 		return v.Extent(), true
 	case DrawTextShadow:
 		return shadowInk(v), true
+	case DrawEmphasisMark:
+		return textInkReserved(v.Mark), true
 	}
 	return Rect{}, false
 }

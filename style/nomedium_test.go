@@ -82,7 +82,9 @@ func TestAPropertyThatWouldHaveChangedThePageIsStillUnsupported(t *testing.T) {
 		"overflow: hidden",
 		"resize: both",
 		"mix-blend-mode: multiply",
-		"text-emphasis: filled dot",
+		// "text-emphasis: filled dot" stood here until emphasis marks were
+		// drawn; a float's wrap shape is as far from being drawn.
+		"shape-outside: circle(50%)",
 		"clip-path: circle(50%)",
 		// The two scrollbar properties that are *not* in the table, which is the
 		// line it draws: a browser reserves a gutter for "stable" and takes the

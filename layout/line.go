@@ -250,4 +250,8 @@ type TextRun struct {
 	// anything about the line, whereas this displacement is part of what
 	// decided the line's height.
 	Shift style.Unit
+
+	// emphasis is what CSS Text Decoration 3 §3's emphasis marks over this
+	// run are, as layout decided them, or nil for none. See emphasis.go.
+	emphasis *runEmphasis
 }

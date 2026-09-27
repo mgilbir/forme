@@ -27,6 +27,13 @@ func (l *layouter) strutFor(b *Box) strut { return l.strutAt(b, b.FontSize) }
 func (l *layouter) strutAt(b *Box, size style.Unit) strut {
 	h := l.lineHeightAt(b, size)
 	s := strut{Height: h, Baseline: l.baselineAt(b, h, size)}
+	// The strut is the block's root inline box, and the emphasis marks of its
+	// text are its own: it takes the leading withEmphasis gives the block's
+	// text, so a line holds the marks of a block whose text on it has none.
+	if above, below := l.withEmphasis(b, size, s.Baseline, h.Sub(s.Baseline)); above != s.Baseline ||
+		below != h.Sub(s.Baseline) {
+		s.Baseline, s.Height = above, above.Add(below)
+	}
 	face, ok := l.fontFor(b)
 	if !ok {
 		return s
@@ -126,7 +133,9 @@ func (l *layouter) leadingInFace(b *Box, face *shape.Face) (above, below style.U
 func (l *layouter) leadingInFaceAt(b *Box, face *shape.Face, size style.Unit) (above, below style.Unit) {
 	h := l.lineHeightInFaceAt(b, face, size)
 	above = l.baselineInFaceAt(b, face, h, size)
-	return above, h.Sub(above)
+	// And far enough on one side to hold the box's emphasis marks, where the
+	// leading leaves them too little room. See withEmphasis.
+	return l.withEmphasis(b, size, above, h.Sub(above))
 }
 
 // verticalAlignOf reads the vertical-align property of an inline-level box.

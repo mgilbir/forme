@@ -923,6 +923,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						Features:     item.Off,
 						RTL:          item.Level&1 == 1,
 						Shift:        shift,
+						emphasis:     l.emphasisOf(heldBox(item.Box), heldBox(item.Box).FontSize.Mul(lineScale)),
 					})
 				}
 				// Which *side* it hangs off, which is not a second way of saying how

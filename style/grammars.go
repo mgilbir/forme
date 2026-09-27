@@ -72,6 +72,14 @@ func init() {
 	// css-text-decor-3 §4: none | [ <color>? && [ <length>{2} <length [0,∞]>? ] ]#,
 	// which is drop-shadow()'s argument list, repeated.
 	g["text-shadow"] = oneOf(single(kw("none")), commaList(dropShadowArgs))
+	// css-text-decor-3 §3.1: none | [ [ filled | open ] || [ dot | circle |
+	// double-circle | triangle | sesame ] ] | <string>; §3.2: <color>; §3.4:
+	// [ over | under ] && [ right | left ]?.
+	g["text-emphasis-style"] = oneOf(single(kw("none")),
+		anyOrder(kw("filled", "open"), kw("dot", "circle", "double-circle", "triangle", "sesame")),
+		single(str))
+	g["text-emphasis-color"] = single(colour)
+	g["text-emphasis-position"] = anyOrderRequired(kw("over", "under"), kw("right", "left"))
 
 	// css-fonts-4.
 	g["font-family"] = commaList(familyName)
