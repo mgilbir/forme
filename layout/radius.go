@@ -22,12 +22,12 @@ import (
 //     many words;
 //   - a replaced element's picture, to the curve of the content edge.
 //
-// Three things are not, and each is reported where it is met rather than left
-// square in silence: the rounded corners of a dotted or dashed border, which are
-// drawn solid (the straight part between them keeps its dashes); an outline,
-// which CSS UI 4 says should follow the curve and here does not; and a
-// percentage radius on an inline box broken across lines, which §4.1 measures
-// against the whole box and this measures against each piece.
+// A dotted or dashed side is a series of marks that goes round its corners;
+// see roundeddash.go. Two things are not rounded, and each is reported where it
+// is met rather than left square in silence: an outline, which CSS UI 4 says
+// should follow the curve and here does not; and a percentage radius on an
+// inline box broken across lines, which §4.1 measures against the whole box and
+// this measures against each piece.
 //
 // # Where the colours meet
 //
@@ -362,7 +362,8 @@ func (p *painter) roundedBorders(f *Fragment) {
 			continue
 		}
 		if s.kind == borderDashed || s.kind == borderDotted {
-			p.roundedDashes(f, side(i), s.kind, s.colour, at)
+			p.roundedMarks(r, f.radii, r.Inset(e), f.paddingRadii(), side(i), at,
+				widths[i], s.kind == borderDotted, s.colour)
 			continue
 		}
 		for _, layer := range layersOf(s.kind, s.colour, side(i), widths[i]) {
@@ -370,77 +371,6 @@ func (p *painter) roundedBorders(f *Fragment) {
 			in, iR := ringEdge(r, f.radii, e, layer.to)
 			p.emit(FillPath{Path: sideRegion(o, oR, in, iR, side(i), at), Color: layer.colour})
 		}
-	}
-}
-
-// roundedDashes paints a dotted or dashed side of a rounded border: its marks
-// along the straight part between the corners, as paintEdge draws them, and its
-// part of each rounded corner solid, which is reported. A mark that followed the
-// curve would need the curve's length cut into equal pieces, and an ellipse's
-// arc length has no closed form.
-func (p *painter) roundedDashes(f *Fragment, s side, kind borderStyle, colour style.RGBA, at [4]float64) {
-	r, e, c := f.BorderRect, f.Border, f.radii.corners()
-	region := sideRegion(r, f.radii, r.Inset(e), f.paddingRadii(), s, at)
-	bounds := region.Bounds()
-	var band Rect
-	horizontal := s == sideTop || s == sideBottom
-	switch s {
-	case sideTop, sideBottom:
-		x0 := style.Max(r.X.Add(c[0].X), r.X.Add(e.Left))
-		x1 := style.Min(r.Right().Sub(c[1].X), r.Right().Sub(e.Right))
-		y, w := r.Y, e.Top
-		if s == sideBottom {
-			x0 = style.Max(r.X.Add(c[3].X), r.X.Add(e.Left))
-			x1 = style.Min(r.Right().Sub(c[2].X), r.Right().Sub(e.Right))
-			y, w = r.Bottom().Sub(e.Bottom), e.Bottom
-		}
-		band = Rect{X: x0, Y: y, W: x1.Sub(x0), H: w}
-	default:
-		y0 := style.Max(r.Y.Add(c[1].Y), r.Y.Add(e.Top))
-		y1 := style.Min(r.Bottom().Sub(c[2].Y), r.Bottom().Sub(e.Bottom))
-		x, w := r.Right().Sub(e.Right), e.Right
-		if s == sideLeft {
-			y0 = style.Max(r.Y.Add(c[0].Y), r.Y.Add(e.Top))
-			y1 = style.Min(r.Bottom().Sub(c[3].Y), r.Bottom().Sub(e.Bottom))
-			x, w = r.X, e.Left
-		}
-		band = Rect{X: x, Y: y0, W: w, H: y1.Sub(y0)}
-	}
-	thickness := band.H
-	if !horizontal {
-		thickness = band.W
-	}
-	// The corners: what of the side's region is not the straight band, solid.
-	var rest []Op
-	if band.Empty() {
-		rest = append(rest, FillRect{Rect: bounds, Color: colour})
-	} else if horizontal {
-		rest = append(rest,
-			FillRect{Rect: Rect{X: bounds.X, Y: bounds.Y, W: band.X.Sub(bounds.X), H: bounds.H}, Color: colour},
-			FillRect{Rect: Rect{X: band.Right(), Y: bounds.Y, W: bounds.Right().Sub(band.Right()), H: bounds.H}, Color: colour})
-	} else {
-		rest = append(rest,
-			FillRect{Rect: Rect{X: bounds.X, Y: bounds.Y, W: bounds.W, H: band.Y.Sub(bounds.Y)}, Color: colour},
-			FillRect{Rect: Rect{X: bounds.X, Y: band.Bottom(), W: bounds.W, H: bounds.Bottom().Sub(band.Bottom())}, Color: colour})
-	}
-	kept := rest[:0]
-	for _, op := range rest {
-		if !op.(FillRect).Rect.Empty() {
-			kept = append(kept, op)
-		}
-	}
-	if len(kept) > 0 {
-		p.emit(ClipPath{Path: region, Ops: kept})
-		p.reportOnce(f.Box, "dashed-corner", Finding{
-			Rule:     RuleUnsupportedValue,
-			Source:   AtHTML(offsetOf(f.Box)),
-			Message:  "the rounded corners of a dotted or dashed border were drawn solid; the straight part between them has its marks",
-			Path:     PathOf(f.Box.Element),
-			Property: "border-" + [4]string{"top", "right", "bottom", "left"}[s] + "-style",
-		})
-	}
-	if !band.Empty() {
-		p.paintEdge(band, kind, colour, s, thickness)
 	}
 }
 

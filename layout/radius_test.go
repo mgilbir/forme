@@ -375,11 +375,11 @@ func TestAReplacedElementIsClippedToItsContentCurve(t *testing.T) {
 	}
 }
 
-// TestWhatIsNotRoundedIsReported: the corners of a dashed border, and an
-// outline, each say what they did instead.
+// TestWhatIsNotRoundedIsReported: an outline says what it did instead, and a
+// dotted or dashed border, which goes round its corners (roundeddash.go), says
+// nothing.
 func TestWhatIsNotRoundedIsReported(t *testing.T) {
 	for _, tc := range []struct{ css, says string }{
-		{`#a { border: 4px dashed blue; border-radius: 20px }`, "dotted or dashed"},
 		{`#a { outline: 2px solid blue; border-radius: 20px }`, "outline"},
 	} {
 		built := Build(Input{HTML: `<div id="a">x</div>`, CSS: []Stylesheet{{Source: noDefaults +
@@ -394,32 +394,15 @@ func TestWhatIsNotRoundedIsReported(t *testing.T) {
 			t.Errorf("%s: nothing said %q: %v", tc.css, tc.says, rec.Findings())
 		}
 	}
-	// And a solid rounded border says nothing.
-	built := Build(Input{HTML: `<div id="a">x</div>`, CSS: []Stylesheet{{Source: noDefaults +
-		`#a { width: 100px; height: 60px; border: 4px solid; border-radius: 20px }`}}})
-	rec := NewRecorder(nil)
-	PaintReporting(Layout(built.Root, Size{W: rpx(600), H: rpx(1000)}, nil, rec), rec)
-	if hasRule(rec.Findings(), RuleUnsupportedValue) || hasRule(rec.Findings(), RuleUnsupportedProperty) {
-		t.Errorf("a rounded solid border was reported: %v", rec.Findings())
-	}
-}
-
-// TestADashedRoundedBorderKeepsItsDashes: the straight part is what paintEdge
-// draws, and the corners are clipped to the side's region.
-func TestADashedRoundedBorderKeepsItsDashes(t *testing.T) {
-	ops := paintOf(t, `<div id="a"></div>`, noDefaults+`#a { width: 200px; height: 100px;
-		border: 4px dashed blue; border-radius: 20px }`)
-	dashes := 0
-	for _, op := range ops {
-		if f, ok := op.(FillRect); ok && f.Color == blue {
-			dashes++
+	// And a solid, a dotted or a dashed rounded border says nothing.
+	for _, style := range []string{"solid", "dotted", "dashed"} {
+		built := Build(Input{HTML: `<div id="a">x</div>`, CSS: []Stylesheet{{Source: noDefaults +
+			`#a { width: 100px; height: 60px; border: 4px ` + style + `; border-radius: 20px }`}}})
+		rec := NewRecorder(nil)
+		PaintReporting(Layout(built.Root, Size{W: rpx(600), H: rpx(1000)}, nil, rec), rec)
+		if hasRule(rec.Findings(), RuleUnsupportedValue) || hasRule(rec.Findings(), RuleUnsupportedProperty) {
+			t.Errorf("a rounded %s border was reported: %v", style, rec.Findings())
 		}
-	}
-	if dashes < 8 {
-		t.Errorf("%d marks outside the corners, want the dashes", dashes)
-	}
-	if len(groupsOf(ops)) != 4 {
-		t.Errorf("%d groups, want a corner piece clipped for each side", len(groupsOf(ops)))
 	}
 }
 
