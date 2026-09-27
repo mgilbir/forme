@@ -1487,7 +1487,17 @@ const wptEnv = "WPT_TESTS"
 // layout/spacingtrim.go's markOpeningPunctuation. text-spacing-trim-start-oof-
 // 001 moves from failed to passed with something unsupported: it loads a
 // script. wpt.fyi: Chrome passes both, Firefox and Safari fail both.
-const wptCleanPassBaseline = 5992
+//
+// **5992 to 5993, for a glyph's ink across the line**. The comparison, not
+// the engine. line-break/line-break-anywhere-001 breaks after every character
+// in a column 1ch wide — 7.8px of Courier at 13px — under an opaque green box
+// of that width, and one of its characters is a full-width "）" from the
+// Japanese fallback face, 13px of advance whose ink is 0.6px to 4.0px of it.
+// The comparison took a run's ink to be its advance, so the red bracket poked
+// 5.2px out of the box it is wholly under. It reads each glyph's own box now,
+// as HarfBuzz states it (markInk in picture_test.go, over
+// shape.Face.GlyphExtents). wpt.fyi: all three browsers pass.
+const wptCleanPassBaseline = 5993
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

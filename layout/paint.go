@@ -1576,7 +1576,14 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 // It is deliberately not the rectangle for the question of whether to keep a run
 // at all; textInkReserved is, and says why.
 func textInk(v DrawText) Rect {
-	above, below := v.Size, v.Size.Mul(0.3)
+	above, below := textInkAcross(v)
+	return textInkAt(v, above, below)
+}
+
+// textInkAcross is how far textInk's rectangle reaches above and below the
+// run's baseline.
+func textInkAcross(v DrawText) (above, below style.Unit) {
+	above, below = v.Size, v.Size.Mul(0.3)
 	if v.Face != nil {
 		if a, b, ok := v.Face.InkExtent(v.Text, v.Size.Px()); ok {
 			above, _ = style.FromPx(a)
@@ -1587,7 +1594,7 @@ func textInk(v DrawText) Rect {
 			below = v.Size.Mul(-float64(d.Descent) / upem)
 		}
 	}
-	return textInkAt(v, above, below)
+	return above, below
 }
 
 // textInkReserved is every pixel the run could reach: the box inline layout set

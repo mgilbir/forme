@@ -440,6 +440,7 @@ func useFace(face *Face) {
 		_, _, _ = face.GlyphVerticalMetrics(gid)
 		_ = face.GlyphCode(gid)
 		_, _, _ = face.HalfWidthTrim(gid)
+		_, _, _, _, _ = face.GlyphExtents(gid)
 	}
 	for _, r := range []rune{'a', 0x0628, 0x0915, 0x1B13, 0x2011, 0x3000, 0x10FFFF} {
 		_, _ = face.GlyphID(r)

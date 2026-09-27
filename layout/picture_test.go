@@ -798,7 +798,7 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 		default:
 			continue
 		}
-		ink := textInk(v)
+		ink := markInk(v)
 		if blur > 0 {
 			d := blur.Mul(blurReach)
 			ink = ink.Outset(Edges{Top: d, Right: d, Bottom: d, Left: d})
@@ -1054,6 +1054,93 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 		}
 	}
 	return out
+}
+
+// markInk is where the comparison takes a run's ink to be, for every question
+// it asks about whether a reader can see the run: whether it is under ink of
+// its own colour, buried under something opaque, off the page, or clipped away
+// entirely.
+//
+// It is textInk across the line — the extent the text's glyphs reach above and
+// below the baseline — and along it the glyphs' own boxes, each where the pen
+// puts it, where textInk takes the run's advance. The advance is where the
+// next run starts and not where this one's ink is: a full-width closing
+// bracket is a mark in the left quarter of its em, and line-break-anywhere-001
+// sets one at 13px in a column 7.8px wide under an opaque green box that its
+// ink, from 0.6px to 4.0px as HarfBuzz measures NotoSansJP's glyph, is wholly
+// under. Asked of the advance it poked 5.2px out of the box, and a red mark
+// nobody can see failed the document.
+//
+// The boxes are the face's (shape.Face.GlyphExtents), which is what HarfBuzz
+// answers and what the engine's own vertical extent is made of, so a glyph
+// that reaches past its advance — an italic's overhang — is ink past it here,
+// which the advance never said. Where the face cannot state a glyph's box, or
+// the run's glyphs put no ink anywhere, it is textInk: the answer the
+// comparison always had. An upright run is textInk as well, whose extent is
+// already its glyphs' (see uprightExtent).
+//
+// This is the comparison's reading and not the engine's. textInk stays what
+// clipOps asks whether a clip cuts a run with, and nothing in the display list
+// changes.
+func markInk(v DrawText) Rect {
+	if v.Face == nil || v.Upright {
+		return textInk(v)
+	}
+	lo, hi, ok := glyphInkAlong(v)
+	if !ok {
+		return textInk(v)
+	}
+	above, below := textInkAcross(v)
+	return placeRun(Rect{
+		X: lo, Y: style.Unit(0).Sub(above),
+		W: hi.Sub(lo), H: above.Add(below),
+	}, v.At, turnOfRun(v))
+}
+
+// glyphInkAlong is how far along the run, from its origin, its glyphs' ink
+// begins and ends: each glyph's box, from where the pen and the glyph's own
+// offset put it. The pen moves as glyphMarks moves it — the shaped advance,
+// and the letter-spacing after each typographic character unit — so the two
+// agree about where every glyph is. A glyph in a blank cluster is passed over
+// as glyphMarks passes it over, and an empty glyph has no box to add. ok is
+// false where some glyph's box cannot be read, and where no glyph has one.
+func glyphInkAlong(v DrawText) (lo, hi style.Unit, ok bool) {
+	upem := float64(v.Face.UnitsPerEm())
+	if upem <= 0 {
+		return 0, 0, false
+	}
+	text := ShapedText(v)
+	glyphs, _ := ShapedGlyphs(v)
+	spaceAfter := spacingAfterGlyph(v, text, glyphs)
+	scale := v.Size.Px() / upem
+	var pen style.Unit
+	for i, g := range glyphs {
+		if !blankCluster(text, g.Cluster) {
+			xb, _, w, _, has := v.Face.GlyphExtents(g.GID)
+			if !has {
+				return 0, 0, false
+			}
+			if w != 0 {
+				off, _ := style.FromPx(g.XOffset * v.Size.Px() / 1000)
+				left, _ := style.FromPx(float64(xb) * scale)
+				right, _ := style.FromPx(float64(xb+w) * scale)
+				a, b := pen.Add(off).Add(left), pen.Add(off).Add(right)
+				if !ok || a < lo {
+					lo = a
+				}
+				if !ok || b > hi {
+					hi = b
+				}
+				ok = true
+			}
+		}
+		adv, _ := style.FromPx(g.XAdvance * v.Size.Px() / 1000)
+		pen = pen.Add(adv)
+		if n := spaceAfter[i]; n > 0 {
+			pen = pen.Add(v.CharSpacing.Mul(float64(n)))
+		}
+	}
+	return lo, hi, ok
 }
 
 // spacingAfterGlyph reports, for each glyph of a run, whether §8.2's

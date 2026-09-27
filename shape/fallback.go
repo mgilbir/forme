@@ -142,6 +142,30 @@ func fallbackClass(r rune, class uint8) uint8 {
 	return class
 }
 
+// GlyphExtents is a glyph's ink box in font units, as HarfBuzz's
+// hb_font_get_glyph_extents answers it: how far right of the pen the ink
+// begins, how far above the baseline it reaches, how wide it is, and its
+// height — negative, since it is measured down from the top. gid is a glyph
+// index, as Glyph.GID is.
+//
+// It is InkExtent's per-glyph answer and it carries the horizontal half that
+// InkExtent leaves to the advance: where a glyph's ink sits within its advance
+// and how far past either end of it it reaches. A full-width closing bracket is
+// a mark in the left quarter of an em and blank for the rest; its advance says
+// nothing about which quarter.
+//
+// ok is false where the face cannot say: a standard face, which has no glyph
+// program and states its boxes by character name, a glyph index the face does
+// not have, and the cases glyphExtents gives. An empty glyph answers zeros and
+// true: it is known to put no ink anywhere.
+func (f *Face) GlyphExtents(gid int) (xBearing, yBearing, width, height int, ok bool) {
+	e, ok := f.glyphExtents(gid)
+	if !ok {
+		return 0, 0, 0, 0, false
+	}
+	return e.xBearing, e.yBearing, e.width, e.height, true
+}
+
 // extents is a glyph's ink in font units, as HarfBuzz measures it: the left
 // side bearing, the top of the ink, its width, and its height — negative,
 // since HarfBuzz measures down from the top.
