@@ -246,9 +246,13 @@ func TestLoadInstanceRefuses(t *testing.T) {
 			func() []byte { f := good; f.axes = nil; f.tuples = nil; return f.build(t) }(), nil,
 			"no fvar table"},
 
-		{"a CFF2 font, whose outlines vary by another mechanism",
-			func() []byte { f := good; f.extra = map[string][]byte{"CFF2": {0, 2, 0, 0}}; return f.build(t) }(), bold,
-			"CFF2"},
+		{"a CFF2 font whose CFF2 table cannot be read",
+			func() []byte {
+				f := good
+				f.extra = map[string][]byte{"glyf": nil, "CFF2": {0, 2, 0, 0}}
+				return f.build(t)
+			}(), bold,
+			"outlines are CFF2, and its CFF2 table cannot be read"},
 
 		{"a font with no glyf outlines to move",
 			func() []byte { f := good; f.extra = map[string][]byte{"glyf": nil}; return f.build(t) }(), bold,
@@ -1287,9 +1291,10 @@ func varyingVariableFont(t *testing.T, records []fonttest.FeatureVariation) []by
 	})
 }
 
-// TestACFF2FontSaysItIsCFF2: Load refuses a font whose outlines are CFF2, and
-// says that is why — not that it has no outlines, which would send its reader
-// looking for a broken file. A font with no outline table at all still says so.
+// TestACFF2FontSaysItIsCFF2: Load refuses a font whose CFF2 outlines cannot be
+// read, and says that is why — not that it has no outlines, which would send
+// its reader looking for a table that is there. A font with no outline table
+// at all still says so. (A CFF2 font that can be read loads: see cff2_test.go.)
 func TestACFF2FontSaysItIsCFF2(t *testing.T) {
 	good := varFont{
 		axes:     wghtWdth,

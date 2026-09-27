@@ -256,6 +256,7 @@ func FuzzLoadAndUse(f *testing.F) {
 		"NotoSansBalinese.ttf", // 338 contextual positioning subtables
 		"NotoSansJavanese.ttf", // the universal engine's features
 		"NotoSansArabic.ttf",   // cursive joining and mark filtering
+		"CFF2Blend.otf",        // CFF2: blends, Font DICTs, HVAR, VVAR and VORG
 	} {
 		if data, err := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", name)); err == nil {
 			f.Add(data)

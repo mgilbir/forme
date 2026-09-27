@@ -54,6 +54,9 @@
 //
 // # Subsetting
 //
+// A font whose outlines are CFF2 is read as the CFF font it draws where it is
+// cut (cff2cff.go), and is subsetted and embedded as that.
+//
 // Both glyf and CFF outlines are subsetted, by the same rule: glyph indices are
 // retained and a dropped glyph becomes an empty one. A CID-keyed CFF is the
 // exception. Its subset holds only the glyphs kept, renumbered in their order,
@@ -147,6 +150,12 @@ type Face struct {
 	// face has in its glyph headers instead: nil for every face but a CFF one.
 	// See cffink.go.
 	ink *cffInk
+	// cff2 is a face whose outlines are CFF2 read at its default instance,
+	// written as CFF a glyph at a time as it is asked for (cff2cff.go), and
+	// nil for every other face. cff2Limits is what writing an instance cut
+	// from one reported. Each says which glyphs were written empty, and why.
+	cff2       *cff2Default
+	cff2Limits []string
 	// colr measures the ink of a colour glyph by painting it, which is asked
 	// before the outline is: nil for a face with no COLR table. See
 	// colrink.go.
@@ -277,17 +286,16 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	}
 	_, hasGlyf := tables["glyf"]
 	_, hasCFF := tables["CFF "]
-	if !hasGlyf && !hasCFF {
-		// A CFF2 table is outlines, and a font whose only outlines they are is
-		// a real font this engine does not read: CFF2's charstrings blend their
-		// own variations, where glyf leaves them to gvar, and nothing here
-		// interprets them — to draw, to measure ink, or to cut an instance.
-		// Saying "neither glyf nor CFF" of it would send whoever reads the
-		// report looking for a broken file, and the file is not broken.
-		if _, cff2 := tables["CFF2"]; cff2 {
-			return nil, errors.New("fonts: the font's outlines are CFF2, which this engine does not read " +
-				"(it reads glyf and CFF outlines), so the font cannot be used at any instance")
-		}
+	// CFF2 outlines: a variable font whose charstrings blend their own
+	// variations. A document format that predates CFF2 cannot carry it, and a
+	// face is embedded as what it draws, so such a face is read as the CFF font
+	// it draws at its default instance (cff2Default in cff2cff.go) — exactly
+	// what the CFF2 charstrings draw there, since nothing is blended — and is
+	// measured, subsetted and embedded as that. LoadInstance cuts it anywhere
+	// else.
+	_, hasCFF2 := tables["CFF2"]
+	cff2Outlines := hasCFF2 && !hasGlyf && !hasCFF
+	if !hasGlyf && !hasCFF && !cff2Outlines {
 		return nil, errors.New("fonts: the font carries neither glyf nor CFF outlines")
 	}
 	// One budget for the whole font, shared by the sfnt and CFF readers, so
@@ -312,7 +320,20 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	var gidToCID []int
 	var registry, ordering string
 	var supplement int
-	if !hasGlyf {
+	var cff2 *cff2Default
+	if cff2Outlines {
+		var err error
+		if cff2, err = newCFF2Default(tables, budget); err != nil {
+			// Said as what it is — a CFF2 font whose table cannot be read —
+			// rather than as the table's own complaint alone, which names an
+			// INDEX or a DICT and not the kind of font it was.
+			return nil, fmt.Errorf("fonts: the font's outlines are CFF2, and its CFF2 table cannot be read: %w", err)
+		}
+		// The CFF it is embedded as is CID-keyed in Adobe-Identity-0, each
+		// glyph's CID its index: see cff2cff.go.
+		gidToCID = identityCIDs(prog.NumGlyphs)
+		registry, ordering, supplement = "Adobe", "Identity", 0
+	} else if !hasGlyf {
 		// The CFF table has to be parsed on its own: the sfnt reader answers
 		// questions from cmap, hmtx and maxp and never opens it, so nothing
 		// about the outlines is known until it is asked directly. (Reading
@@ -395,7 +416,11 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	}
 	f.readOS2(tables["OS/2"])
 	f.readPost(tables["post"])
-	if !hasGlyf {
+	switch {
+	case cff2 != nil:
+		f.cff2 = cff2
+		f.ink = newCFF2Ink(cff2)
+	case !hasGlyf:
 		f.ink = newCFFInk(tables["CFF "], prog.NumGlyphs)
 	}
 	if len(tables["COLR"]) > 0 {

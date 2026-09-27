@@ -484,10 +484,10 @@ func withTableTag(t *testing.T, data []byte, from, to string) []byte {
 	return nil
 }
 
-// TestACFF2FaceIsReportedAsCFF2: a font whose outlines are a CFF2 table is a
-// variable font this engine cannot read at any instance. It is reported as
-// that, by name — not as a font with no outlines, and not drawn as some other
-// instance or face — and its text is set in the next family.
+// TestACFF2FaceIsReportedAsCFF2: a font whose outlines are a CFF2 table that
+// cannot be read — here a glyf table under CFF2's tag — is reported as that,
+// by name: not as a font with no outlines, and not drawn as some other
+// instance or face. Its text is set in the next family.
 func TestACFF2FaceIsReportedAsCFF2(t *testing.T) {
 	cff2 := withTableTag(t, realFont(), "glyf", "CFF2")
 	res := &fileResolver{files: map[string][]byte{"v.otf": cff2}}

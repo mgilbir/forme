@@ -1,4 +1,4 @@
-.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink cffsubrs hbcolrink hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -186,7 +186,7 @@ hbenv:
 # indiccategories.expected.txt — are read from a source checkout of the same
 # release: HarfBuzz's own generators, and its own source; see
 # usecategories.py, usescripts.py and indiccategories.py.
-hboracles: hbshaping hbvertical hbcffink cffsubrs hbcolrink hbverticalinstance hbinstancevaried hblanguages varinstance
+hboracles: hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbverticalinstance hbinstancevaried hblanguages varinstance
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
@@ -254,6 +254,17 @@ hbcffink:
 		NotoSansTC-Regular.otf=$(CJK_DIR)/NotoSansTC-Regular.otf \
 		NotoSansHK-Regular.otf=$(CJK_DIR)/NotoSansHK-Regular.otf \
 		NotoSerifJP-Regular.otf=$(CJK_DIR)/NotoSerifJP-Regular.otf
+
+# CFF2 variable fonts, drawn by HarfBuzz at several locations and cut there by
+# fontTools: a face built here for what no real one does (cff2_fixture.py), and
+# the CFF2 fonts of `make cff-fonts`. See cff2.py.
+hbcff2:
+	$(PYTHON) $(HARFBUZZ_DIR)/cff2_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/cff2.py $(HARFBUZZ_DIR)/cff2.expected.txt \
+		CFF2Blend.otf=$(HARFBUZZ_DIR)/fonts/CFF2Blend.otf \
+		SourceSans3VF-Upright.otf=$(CFF_DIR)/SourceSans3VF-Upright.otf \
+		SourceSerif4Variable-Roman.otf=$(CFF_DIR)/SourceSerif4Variable-Roman.otf \
+		NotoSansJP-VF.otf=$(CFF_DIR)/NotoSansJP-VF.otf
 
 # Which subroutines of a name-keyed CFF a subset keeps, asked of fontTools'
 # subsetter: the CFFInk.otf fixture and the static Source fonts, so this needs

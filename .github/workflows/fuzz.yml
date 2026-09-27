@@ -56,6 +56,10 @@ jobs:
             target: FuzzParseType1
           - package: ./shape
             target: FuzzLoadAndUse
+          # CFF2 tables fed to the reader directly, and every glyph written as
+          # CFF held to drawing what it drew.
+          - package: ./shape
+            target: FuzzCFF2
           - package: ./layout
             target: FuzzImageLoading
           # The numbers a caller hands the line breaker, rather than the text:

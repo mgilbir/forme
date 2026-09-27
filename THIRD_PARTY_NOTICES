@@ -2011,6 +2011,20 @@ listed here because every font the repository keeps is, and for where it came
 from; no third party's work is in it.
 
 ============================================================================
+Font built for the CFF2 oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/CFF2Blend.otf
+Source:  testdata/harfbuzz/cff2_fixture.py, in this repository, which
+         writes its CFF2 table byte by byte and builds the rest with fontTools
+Licence: the licence in LICENSE; it is not anyone else's work
+
+A small variable face made from nothing by the script named above, a glyph for
+each thing a CFF2 font can ask of a reader and of an instancer that the
+published ones do not. It is listed here because every font the repository
+keeps is, and for where it came from; no third party's work is in it.
+
+============================================================================
 Fonts built for the variable vertical metrics and vertical kerning oracle
 ============================================================================
 

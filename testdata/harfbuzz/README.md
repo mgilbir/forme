@@ -85,6 +85,8 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `cffink.py`, `cffink.expected.txt` | the ink of CFF glyphs — see below |
 | `cffink_fixture.py`, `fonts/CFFInk.otf` | the face that oracle needs and no foundry made |
 | `cffsubrs.py`, `cffsubrs.expected.txt` | which subroutines of a name-keyed CFF a subset keeps, asked of fontTools — see below |
+| `cff2.py`, `cff2.expected.txt` | CFF2 variable fonts drawn by HarfBuzz and instanced by fontTools at several locations — see below |
+| `cff2_fixture.py`, `fonts/CFF2Blend.otf` | the CFF2 face that oracle needs and no foundry made |
 | `verticalinstance.py`, `verticalinstance.expected.txt` | a variable face set upright off its default, and a kern table's vertical subtables — see below |
 | `verticalinstance_fixture.py`, `fonts/VerticalVariable*.ttf`, `fonts/VerticalKern*.ttf` | the faces that oracle needs and no foundry made |
 | `instancevaried.py`, `instancevaried.expected.txt` | a variable face's font-wide metrics and its GPOS devices off its default — see below |
@@ -208,6 +210,36 @@ fontTools' subsetter is the one that keeps subroutines. The file records the
 fontTools release as well as HarfBuzz's, and is held to the pin like the rest.
 
 `make cffsubrs` regenerates it.
+
+## CFF2
+
+A CFF2 font's charstrings blend their own variations, and a face made from one
+is embedded as the CFF font it draws where it is cut (`shape/cff2cff.go`).
+Two oracles hold it, each to the question it answers. `cff2.py` asks HarfBuzz
+how a sample of each face's glyphs draw at several locations — extents,
+outlines point for point, advances, and for Noto Sans JP the vertical advances
+and origins VVAR moves — which `shape/cff2_test.go` holds the reader to with
+blends resolved as HarfBuzz resolves them. And it asks fontTools' instancer for
+a static instance at each location, downgraded to CFF: its outlines, its
+glyphs' bounds, its advances, HarfBuzz's extents of its glyphs, and for the
+fixture its hints and its Private DICTs, which the instances this package cuts
+are held to.
+
+The faces are the variable Source Sans 3, Source Serif 4 and Noto Sans JP
+(`make cff-fonts`), and `fonts/CFF2Blend.otf`, built by `cff2_fixture.py` for
+what the real ones never do: numbers blended onto a half, a region of two axes
+at a location where the order its scalars are multiplied in decides a
+rounding, a second group of regions, blends in subroutines, more operands and
+more stems than a CFF charstring holds, the flex operators, 16.16 numbers, a
+second Font DICT with a blended Private DICT, and an HVAR whose advances land
+on halves. It is generated, carries no licence of its own, and rebuilds to the
+same bytes.
+
+The file holds a sample of each real face. The whole of every face — every
+glyph at every location — was compared out of tree (set `CFF2_SAMPLE` and
+`CFF2_OUTLINES` past the glyph count), and agrees.
+
+`make hbcff2` regenerates the fixture and the file.
 
 ## Upright text away from the default instance
 

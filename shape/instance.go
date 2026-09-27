@@ -55,8 +55,8 @@ import (
 //     gvar moves otherwise, and the point a glyph hangs from with its top
 //     phantom point. vmtx is rewritten to say both, the side bearing measured
 //     from the instanced glyph's box, so that the instance hangs its glyphs
-//     where HarfBuzz hangs them at the location. VORG is not rewritten: it is
-//     a CFF face's, and a CFF face is not instanced here.
+//     where HarfBuzz hangs them at the location. VORG is a CFF face's, and is
+//     moved with its outlines (instanceCFF2).
 //   - A composite that takes its metrics from a component (USE_MY_METRICS)
 //     is given that component's phantom points, as HarfBuzz reads them, both
 //     across the page and down it. fontTools' instancer gives it its own, and
@@ -74,8 +74,10 @@ import (
 //   - Hinting is dropped: cvt, fpgm, prep and every glyph's instructions go,
 //     because 'cvar' — which varies the control values — is not read, and hinting
 //     a bold face by a thin one's control values is worse than not hinting it.
-//   - CFF2 is refused. Its outlines vary through a different mechanism entirely
-//     and none of this touches it.
+//   - A font whose outlines are CFF2 is cut by instanceCFF2 (cff2cff.go): its
+//     charstrings blend their own variations, and the instance is written as
+//     the CFF font they draw at the location. VORG, which a CFF face states
+//     its vertical origins in, moves there by VVAR.
 
 // maxInstanceAxes bounds fvar's axis count. The format allows 65535; the fonts
 // that exist have between one and five, and every axis multiplies the work each
@@ -109,6 +111,11 @@ var instanceDropped = map[string]bool{
 	"fvar": true, "gvar": true, "avar": true, "cvar": true,
 	"HVAR": true, "VVAR": true, "MVAR": true, "STAT": true,
 	"cvt ": true, "fpgm": true, "prep": true,
+	// CFF2 outlines vary by their own blends, and a static font carries none:
+	// a CFF2 font's instance carries them as CFF (instanceCFF2), and a font
+	// with glyf outlines beside a CFF2 table is instanced by its glyf, as
+	// Load draws it.
+	"CFF2": true,
 }
 
 // varAxis is one axis of the design space in user coordinates — the numbers a
@@ -138,6 +145,21 @@ type varAxis struct {
 // location, and it carries no variation tables. Load remains the way to read a
 // font as it stands, which for a variable font is its default instance.
 func LoadInstance(data []byte, coords map[string]float64) (*Face, error) {
+	if tables := font.SFNTTables(data); tables != nil && tables["CFF2"] != nil &&
+		tables["glyf"] == nil && tables["CFF "] == nil {
+		// CFF2 outlines, which are cut as the CFF font they draw at the
+		// location: see instanceCFF2.
+		out, normalized, limits, err := instanceCFF2(tables, coords)
+		if err != nil {
+			return nil, err
+		}
+		f, err := loadFace(out, normalized)
+		if err != nil {
+			return nil, err
+		}
+		f.cff2Limits = limits
+		return f, nil
+	}
 	out, normalized, err := instanceProgram(data, coords)
 	if err != nil {
 		return nil, err
@@ -155,9 +177,6 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 	tables := font.SFNTTables(data)
 	if tables == nil {
 		return nil, nil, errors.New("fonts: not an sfnt font program (TrueType or OpenType)")
-	}
-	if _, ok := tables["CFF2"]; ok {
-		return nil, nil, errors.New("fonts: CFF2 variable fonts are not supported; their outlines vary by a mechanism this does not read")
 	}
 	fvar := tables["fvar"]
 	if fvar == nil {
