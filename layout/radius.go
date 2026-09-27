@@ -23,11 +23,13 @@ import (
 //   - a replaced element's picture, to the curve of the content edge.
 //
 // A dotted or dashed side is a series of marks that goes round its corners;
-// see roundeddash.go. Two things are not rounded, and each is reported where it
-// is met rather than left square in silence: an outline, which CSS UI 4 says
-// should follow the curve and here does not; and a percentage radius on an
-// inline box broken across lines, which §4.1 measures against the whole box and
-// this measures against each piece.
+// see roundeddash.go. An outline follows the curve too, grown by its offset;
+// see outlineshape.go. Two things are not rounded, and each is reported where
+// it is met rather than left square in silence: the outline of an inline box
+// broken across lines where the outlines of its pieces meet, which is drawn as
+// the square union of them; and a percentage radius on an inline box broken
+// across lines, which §4.1 measures against the whole box and this measures
+// against each piece.
 //
 // # Where the colours meet
 //
@@ -323,23 +325,33 @@ func ring(outer Rect, oR Radii, inner Rect, iR Radii) Path {
 	return append(p, roundedRect(inner, iR)...)
 }
 
+// ringSide is how one side of a rounded ring is drawn: its style and colour,
+// and whether it draws anything at all.
+type ringSide struct {
+	kind   borderStyle
+	colour style.RGBA
+	paints bool
+}
+
 // roundedBorders paints a box's border when any of its corners is round.
 func (p *painter) roundedBorders(f *Fragment) {
-	r, e := f.BorderRect, f.Border
 	names := [4]string{"top", "right", "bottom", "left"}
-	widths := [4]style.Unit{e.Top, e.Right, e.Bottom, e.Left}
-	type sideStyle struct {
-		kind   borderStyle
-		colour style.RGBA
-		paints bool
-	}
-	var sides [4]sideStyle
+	widths := [4]style.Unit{f.Border.Top, f.Border.Right, f.Border.Bottom, f.Border.Left}
+	var sides [4]ringSide
 	for i, n := range names {
 		c, ok := p.color(f.Box, "border-"+n+"-color")
 		kind := parseBorderStyle(f.Box.Style.Get("border-" + n + "-style"))
-		sides[i] = sideStyle{kind: kind, colour: c,
+		sides[i] = ringSide{kind: kind, colour: c,
 			paints: ok && c.A > 0 && widths[i] > 0 && kind != borderNone && kind != borderHidden}
 	}
+	p.roundedRing(f.BorderRect, f.radii, f.Border, sides)
+}
+
+// roundedRing paints the band between a rounded rectangle and the same
+// rectangle moved in by e, with §4.2's inner radii: a rounded border, or an
+// outline round a rounded box.
+func (p *painter) roundedRing(r Rect, radii Radii, e Edges, sides [4]ringSide) {
+	widths := [4]style.Unit{e.Top, e.Right, e.Bottom, e.Left}
 	at := transitions(e)
 
 	// One ring per band when every side is the same solid or double border:
@@ -350,8 +362,8 @@ func (p *painter) roundedBorders(f *Fragment) {
 	}
 	if same && sides[0].paints && (sides[0].kind == borderSolid || sides[0].kind == borderDouble) {
 		for _, layer := range layersOf(sides[0].kind, sides[0].colour, sideTop, e.Top) {
-			o, oR := ringEdge(r, f.radii, e, layer.from)
-			in, iR := ringEdge(r, f.radii, e, layer.to)
+			o, oR := ringEdge(r, radii, e, layer.from)
+			in, iR := ringEdge(r, radii, e, layer.to)
 			p.emit(FillPath{Path: ring(o, oR, in, iR), Color: layer.colour})
 		}
 		return
@@ -362,13 +374,13 @@ func (p *painter) roundedBorders(f *Fragment) {
 			continue
 		}
 		if s.kind == borderDashed || s.kind == borderDotted {
-			p.roundedMarks(r, f.radii, r.Inset(e), f.paddingRadii(), side(i), at,
+			p.roundedMarks(r, radii, r.Inset(e), insetRadii(radii, e), side(i), at,
 				widths[i], s.kind == borderDotted, s.colour)
 			continue
 		}
 		for _, layer := range layersOf(s.kind, s.colour, side(i), widths[i]) {
-			o, oR := ringEdge(r, f.radii, e, layer.from)
-			in, iR := ringEdge(r, f.radii, e, layer.to)
+			o, oR := ringEdge(r, radii, e, layer.from)
+			in, iR := ringEdge(r, radii, e, layer.to)
 			p.emit(FillPath{Path: sideRegion(o, oR, in, iR, side(i), at), Color: layer.colour})
 		}
 	}

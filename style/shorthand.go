@@ -81,22 +81,47 @@ func borderShorthand(sides ...string) expander {
 // is the one border style that is missing here. The word means "this border
 // loses to its neighbour" in the collapsing table model, and an outline has no
 // neighbours to lose to. And the colour accepts "invert", which no border does.
+//
+// "auto" is both a style and a colour (css-ui-4 §3), and css-ui-4 §3.1 settles
+// which: "In the ambiguous case where a lone auto value is specified, or if
+// auto is specified together with an <'outline-width'> value, but without an
+// explicit <'outline-style'> or <'outline-color'> value, both outline-style and
+// outline-color are set to auto." Otherwise an "auto" beside an explicit style
+// is the colour, and one beside an explicit colour is the style. So each "auto"
+// is set aside until the rest has been read.
 func outlineShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
 	width, styleVal, colour := ident("medium"), ident("none"), ident("invert")
 	var seenWidth, seenStyle, seenColour bool
+	var autos [][]css.ComponentValue
 
 	for _, part := range splitOnWhitespace(vals) {
 		switch {
-		case isOutlineStyle(part) && !seenStyle:
+		case isAuto(part) && len(autos) < 2:
+			autos = append(autos, part)
+		case isOutlineStyle(part) && !isAuto(part) && !seenStyle:
 			styleVal, seenStyle = part, true
 		case isBorderWidth(part) && !seenWidth:
 			width, seenWidth = part, true
-		case judgeValue("outline-color", part).ok && !seenColour:
+		case judgeValue("outline-color", part).ok && !isAuto(part) && !seenColour:
 			colour, seenColour = part, true
 		default:
 			// As for the border: half an outline is not what was asked for.
 			return nil, nil, false
 		}
+	}
+	switch {
+	case len(autos) == 0:
+	case !seenStyle && !seenColour:
+		// A lone "auto", or two: both are "auto".
+		styleVal, colour = autos[0], autos[len(autos)-1]
+		seenStyle, seenColour = true, true
+	case len(autos) == 1 && !seenStyle:
+		styleVal, seenStyle = autos[0], true
+	case len(autos) == 1 && !seenColour:
+		colour, seenColour = autos[0], true
+	case len(autos) > 0:
+		// An "auto" with nowhere left to go.
+		return nil, nil, false
 	}
 	if !seenWidth && !seenStyle && !seenColour {
 		return nil, nil, false
@@ -106,6 +131,12 @@ func outlineShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValu
 		"outline-style": styleVal,
 		"outline-color": colour,
 	}, nil, true
+}
+
+// isAuto reports whether a part of a value is the keyword "auto".
+func isAuto(part []css.ComponentValue) bool {
+	w, ok := singleIdent(part)
+	return ok && w == "auto"
 }
 
 // isOutlineStyle is outline-style's own value: the border styles without

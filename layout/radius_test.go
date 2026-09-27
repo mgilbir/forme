@@ -375,33 +375,23 @@ func TestAReplacedElementIsClippedToItsContentCurve(t *testing.T) {
 	}
 }
 
-// TestWhatIsNotRoundedIsReported: an outline says what it did instead, and a
-// dotted or dashed border, which goes round its corners (roundeddash.go), says
-// nothing.
-func TestWhatIsNotRoundedIsReported(t *testing.T) {
-	for _, tc := range []struct{ css, says string }{
-		{`#a { outline: 2px solid blue; border-radius: 20px }`, "outline"},
+// TestWhatIsRoundedSaysNothing: a rounded border in any style, and an outline
+// round a rounded box, follow the curve (roundeddash.go, outlineshape.go) and
+// say nothing. What is still drawn square is TestABrokenRoundedOutline...'s.
+func TestWhatIsRoundedSaysNothing(t *testing.T) {
+	for _, css := range []string{
+		`border: 4px solid; border-radius: 20px`,
+		`border: 4px dotted; border-radius: 20px`,
+		`border: 4px dashed; border-radius: 20px`,
+		`outline: 2px solid blue; border-radius: 20px`,
+		`outline: 2px dotted blue; outline-offset: -4px; border-radius: 20px`,
 	} {
 		built := Build(Input{HTML: `<div id="a">x</div>`, CSS: []Stylesheet{{Source: noDefaults +
-			`#a { width: 100px; height: 60px } ` + tc.css}}})
-		rec := NewRecorder(nil)
-		PaintReporting(Layout(built.Root, Size{W: rpx(600), H: rpx(1000)}, nil, rec), rec)
-		found := false
-		for _, f := range rec.Findings() {
-			found = found || (f.Rule == RuleUnsupportedValue && strings.Contains(f.Message, tc.says))
-		}
-		if !found {
-			t.Errorf("%s: nothing said %q: %v", tc.css, tc.says, rec.Findings())
-		}
-	}
-	// And a solid, a dotted or a dashed rounded border says nothing.
-	for _, style := range []string{"solid", "dotted", "dashed"} {
-		built := Build(Input{HTML: `<div id="a">x</div>`, CSS: []Stylesheet{{Source: noDefaults +
-			`#a { width: 100px; height: 60px; border: 4px ` + style + `; border-radius: 20px }`}}})
+			`#a { width: 100px; height: 60px; ` + css + ` }`}}})
 		rec := NewRecorder(nil)
 		PaintReporting(Layout(built.Root, Size{W: rpx(600), H: rpx(1000)}, nil, rec), rec)
 		if hasRule(rec.Findings(), RuleUnsupportedValue) || hasRule(rec.Findings(), RuleUnsupportedProperty) {
-			t.Errorf("a rounded %s border was reported: %v", style, rec.Findings())
+			t.Errorf("%s was reported: %v", css, rec.Findings())
 		}
 	}
 }

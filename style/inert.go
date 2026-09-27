@@ -319,7 +319,6 @@ var inertValues = map[string]inertValue{
 	"scroll-padding":  {produced: "auto", because: "nothing scrolls, so there is no scrollport to inset"},
 	"overflow-anchor": {produced: "auto", because: "nothing scrolls and nothing moves after layout"},
 	"scrollbar-color": {produced: "auto", because: "there is no scrollbar to colour"},
-	"outline-offset":  {produced: "0", because: "an outline is drawn at the border edge"},
 }
 
 // isInertDeclaration reports whether a declaration of an unimplemented property
@@ -373,7 +372,7 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 		return true
 	}
 	// A length written as a bare zero and one written with a unit are the same
-	// length, and "outline-offset: 0px" is as inert as "outline-offset: 0".
+	// length, and "scroll-margin: 0px" is as inert as "scroll-margin: 0".
 	return entry.produced == "0" && isZeroLength(value)
 }
 

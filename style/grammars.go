@@ -63,6 +63,8 @@ func init() {
 		"double", "groove", "ridge", "inset", "outset"))
 	// css-ui-4 §3.4 has auto; CSS 2.1 §18.4 has invert.
 	g["outline-color"] = single(either(kw("auto", "invert"), colour))
+	// css-ui-4 §3.5: <length>, of either sign.
+	g["outline-offset"] = single(num(lengthSlot))
 	g["list-style-image"] = single(either(kw("none"), image))
 
 	// css-color-4 §3.

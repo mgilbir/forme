@@ -133,6 +133,9 @@ var properties = map[string]property{
 	"outline-width": {false, "medium"},
 	"outline-style": {false, "none"},
 	"outline-color": {false, "invert"},
+	// css-ui-4 §3.5: how far outside the border edge the outline is drawn, and
+	// inside it when negative. See layout's joinedOutline.
+	"outline-offset": {false, "0"},
 
 	// CSS Backgrounds 3 §4.1: the four corners, each a horizontal and a
 	// vertical radius of a quarter ellipse. Neither inherits, and zero is a

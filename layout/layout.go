@@ -56,6 +56,9 @@ type Fragment struct {
 	// Zero when there is no outline to draw, which is the ordinary case and is
 	// what keeps the paint pass cheap.
 	Outline style.Unit
+	// outlineOffset is the used outline-offset, read beside Outline and for
+	// the same reason. See outlineshape.go.
+	outlineOffset style.Unit
 
 	Children []*Fragment
 
@@ -1035,6 +1038,7 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 			W: width.Add(padding.Horizontal()).Add(border.Horizontal()),
 		},
 	}
+	frag.outlineOffset = l.outlineOffsetOf(b)
 	if b.Position == PositionRelative {
 		frag.Offset = l.relativeOffset(b, containing, at.cbHeight, at.cbDefinite)
 	}

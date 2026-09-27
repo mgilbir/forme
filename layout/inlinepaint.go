@@ -389,7 +389,7 @@ func (d *inlineDecor) finish(parent *Fragment) {
 		x := p.left.Add(margin.Left)
 		frag := &Fragment{
 			Box: b, Margin: margin, Border: border, Padding: padding,
-			Outline: d.l.outlineWidth(b),
+			Outline: d.l.outlineWidth(b), outlineOffset: d.l.outlineOffsetOf(b),
 			BorderRect: Rect{
 				X: x,
 				Y: p.baseline.Sub(st.Ascent).Sub(padding.Top).Sub(border.Top),

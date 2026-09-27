@@ -2129,6 +2129,11 @@ func (p *painter) outline(f *Fragment) { p.joinedOutline([]*Fragment{f}) }
 // run the full width of the ring and the vertical ones fill what is between
 // them.
 //
+// The ring's inner edge is the border box moved out by outline-offset, and a
+// box with rounded corners has an outline with rounded corners: the band of
+// the outline's width outside the offset edge and its outset-adjusted radii,
+// drawn as a rounded border of that width is. See outlineshape.go.
+//
 // # One outline for a box broken across lines
 //
 // CSS UI 4 §5:
@@ -2146,11 +2151,13 @@ func (p *painter) outline(f *Fragment) { p.joinedOutline([]*Fragment{f}) }
 // outer rectangles less the union of the pieces themselves, and that is what
 // is drawn: piece j's bands, less every earlier piece's outer rectangle (the
 // earlier piece painted that part already, or it is inside the earlier
-// piece) and every later piece's border box (it is inside that piece). Each
+// piece) and every later piece's inner edge (it is inside that piece). Each
 // point of the union is painted by exactly one piece, the first whose outer
 // rectangle holds it, so a translucent outline is not darker where two meet.
 // Pieces whose rings do not meet are cut by nothing, and draw exactly the
-// rings they drew before.
+// rings they drew before. Rounded pieces whose rings do not meet are each a
+// rounded ring; where rounded pieces meet, the union is drawn square, and that
+// is reported.
 //
 // The cut is exact for a solid outline, which is a set of rectangles. For the
 // other styles each remaining part of a band is drawn as a band of its own,
@@ -2167,27 +2174,14 @@ func (p *painter) joinedOutline(pieces []*Fragment) {
 	if w <= 0 || first.Box == nil || isHidden(first.Box) {
 		return
 	}
-	colour, ok := p.color(first.Box, "outline-color")
+	colour, ok := p.outlineColour(first.Box)
 	if !ok || colour.A == 0 {
 		// "invert", or a colour that did not parse. The finding was raised in
 		// layout, where there was a recorder to raise it with.
 		return
 	}
-	kind := parseBorderStyle(first.Box.Style.Get("outline-style"))
-	for _, piece := range pieces {
-		if !piece.radii.IsZero() {
-			// CSS UI 4 §5: an outline should follow the curve of a rounded
-			// border edge. This one is drawn square, and says so.
-			p.reportOnce(first.Box, "square-outline", Finding{
-				Rule:     RuleUnsupportedValue,
-				Source:   AtHTML(offsetOf(first.Box)),
-				Message:  "the outline of a box with rounded corners was drawn with square ones",
-				Path:     PathOf(first.Box.Element),
-				Property: "outline-style",
-			})
-			break
-		}
-	}
+	kind := outlineStyle(first.Box)
+	offset := first.outlineOffset
 
 	// paintEdge is the border's, and a border's fills are not Overhang because
 	// layout accounted for every one of them. These are marked afterwards rather
@@ -2195,32 +2189,36 @@ func (p *painter) joinedOutline(pieces []*Fragment) {
 	// flag would be a property of the caller pretending to be a property of the
 	// edge, and every border call site would have to pass false.
 	at := len(p.ops)
-	defer func() {
-		for i := at; i < len(p.ops); i++ {
-			if r, ok := p.ops[i].(FillRect); ok {
-				r.Overhang = true
-				p.ops[i] = r
-			}
-		}
-	}()
+	defer func() { markOverhang(p.ops[at:]) }()
 
 	n := len(pieces)
-	if n == 1 {
-		r := first.BorderRect
-		o := Rect{X: r.X.Sub(w), Y: r.Y.Sub(w), W: r.W.Add(w).Add(w), H: r.H.Add(w).Add(w)}
-		for _, band := range ringBands(o, r, w) {
-			p.paintEdge(band.band, kind, colour, band.side, w)
-		}
-		return
-	}
 	inner := make([]Rect, n)
 	outer := make([]Rect, n)
+	innerR := make([]Radii, n)
+	outerR := make([]Radii, n)
+	round := false
 	var tallest style.Unit
 	for i, f := range pieces {
-		r := f.BorderRect
-		inner[i] = r
-		outer[i] = Rect{X: r.X.Sub(w), Y: r.Y.Sub(w), W: r.W.Add(w).Add(w), H: r.H.Add(w).Add(w)}
+		inner[i], innerR[i], outer[i], outerR[i] = outlineEdges(f.BorderRect, f.radii, offset, w)
+		round = round || !outerR[i].IsZero()
 		tallest = style.Max(tallest, outer[i].H)
+	}
+	sides := [4]ringSide{}
+	for i := range sides {
+		sides[i] = ringSide{kind: kind, colour: colour, paints: kind != borderNone && kind != borderHidden}
+	}
+	ringOf := func(i int) {
+		if outerR[i].IsZero() {
+			for _, band := range ringBands(outer[i], inner[i], w) {
+				p.paintEdge(band.band, kind, colour, band.side, w)
+			}
+			return
+		}
+		p.roundedRing(outer[i], outerR[i], Edges{Top: w, Right: w, Bottom: w, Left: w}, sides)
+	}
+	if n == 1 {
+		ringOf(0)
+		return
 	}
 	// The pieces by the top of their outer rectangle, so that the ones that
 	// can meet piece j — whose tops lie within the tallest ring above j's
@@ -2231,10 +2229,52 @@ func (p *painter) joinedOutline(pieces []*Fragment) {
 		byTop[i] = i
 	}
 	sort.SliceStable(byTop, func(a, b int) bool { return outer[byTop[a]].Y < outer[byTop[b]].Y })
+	window := func(j int) int {
+		return sort.Search(n, func(k int) bool { return outer[byTop[k]].Y > outer[j].Y.Sub(tallest) })
+	}
+
+	if round {
+		// Rounded pieces whose rings do not meet are each their own ring, which
+		// is the minimum CSS UI 4 asks for and follows each piece's corners.
+		// Where two meet, the shape that encloses both is not one this engine
+		// joins with curves in it: the pieces are drawn as the square union
+		// below, and that is reported.
+		//
+		// Each comparison is charged as the join's are, below, and past the
+		// budget the pieces are drawn a ring each, which is what the budget's
+		// finding says happens.
+		meet := false
+		for j := 0; j < n && !meet && !p.joinRefused; j++ {
+			for k := window(j); k < n && outer[byTop[k]].Y < outer[j].Bottom(); k++ {
+				if !p.rec.charge(costMarkCompared,
+					"the joining of outlines broken across lines past that point, drawn a ring per piece") {
+					p.joinRefused = true
+					break
+				}
+				if i := byTop[k]; i != j && !outer[i].Intersect(outer[j]).Empty() {
+					meet = true
+					break
+				}
+			}
+		}
+		if !meet || p.joinRefused {
+			for i := range pieces {
+				ringOf(i)
+			}
+			return
+		}
+		p.reportOnce(first.Box, "square-outline", Finding{
+			Rule:     RuleUnsupportedValue,
+			Source:   AtHTML(offsetOf(first.Box)),
+			Message:  "the outline of a box with rounded corners, broken across lines whose outlines meet, was drawn with square corners",
+			Path:     PathOf(first.Box.Element),
+			Property: "outline-style",
+		})
+	}
 
 	for j := range pieces {
 		o, r := outer[j], inner[j]
-		from := sort.Search(n, func(k int) bool { return outer[byTop[k]].Y > o.Y.Sub(tallest) })
+		from := window(j)
 		for _, band := range ringBands(o, r, w) {
 			parts := []Rect{band.band}
 			for k := from; k < n && outer[byTop[k]].Y < o.Bottom() && !p.joinRefused; k++ {

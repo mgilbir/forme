@@ -105,8 +105,6 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		"scroll-padding: auto",
 		"overflow-anchor: auto",
 		"scrollbar-color: auto",
-		"outline-offset: 0",
-		"outline-offset: 0px",
 		// The second property here with two values, and for the same reason as
 		// the first: "auto" leaves the underline's position to the user agent
 		// and "from-font" demands it come from the face's own metrics. This
@@ -246,7 +244,6 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 		"clip-path: circle(40%)",
 		"perspective: 500px",
 		"font-variant-alternates: historical-forms",
-		"outline-offset: 4px",
 		"text-underline-position: under",
 		// And the hyphens case from the other side. "auto" asks for the face's
 		// optical size axis to be set from the font size, and this sets no axis;
