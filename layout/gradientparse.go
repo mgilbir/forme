@@ -24,15 +24,12 @@ import (
 // # What is read
 //
 // CSS Images 3's three gradients and their repeating forms, with CSS Images 4's
-// conic gradient, its double-position stops, its transition hints and its
-// single stop. What is not read is reported, as the value always was, and
-// painted as nothing:
+// conic gradient, its double-position stops, its transition hints, its single
+// stop and its colour interpolation method: every space of CSS Color 4 §13.2,
+// with a hue interpolation method for the polar ones (see gradientspace.go for
+// how a gradient in one is drawn). What is not read is reported, as the value
+// always was, and painted as nothing:
 //
-//   - a colour interpolation method other than "in srgb". Every colour this
-//     engine reads is a legacy sRGB colour, and CSS Color 4 §13.1 interpolates
-//     those in gamma-encoded sRGB, so "in srgb" is the default spelled out and
-//     every other space is a different picture — see style/color.go for why
-//     no other colour space is read at all;
 //   - CSS Images 4's two additions to <radial-size>, a percentage circle and
 //     two extent keywords, which no browser reads yet either;
 //   - an angle written as calc().
@@ -94,6 +91,11 @@ type gradientSpec struct {
 
 	// The centre of a radial or conic gradient, which is where "at" puts it.
 	center bgPosPair
+
+	// The colour interpolation method: the space the stops are interpolated
+	// in, sRGB unless one is named, and for a polar space the hue method.
+	space colorSpace
+	hue   hueMethod
 
 	// A conic gradient's rotation, in degrees clockwise from up.
 	from float64
@@ -208,17 +210,34 @@ func (l *layouter) readGradientShape(b *Box, s *gradientSpec, parts [][]css.Comp
 	for i := 0; i < len(parts); {
 		word, isWord := identOf(parts[i])
 		if isWord && word == "in" {
-			// CSS Color 4 §13.1's <color-interpolation-method>. "in srgb" is
-			// the default spelled out; any other space, or a polar one with a
-			// hue method after it, is a different picture, and none is read.
+			// CSS Color 4 §13.2's <color-interpolation-method>: "in" and a
+			// <rectangular-color-space>, or a <polar-color-space> and then
+			// perhaps "<method> hue".
 			if sawIn || i+1 >= len(parts) {
 				return false
 			}
-			if space, ok := identOf(parts[i+1]); !ok || space != "srgb" {
+			name, ok := identOf(parts[i+1])
+			if !ok {
 				return false
 			}
-			sawIn, closed = true, begun
+			space, ok := colorSpaceNamed(name)
+			if !ok {
+				return false
+			}
+			s.space = space
 			i += 2
+			if space.hueIndex() >= 0 && i+1 < len(parts) {
+				if m, isWord := identOf(parts[i]); isWord {
+					if method, ok := hueMethodNamed(m); ok {
+						if h, ok := identOf(parts[i+1]); !ok || h != "hue" {
+							return false
+						}
+						s.hue = method
+						i += 2
+					}
+				}
+			}
+			sawIn, closed = true, begun
 			continue
 		}
 		if closed {
@@ -536,10 +555,21 @@ type laidGradient struct {
 	// repeats more often in the tile than maxGradientRepeats, which is a
 	// limit and is reported, rather than because CSS says so.
 	tooFine string
+	// none is set for a gradient that is not drawn: one whose interpolation
+	// in its colour space needs more stops than maxInterpolatedStops, which
+	// tooMany says and is reported, or whose work the budget refused, which
+	// the budget has reported.
+	none    bool
+	tooMany string
 }
 
 // layOut places a gradient in a tile of the given size.
-func (s *gradientSpec) layOut(w, h style.Unit) laidGradient {
+//
+// restate is what turns stops interpolated in the gradient's colour space into
+// stops interpolated in sRGB (see gradientspace.go): interpolateStops, or the
+// layouter's memo of it, which charges the document for the work. nil is
+// interpolateStops charging nothing.
+func (s *gradientSpec) layOut(w, h style.Unit, restate func([]GradientStop) ([]GradientStop, restated)) laidGradient {
 	W, H := w.Px(), h.Px()
 	var g Gradient
 	g.Kind, g.Repeating = s.kind, s.repeating
@@ -616,6 +646,23 @@ func (s *gradientSpec) layOut(w, h style.Unit) laidGradient {
 		if unit > 0 {
 			stops[i].Offset /= unit
 		}
+	}
+	if s.space != spaceSRGB {
+		if restate == nil {
+			restate = func(st []GradientStop) ([]GradientStop, restated) {
+				return interpolateStops(st, s.space, s.hue, nil)
+			}
+		}
+		out, how := restate(stops)
+		switch how {
+		case restatedTooMany:
+			return laidGradient{none: true, tooMany: fmt.Sprintf(
+				"interpolating it in its colour space to within half an 8-bit step takes "+
+					"more than the %d colour stops this engine draws", maxInterpolatedStops)}
+		case restatedRefused:
+			return laidGradient{none: true}
+		}
+		stops = out
 	}
 	g.Stops = stops
 

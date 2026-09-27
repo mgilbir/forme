@@ -435,8 +435,9 @@ func TestAGradientIsReportedWhereItIsNotRead(t *testing.T) {
 		{"linear-gradient(red)", true}, // CSS Images 4 allows one stop
 		{"radial-gradient(circle closest-corner at 10px 20px, red, blue)", true},
 		{"conic-gradient(from 90deg at 10% 20%, red, blue 30deg, 50%, green)", true},
-		{"linear-gradient(in lab, red, blue)", false},
-		{"linear-gradient(in hsl longer hue, red, blue)", false},
+		{"linear-gradient(in lab, red, blue)", true},
+		{"linear-gradient(in hsl longer hue, red, blue)", true},
+		{"linear-gradient(in cmyk, red, blue)", false},
 		{"linear-gradient(to right in srgb, red, blue)", true},
 		{"radial-gradient(circle in srgb at 10px 10px, red, blue)", false}, // the method inside the shape
 		{"radial-gradient(circle 50%, red, blue)", false},                  // Images 3: no percentage circle

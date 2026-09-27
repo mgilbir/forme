@@ -629,6 +629,8 @@ type layouter struct {
 	// elements is one thing to be told. Keyed by whatever tells two of them
 	// apart. See reportOnce.
 	reportedOnce map[string]bool
+	// interpolated memoizes a gradient's stops restated in sRGB; see restater.
+	interpolated map[string]interpolatedStops
 	// inlineDraws memoizes whether an inline box has a background or a border to
 	// paint, and inlineChains the chain of such boxes above another box. Both are
 	// asked once per item per line, which is the hottest loop in the engine, and

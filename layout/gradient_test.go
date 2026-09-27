@@ -131,8 +131,9 @@ func TestAGradientIsSizedAndPlacedLikeAnImage(t *testing.T) {
 // TestARealGradientIsPainted. The line this file draws is between a gradient of
 // one colour, which is a fill, and a gradient, which is a FillGradient: a
 // two-colour gradient must not come out as either of its colours, and must come
-// out as itself, unreported. A gradient in a colour space this engine does not
-// interpolate in is still one it cannot paint, and still says so.
+// out as itself, unreported. A gradient interpolated in another colour space is
+// painted too, as the stops that interpolation comes to in sRGB (see
+// gradientspace.go), and one in a form this engine does not read still says so.
 func TestARealGradientIsPainted(t *testing.T) {
 	paint := func(value string) ([]Op, []Finding) {
 		built := Build(Input{
@@ -174,9 +175,28 @@ func TestARealGradientIsPainted(t *testing.T) {
 	}
 
 	ops, findings = paint("linear-gradient(in oklab, red, blue)")
+	got = got[:0]
+	for _, op := range ops {
+		if v, ok := op.(FillGradient); ok {
+			got = append(got, v)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("%d gradients painted in oklab, want 1", len(got))
+	}
+	stops = got[0].Gradient.Stops
+	if len(stops) <= 2 || stops[0].Color != (style.RGBA{R: 255, A: 1}) ||
+		stops[len(stops)-1].Color != (style.RGBA{B: 255, A: 1}) {
+		t.Errorf("the oklab gradient's stops are %+v, want red to blue restated in sRGB", stops)
+	}
+	if hasRule(findings, RuleUnsupportedValue) {
+		t.Errorf("a gradient interpolated in oklab was reported: %v", findings)
+	}
+
+	ops, findings = paint("radial-gradient(circle 50%, red, blue)")
 	for _, op := range ops {
 		if _, ok := op.(FillGradient); ok {
-			t.Errorf("a gradient interpolated in oklab was painted in sRGB")
+			t.Errorf("a percentage circle, which this engine does not read, was painted")
 		}
 	}
 	if !hasRule(findings, RuleUnsupportedValue) {

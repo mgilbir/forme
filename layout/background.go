@@ -557,7 +557,19 @@ func (l *layouter) tiling(b *Box, layer backgroundLayer, positioning, painting R
 		// Laid out now and not when it was read, because where its stops fall
 		// depends on the size of the tile — which is what CSS Images calls the
 		// gradient box, and which background-size has only just decided.
-		laid := spec.layOut(w, h)
+		laid := spec.layOut(w, h, l.restater(spec))
+		if laid.none {
+			if laid.tooMany != "" {
+				l.reportOnce("bg-image-interpolated:"+spec.source, Finding{
+					Rule:     RuleLimit,
+					Source:   AtHTML(offsetOf(b)),
+					Message:  "the gradient " + quoteValue(spec.source) + " was not drawn: " + laid.tooMany,
+					Path:     PathOf(b.Element),
+					Property: "background-image",
+				})
+			}
+			return bgPaint{}, false
+		}
 		if laid.tooFine != "" {
 			l.reportOnce("bg-image-fine:"+spec.source, Finding{
 				Rule:     RuleLimit,
