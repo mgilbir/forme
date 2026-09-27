@@ -188,8 +188,16 @@ var properties = map[string]property{
 	// ask for; "none" turns justification off and is acted on; the rest are
 	// read as auto and reported, because a page justified the wrong way is a
 	// page that looks right and is not.
-	"text-justify":   {true, "auto"},
-	"text-indent":    {true, "0"},
+	"text-justify": {true, "auto"},
+	"text-indent":  {true, "0"},
+	// MathML Core §4.3–§4.5: whether a formula is set as display
+	// mathematics or kept compact, which of two heights a superscript rises
+	// to, and how many levels of script deep a part of a formula is. All
+	// three inherit, and math-depth computes to an integer (see mathml.go),
+	// which is what "font-size: math" scales by.
+	"math-style":     {true, "normal"},
+	"math-shift":     {true, "normal"},
+	"math-depth":     {true, "0"},
 	"text-transform": {true, "none"},
 	// CSS Text 4 §8.2. Inherited, and its initial value is "normal" — which is
 	// not "do nothing": it trims a full-width closing bracket at the end of a

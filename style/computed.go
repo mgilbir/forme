@@ -264,6 +264,24 @@ func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit, viewport Media, m
 	return size, true
 }
 
+// fontSize is fontSizeOf, and MathML Core §4.5's "font-size: math" where that
+// is the value: the parent's size scaled by how far math-depth moved from the
+// parent's to this element's (see mathFontSize). parent is the parent's
+// computed style, zero for the root.
+func (s *Styler) fontSize(cs ComputedStyle, own bool, parent ComputedStyle, parentSize, root Unit,
+	m Metrics, fontStyle ComputedStyle) (Unit, bool) {
+
+	if own && isMathFontSize(cs.Get("font-size")) {
+		from := 0
+		if !parent.IsZero() {
+			from, _ = strconv.Atoi(parent.Get("math-depth"))
+		}
+		to, _ := strconv.Atoi(cs.Get("math-depth"))
+		return mathFontSize(parentSize, from, to, m, fontStyle)
+	}
+	return fontSizeOf(cs, own, parentSize, root, s.viewport, m, fontStyle)
+}
+
 // mentionsUnit reports whether a value states a dimension in a unit, at any
 // depth: "calc(1em + 2ex)" mentions ex as much as "2ex" does.
 func mentionsUnit(vals []css.ComponentValue, unit string) bool {

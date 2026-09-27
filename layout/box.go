@@ -1376,7 +1376,7 @@ func parseDisplay(raw string) displayType {
 				return displayType{outer: OuterInline, inner: InnerFlow}
 			}
 			outer, haveOuter = w, true
-		case "flow", "flow-root", "table", "flex", "grid", "ruby":
+		case "flow", "flow-root", "table", "flex", "grid", "ruby", "math":
 			if inner != "" {
 				return displayType{outer: OuterInline, inner: InnerFlow}
 			}
@@ -1397,7 +1397,11 @@ func parseDisplay(raw string) displayType {
 		return displayType{outer: OuterInline, inner: InnerFlow}
 	}
 	switch inner {
-	case "", "flow":
+	case "", "flow", "math":
+		// "math" is MathML Core §4.1's inner display type. On an element that
+		// is not MathML, "block math" and "inline math" compute to block flow
+		// and inline flow; a MathML element's is not laid out yet, and the
+		// <math> it is inside is an empty replaced box.
 		out.inner = InnerFlow
 	case "flow-root":
 		out.inner = InnerFlowRoot

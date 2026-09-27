@@ -22,6 +22,14 @@ package layout
 // larger spacing, which is what an author expects and what a fixed pixel margin
 // quietly fails to do.
 const UserAgentCSS = `
+/* Every rule below is about HTML's elements, and says so: the sheet's default
+   namespace is HTML's, so "p" is an HTML <p> and "[hidden]" an HTML element
+   with a hidden attribute, and neither reaches a MathML element of the same
+   name — which is how HTML's own sheet is written. The MathML rules at the
+   end name their namespace by the prefix "m". */
+@namespace url(http://www.w3.org/1999/xhtml);
+@namespace m url(http://www.w3.org/1998/Math/MathML);
+
 /* The elements that produce no box at all: HTML's rendering section, §15.3.1,
    less the two kept with their neighbours below (area and param). A
    <datalist> is the list of suggestions a text field offers as it is typed
@@ -466,4 +474,70 @@ legend { padding-left: 2px; padding-right: 2px }
    "margin-block-end: 1em" in *quirks mode* only, and this engine has one
    document mode; taking the quirk would indent every standards-mode document
    by an em nothing asked for. */
+
+/* MathML Core's user agent stylesheet, appendix A, rule for rule. It is
+   written with "@namespace url(MathML)" there and with the prefix here, which
+   is the same selector: every compound in it is in the MathML namespace,
+   including the ones that name no element ("semantics > :not(:first-child)"
+   is "m|semantics > m|*:not(:first-child)"). */
+m|* {
+  font-size: math;
+  display: block math;
+  writing-mode: horizontal-tb !important;
+}
+m|math {
+  direction: ltr;
+  text-indent: 0;
+  letter-spacing: normal;
+  line-height: normal;
+  word-spacing: normal;
+  font-family: math;
+  font-size: inherit;
+  font-style: normal;
+  font-weight: normal;
+  display: inline math;
+  math-shift: normal;
+  math-style: compact;
+  math-depth: 0;
+}
+m|math[display="block" i] { display: block math; math-style: normal }
+m|math[display="inline" i] { display: inline math; math-style: compact }
+m|semantics > m|*:not(:first-child) { display: none }
+m|maction > m|*:not(:first-child) { display: none }
+m|merror { border: 1px solid red; background-color: lightYellow }
+m|mphantom { visibility: hidden }
+m|mi { text-transform: math-auto }
+m|mtable { display: inline-table; math-style: compact }
+m|mtr { display: table-row }
+m|mtd { display: table-cell; text-align: center; padding: 0.5ex 0.4em }
+m|mfrac { padding-inline: 1px }
+m|mfrac > m|* { math-depth: auto-add; math-style: compact }
+m|mfrac > m|*:nth-child(2) { math-shift: compact }
+m|mroot > m|*:not(:first-child) { math-depth: add(2); math-style: compact }
+m|mroot, m|msqrt { math-shift: compact }
+m|msub > m|*:not(:first-child),
+m|msup > m|*:not(:first-child),
+m|msubsup > m|*:not(:first-child),
+m|mmultiscripts > m|*:not(:first-child),
+m|munder > m|*:not(:first-child),
+m|mover > m|*:not(:first-child),
+m|munderover > m|*:not(:first-child) {
+  math-depth: add(1);
+  math-style: compact;
+}
+m|munder[accentunder="true" i] > m|*:nth-child(2),
+m|mover[accent="true" i] > m|*:nth-child(2),
+m|munderover[accentunder="true" i] > m|*:nth-child(2),
+m|munderover[accent="true" i] > m|*:nth-child(3) {
+  font-size: inherit;
+}
+m|msub > m|*:nth-child(2),
+m|msubsup > m|*:nth-child(2),
+m|mmultiscripts > m|*:nth-child(even),
+m|mmultiscripts > m|mprescripts ~ m|*:nth-child(odd),
+m|mover[accent="true" i] > m|*:first-child,
+m|munderover[accent="true" i] > m|*:first-child {
+  math-shift: compact;
+}
+m|mmultiscripts > m|mprescripts ~ m|*:nth-child(even) { math-shift: inherit }
 `

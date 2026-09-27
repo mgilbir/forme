@@ -270,6 +270,11 @@ func init() {
 
 	// css-display-3, kept as it was written: see legalDisplay.
 	g["display"] = fromBool(legalDisplay)
+
+	// MathML Core §4.3–§4.5.
+	g["math-style"] = single(kw("normal", "compact"))
+	g["math-shift"] = single(kw("normal", "compact"))
+	g["math-depth"] = single(either(kw("auto-add"), addFn, num(integerSlot)))
 }
 
 // lineWidth is <line-width>: a non-negative length or one of three keywords.
@@ -315,6 +320,14 @@ func aspectRatio(it []css.ComponentValue) verdict {
 		return n(it[0]).and(n(it[2]))
 	}
 	return invalid
+}
+
+// addFn is math-depth's add(<integer>).
+func addFn(v css.ComponentValue) verdict {
+	if !v.IsFunction() || !ascii.EqualFold(v.Token.Value, "add") {
+		return invalid
+	}
+	return single(num(integerSlot))(items(v.Values))
 }
 
 // fontSizeKeyword is <absolute-size> | <relative-size> | math.

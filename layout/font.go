@@ -380,6 +380,32 @@ func (m fontMetrics) XHeight(cs style.ComputedStyle, size style.Unit) (float64, 
 	return xHeightIn(faceForStyle(m.fonts, m.rec, cs, size), size)
 }
 
+// MathScaleDowns answers style.MathMetrics: what the first available font of
+// a style says a script and a script's script are scaled by (MathML Core
+// §5.1's scriptPercentScaleDown and scriptScriptPercentScaleDown, over a
+// hundred, or 0.71 and 0.5041 where the font states nought or no constants),
+// and whether it has a MATH table at all. A font whose table cannot be read
+// is one with none: the table's own report is layout's, where the text set in
+// the font is.
+func (m fontMetrics) MathScaleDowns(cs style.ComputedStyle, size style.Unit) (script, scriptScript float64, hasMath bool) {
+	script, scriptScript = 0.71, 0.5041
+	face := faceForStyle(m.fonts, m.rec, cs, size)
+	if face == nil {
+		return script, scriptScript, false
+	}
+	t, err := face.MathTable()
+	if err != nil || t == nil {
+		return script, scriptScript, false
+	}
+	if v, ok := t.Constant(shape.MathScriptPercentScaleDown); ok && v != 0 {
+		script = float64(v) / 100
+	}
+	if v, ok := t.Constant(shape.MathScriptScriptPercentScaleDown); ok && v != 0 {
+		scriptScript = float64(v) / 100
+	}
+	return script, scriptScript, true
+}
+
 // faceWithGlyph is the first of a box's families whose face has a glyph for a
 // character, which is the face that character is set in.
 //

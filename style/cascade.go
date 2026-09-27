@@ -461,6 +461,9 @@ func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media, urls InlineU
 		// below. It is a view of the builder and not a copy; the writes that
 		// follow go through the builder.
 		cs := b.cs
+		// math-depth before font-size, which "font-size: math" scales by how
+		// far it moved. See mathml.go.
+		s.resolveMathDepth(b, parent)
 
 		// The parent's own size, which is what an em means here, and the
 		// initial size for the root — a document that says nothing about
@@ -484,7 +487,7 @@ func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media, urls InlineU
 		if !parent.IsZero() {
 			fontStyle = parent
 		}
-		size, resolved := fontSizeOf(cs, own, parentSize, rootSize, s.viewport, m, fontStyle)
+		size, resolved := s.fontSize(cs, own, parent, parentSize, rootSize, m, fontStyle)
 		// The scale a stated size is on is the one it was stated in, so this
 		// asks only where nothing has been stated: by this element, and by
 		// none of its ancestors either. See DefaultMonospaceFontSize.
@@ -551,13 +554,14 @@ func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media, urls InlineU
 			key := PseudoKey{Node: n, Name: name}
 			pb, pdeclared, own := s.computeForPseudo(n, rules, cs, name)
 			pcs := pb.cs
+			s.resolveMathDepth(pb, cs)
 			// A pseudo-element's em is relative to its own font-size, and it
 			// inherits from the element it belongs to rather than from that
 			// element's parent.
 			// A pseudo-element's ex is its originating element's, for the same
 			// reason its em is: it inherits from that element and not from that
 			// element's parent.
-			psize, presolved := fontSizeOf(pcs, own, size, rootSize, s.viewport, m, cs)
+			psize, presolved := s.fontSize(pcs, own, cs, size, rootSize, m, cs)
 			if presolved {
 				pb.set(fontSizeID, s.interner().value(pxValue(psize)))
 			}
@@ -1594,6 +1598,8 @@ var displayOutside = map[string]bool{"block": true, "inline": true, "run-in": tr
 var displayInside = map[string]bool{
 	"flow": true, "flow-root": true, "table": true,
 	"flex": true, "grid": true, "ruby": true,
+	// MathML Core §4.1: <display-outside> || [ <display-inside> | math ].
+	"math": true,
 }
 
 // singleDisplay is every value that stands on its own: the box keywords, the
