@@ -2025,6 +2025,20 @@ published ones do not. It is listed here because every font the repository
 keeps is, and for where it came from; no third party's work is in it.
 
 ============================================================================
+Font built for the MATH table oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/MathTable.ttf
+Source:  testdata/harfbuzz/mathtable_fixture.py, in this repository, which
+         builds it with fontTools
+Licence: the licence in LICENSE; it is not anyone else's work
+
+A small face made from nothing by the script named above, with every part of
+an OpenType MATH table in it that no published face at hand states. It is
+listed here because every font the repository keeps is, and for where it came
+from; no third party's work is in it.
+
+============================================================================
 Fonts built for the variable vertical metrics and vertical kerning oracle
 ============================================================================
 

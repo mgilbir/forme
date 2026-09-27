@@ -459,6 +459,27 @@ func useFace(face *Face) {
 	for gid := 2; gid < min(face.NumGlyphs(), 64); gid++ {
 		_, _, _, _, _ = face.GlyphExtents(gid)
 	}
+	// The MATH table, where the font has one: every question, for glyphs in
+	// range and out. See FuzzMathTable for a target on the table alone.
+	if m, err := face.MathTable(); err == nil && m != nil {
+		for c := MathConstant(0); c < MathConstantCount; c++ {
+			_, _ = m.Constant(c)
+		}
+		_ = m.MinConnectorOverlap()
+		for _, gid := range []int{-1, 0, 1, face.NumGlyphs(), face.NumGlyphs() + 1} {
+			_, _ = m.ItalicsCorrection(gid)
+			_, _ = m.TopAccentAttachment(gid)
+			_ = m.IsExtendedShape(gid)
+			_, _ = m.Kern(gid, MathKernTopRight, 0)
+			for _, v := range []bool{false, true} {
+				_ = m.Variants(gid, v)
+				_, _ = m.Assembly(gid, v)
+				_, _ = m.Stretch(gid, v, 5000)
+			}
+			_ = m.PreferredStretchWidth(gid)
+		}
+		_ = m.Limits()
+	}
 	for _, r := range []rune{'a', 0x0628, 0x0915, 0x1B13, 0x2011, 0x3000, 0x10FFFF} {
 		_, _ = face.GlyphID(r)
 		_, _ = face.Advance(r)

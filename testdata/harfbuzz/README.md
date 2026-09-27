@@ -98,6 +98,8 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `varc.py`, `varc.expected.txt` | variable composites (VARC): their ink, and their outlines drawn — see below |
 | `varc_fixture.py`, `fonts/VarComposite*` | the faces that oracle needs and no foundry made |
 | `pointmatch_fixture.py`, `fonts/PointMatch*.ttf` | the faces that oracle needs and no foundry made |
+| `mathtable.py`, `mathtable.expected.txt` | what each face's MATH table states — see below |
+| `mathtable_fixture.py`, `fonts/MathTable.ttf` | the face that oracle needs and no foundry made |
 | `ignorables_fixture.py`, `fonts/Ignorables.ttf`, `ignorables.txt`, `ignorables.expected.txt` | a corpus of the characters nothing is drawn for, shaped by `shape.py` in the face it needs — see below |
 
 Each corpus is weighted towards the places shaping decides something rather than
@@ -351,6 +353,24 @@ whole units.
 
 `make hbvarc` regenerates it. `fonts/VarCompositeCFF.otf` is built from
 `fonts/CFFInk.otf`, so `make hbcffink` comes first where that changes.
+
+## The MATH table
+
+A math font's MATH table is what MathML is set with: fifty-six constants, and
+per glyph its italics correction, where an accent above it is centred, whether
+it is an extended shape, its kerning, its size variants and how to build it of
+any size from parts. `shape/math.go` reads it where it lies. `mathtable.py`
+asks HarfBuzz for all of it — and fontTools too, and stops if the two
+disagree, so every value written has been read twice by readers that share no
+code — for `fonts/MathTable.ttf`, built by `mathtable_fixture.py` with every
+part of the table in it and a device table of each kind, for the suite's own
+math test fonts (every one with a MATH table but `operators.woff`, whose two
+thousand constructions are one construction repeated), and for Noto Sans Math
+and STIX Two Math from the Google Fonts library. Only what a font states is
+written; `shape/math_test.go` asks every glyph of every face and requires "not
+stated" of every glyph the file does not name.
+
+`make hbmath` regenerates it.
 
 ## The characters nothing is drawn for
 

@@ -1,4 +1,4 @@
-.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -186,7 +186,7 @@ hbenv:
 # indiccategories.expected.txt — are read from a source checkout of the same
 # release: HarfBuzz's own generators, and its own source; see
 # usecategories.py, usescripts.py and indiccategories.py.
-hboracles: hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbverticalinstance hbinstancevaried hblanguages varinstance
+hboracles: hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbverticalinstance hbinstancevaried hblanguages varinstance
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
@@ -312,6 +312,82 @@ hbpointmatch:
 	$(PYTHON) $(HARFBUZZ_DIR)/pointmatch.py $(HARFBUZZ_DIR)/pointmatch.expected.txt \
 		PointMatch.ttf=$(HARFBUZZ_DIR)/fonts/PointMatch.ttf \
 		PointMatchPhantom.ttf=$(HARFBUZZ_DIR)/fonts/PointMatchPhantom.ttf
+
+# The MATH table, held to HarfBuzz and to fontTools both: a face built here
+# with every part of the table in it (see mathtable_fixture.py), the math test
+# fonts of the pinned suite — every one of them that has a MATH table but
+# operators.woff, whose two thousand constructions are one construction
+# repeated — and the two math faces of the Google Fonts library. See
+# mathtable.py.
+MATH_WPT_FONTS := \
+	axisheight5000-verticalarrow14000.woff \
+	css-units.woff \
+	fraction-axisheight7000-rulethickness1000.woff \
+	fraction-denominatordisplaystylegapmin5000-rulethickness1000.woff \
+	fraction-denominatordisplaystyleshiftdown6000-axisheight1000-rulethickness1000.woff \
+	fraction-denominatorgapmin4000-rulethickness1000.woff \
+	fraction-denominatorshiftdown3000-axisheight1000-rulethickness1000.woff \
+	fraction-numeratordisplaystylegapmin8000-rulethickness1000.woff \
+	fraction-numeratordisplaystyleshiftup2000-axisheight1000-rulethickness1000.woff \
+	fraction-numeratorgapmin9000-rulethickness1000.woff \
+	fraction-numeratorshiftup11000-axisheight1000-rulethickness1000.woff \
+	fraction-rulethickness10000.woff \
+	largeop-displayoperatorminheight1250.woff \
+	largeop-displayoperatorminheight2000-2AFF-italiccorrection3000.woff \
+	largeop-displayoperatorminheight3000-2AFF-axisheight1000.woff \
+	largeop-displayoperatorminheight5000.woff \
+	largeop-displayoperatorminheight7000-2AFF-italiccorrection5000.woff \
+	limits-lowerlimitbaselinedropmin3000.woff \
+	limits-lowerlimitgapmin11000.woff \
+	limits-upperlimitbaselinerisemin5000.woff \
+	limits-upperlimitgapmin7000.woff \
+	radical-degreebottomraisepercent25-rulethickness1000.woff \
+	radical-displaystyleverticalgap7000-rulethickness1000.woff \
+	radical-extraascender3000-rulethickness1000.woff \
+	radical-kernafterdegreeminus5000-rulethickness1000.woff \
+	radical-kernbeforedegree4000-rulethickness1000.woff \
+	radical-negativekernbeforedegree1000-rulethickness1000.woff \
+	radical-rtlm.woff \
+	radical-rulethickness8000.woff \
+	radical-verticalgap6000-rulethickness1000.woff \
+	scriptpercentscaledown0-scriptscriptpercentscaledown40.woff \
+	scriptpercentscaledown80-scriptscriptpercentscaledown0.woff \
+	scriptpercentscaledown80-scriptscriptpercentscaledown40.woff \
+	scripts-spaceafterscript3000.woff \
+	scripts-subscriptbaselinedropmin9000.woff \
+	scripts-subscriptshiftdown6000.woff \
+	scripts-subscripttopmax4000.woff \
+	scripts-subsuperscriptgapmin11000-superscriptbottommaxwithsubscript3000.woff \
+	scripts-subsuperscriptgapmin11000.woff \
+	scripts-superscriptbaselinedropmax10000.woff \
+	scripts-superscriptbottommin8000.woff \
+	scripts-superscriptshiftup7000.woff \
+	scripts-superscriptshiftupcramped5000.woff \
+	stack-bottomdisplaystyleshiftdown5000-axisheight1000.woff \
+	stack-bottomshiftdown6000-axisheight1000.woff \
+	stack-displaystylegapmin4000.woff \
+	stack-gapmin8000.woff \
+	stack-topdisplaystyleshiftup3000-axisheight1000.woff \
+	stack-topshiftup9000-axisheight1000.woff \
+	stretchstack-bottomshiftdown3000.woff \
+	stretchstack-gapabovemin7000.woff \
+	stretchstack-gapbelowmin11000.woff \
+	stretchstack-topshiftup5000.woff \
+	stretchy-centered-on-baseline.woff \
+	stretchy-text-direction-asymetrical.woff \
+	stretchy.woff \
+	underover-accentbaseheight4000-overbarextraascender3000.woff \
+	underover-accentbaseheight4000-overbarverticalgap11000.woff \
+	underover-accentbaseheight4000-underbarextradescender5000.woff \
+	underover-accentbaseheight4000-underbarverticalgap7000.woff
+
+hbmath:
+	$(PYTHON) $(HARFBUZZ_DIR)/mathtable_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/mathtable.py $(HARFBUZZ_DIR)/mathtable.expected.txt \
+		MathTable.ttf=$(HARFBUZZ_DIR)/fonts/MathTable.ttf \
+		$(foreach f,$(MATH_WPT_FONTS),$(f)=$(WPT_DIR)/fonts/math/$(f)) \
+		NotoSansMath-Regular.ttf=$(GF_DIR)/ofl/notosansmath/NotoSansMath-Regular.ttf \
+		STIXTwoMath-Regular.ttf=$(GF_DIR)/ofl/stixtwomath/STIXTwoMath-Regular.ttf
 
 # A variable face set upright away from its default instance, and a kern
 # table's vertical subtables: two faces built here with VVAR and without, and
