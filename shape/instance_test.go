@@ -1286,3 +1286,25 @@ func varyingVariableFont(t *testing.T, records []fonttest.FeatureVariation) []by
 		Extra: map[string][]byte{"GSUB": gsub, "fvar": fonttest.FVAR(wghtWdth, nil)},
 	})
 }
+
+// TestACFF2FontSaysItIsCFF2: Load refuses a font whose outlines are CFF2, and
+// says that is why — not that it has no outlines, which would send its reader
+// looking for a broken file. A font with no outline table at all still says so.
+func TestACFF2FontSaysItIsCFF2(t *testing.T) {
+	good := varFont{
+		axes:     wghtWdth,
+		glyphs:   [][]byte{nil, rectGlyph()},
+		advances: []int{0, 500},
+	}
+	cff2 := good
+	cff2.extra = map[string][]byte{"glyf": nil, "CFF2": {0, 2, 0, 0}}
+	if _, err := Load(cff2.build(t)); err == nil || !strings.Contains(err.Error(), "CFF2") ||
+		strings.Contains(err.Error(), "neither") {
+		t.Errorf("a CFF2 font loaded as %v", err)
+	}
+	none := good
+	none.extra = map[string][]byte{"glyf": nil}
+	if _, err := Load(none.build(t)); err == nil || !strings.Contains(err.Error(), "neither glyf nor CFF") {
+		t.Errorf("a font with no outlines loaded as %v", err)
+	}
+}

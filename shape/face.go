@@ -278,6 +278,16 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	_, hasGlyf := tables["glyf"]
 	_, hasCFF := tables["CFF "]
 	if !hasGlyf && !hasCFF {
+		// A CFF2 table is outlines, and a font whose only outlines they are is
+		// a real font this engine does not read: CFF2's charstrings blend their
+		// own variations, where glyf leaves them to gvar, and nothing here
+		// interprets them — to draw, to measure ink, or to cut an instance.
+		// Saying "neither glyf nor CFF" of it would send whoever reads the
+		// report looking for a broken file, and the file is not broken.
+		if _, cff2 := tables["CFF2"]; cff2 {
+			return nil, errors.New("fonts: the font's outlines are CFF2, which this engine does not read " +
+				"(it reads glyf and CFF outlines), so the font cannot be used at any instance")
+		}
 		return nil, errors.New("fonts: the font carries neither glyf nor CFF outlines")
 	}
 	// One budget for the whole font, shared by the sfnt and CFF readers, so

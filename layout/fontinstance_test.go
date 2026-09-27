@@ -466,3 +466,50 @@ func TestTheOpticalSizeFollowsTheFontSize(t *testing.T) {
 		t.Errorf("14px text is set in %q, want the face at its default", c.Name())
 	}
 }
+
+// withTableTag renames one table of an sfnt's directory, leaving its bytes
+// where they are.
+func withTableTag(t *testing.T, data []byte, from, to string) []byte {
+	t.Helper()
+	out := append([]byte(nil), data...)
+	n := int(out[4])<<8 | int(out[5])
+	for i := 0; i < n; i++ {
+		rec := 12 + 16*i
+		if string(out[rec:rec+4]) == from {
+			copy(out[rec:rec+4], to)
+			return out
+		}
+	}
+	t.Fatalf("the font has no %q table", from)
+	return nil
+}
+
+// TestACFF2FaceIsReportedAsCFF2: a font whose outlines are a CFF2 table is a
+// variable font this engine cannot read at any instance. It is reported as
+// that, by name — not as a font with no outlines, and not drawn as some other
+// instance or face — and its text is set in the next family.
+func TestACFF2FaceIsReportedAsCFF2(t *testing.T) {
+	cff2 := withTableTag(t, realFont(), "glyf", "CFF2")
+	res := &fileResolver{files: map[string][]byte{"v.otf": cff2}}
+	built := Build(Input{
+		HTML: `<style>@font-face { font-family: Blended; src: url(v.otf); }</style>
+			<p id="p" style="font-family: Blended, serif; font-weight: 700">x</p>`,
+		Resources: res,
+	})
+	w, _ := style.FromPx(800)
+	h, _ := style.FromPx(800)
+	rec := NewRecorder(nil)
+	root := Layout(built.Root, Size{W: w, H: h}, built.Fonts, rec)
+	findings := append(built.Findings, rec.Findings()...)
+	// The family's summary, which carries the load's own reason, as every
+	// font that arrived and did not become a face does (TestFontUndecodable).
+	requireFinding(t, findings, RuleResourceBlocked, "outlines are CFF2")
+	for _, f := range findings {
+		if strings.Contains(f.Message, "neither glyf nor CFF") {
+			t.Errorf("a CFF2 font is reported as having no outlines: %v", f)
+		}
+	}
+	if f := linesOf(t, root, "p")[0].Runs[0].Face; f == nil || strings.Contains(f.Name(), "NotoSans") {
+		t.Errorf("the text was not set in the next family, serif, but in %v", f)
+	}
+}
