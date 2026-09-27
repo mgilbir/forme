@@ -1476,7 +1476,18 @@ const wptEnv = "WPT_TESTS"
 // DrawEmphasisMark per character, in Ahem a 10px square over each 20px one —
 // and each lands over its own letter on both pages. wpt.fyi: all three
 // browsers pass.
-const wptCleanPassBaseline = 5991
+//
+// **5991 to 5992, for text-spacing-trim at the start of a line**.
+// text-spacing-trim/text-spacing-trim-start-002 is a box three and a half
+// ideographs wide under trim-start, holding "（国国国" on each of three lines —
+// the first, one a soft wrap began, and one after a <br> — which fits only if
+// each line's bracket is set in its half-width form. That form is the one the
+// face's 'halt' states, so the bracket is drawn with the feature asked for, as
+// the reference draws it with font-feature-settings. See
+// layout/spacingtrim.go's markOpeningPunctuation. text-spacing-trim-start-oof-
+// 001 moves from failed to passed with something unsupported: it loads a
+// script. wpt.fyi: Chrome passes both, Firefox and Safari fail both.
+const wptCleanPassBaseline = 5992
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

@@ -385,6 +385,14 @@ func (l *layouter) inlineWidths(b *Box) intrinsicWidths {
 	// half that decides the page rather than a refinement of it.
 	hp := hangingPunctuationOf(b.Style.Get("hanging-punctuation"))
 	items = l.hangPunctuation(items, hp)
+	// And §8.2's opening punctuation, cut out and marked the way the lines
+	// will have it, after the hang for the reason the fill gives: a character
+	// that hangs has no blank inside the line to give up. widthsOf takes the
+	// trim where a line or an unbreakable run begins with one. The closing
+	// trim is not asked for: it is taken only by a line that cannot otherwise
+	// hold the character, and a box sized to its content is one that can.
+	trim, _ := spacingTrimOf(b.Style.Get("text-spacing-trim"))
+	items = l.markOpeningPunctuation(items, trim)
 	items = l.linkLetterSpacing(items)
 	// §8.1's ideograph spacing, after the letter-spacing boundary rule and for
 	// the same reason it is a pass over the finished items: both are gaps
@@ -561,6 +569,16 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 	// nothing, and an indent added to nothing is the indent alone.
 	var runContent bool
 	var line, run, edge, runEdge style.Unit
+	// runText and lineText say the run and the line hold something a reader
+	// sees — not an inline box's own edge — and forced that a forced break has
+	// been met. They are what §8.2's trim at the start of a line asks, the
+	// fill's "content" and afterForcedBreak read the same way: at the maximum
+	// width a line begins at the start and after each forced break, and at the
+	// minimum every unbreakable run begins one, so an opening bracket that
+	// begins either is measured in the half-width form the fill will set it in.
+	// A box shrink-wrapped around "（国" under trim-start was half an em wider
+	// than its only line.
+	var runText, lineText, forced bool
 	// The letter-spacing after the last character, which §8.2 adds and which
 	// hangs past the end of a line rather than counting towards it. A box
 	// shrink-wrapped around its text was one spacing wider than the text: "abc"
@@ -620,7 +638,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			split.rest.min = style.Max(split.rest.min, w)
 		}
 		out.min = style.Max(out.min, w)
-		run, runEdge, runContent = 0, 0, false
+		run, runEdge, runContent, runText = 0, 0, false, false
 		runTail.Reset()
 	}
 	endLine := func() {
@@ -632,7 +650,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			split.rest.max = style.Max(split.rest.max, w)
 		}
 		out.max = style.Max(out.max, w)
-		line, edge = 0, 0
+		line, edge, lineText = 0, 0, false
 		lineTail.Reset()
 		// floats is not reset with them, and that is the point of keeping it
 		// apart from the line at all. A forced break ends a line and does not
@@ -715,6 +733,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			// spaceAfterAtomics, which is what put it there.
 			gap := item.Autospace
 			run, runContent = run.Add(got.min).Add(gap), true
+			runText, lineText = true, true
 			line = line.Add(got.max).Add(gap)
 			// Content, so a space before it is no longer trailing. Without this
 			// a picture after a space would be measured into a box short by the
@@ -725,6 +744,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 
 		case item.Forced:
 			endLine()
+			forced = true
 
 		case item.Space:
 			w := item.Width
@@ -771,6 +791,12 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 				endRun()
 			}
 			line = line.Add(w)
+			if !item.Collapsible {
+				// Preserved white space is content, and a bracket after it
+				// does not begin the line; a collapsible space at the start
+				// of one is removed and is not. See the fill's §4.1.2 rule.
+				runText, lineText = true, true
+			}
 			if item.TrimAtEnd || item.HangsHard {
 				edge = edge.Add(w)
 			} else {
@@ -796,6 +822,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			out.min = style.Max(out.min, got)
 			split.rest.min = style.Max(split.rest.min, got)
 			line = line.Add(item.Width)
+			runText, lineText = true, true
 			edge, runEdge = 0, 0
 			lineTail.Add(item.Level, trailingSpacingOf(item))
 			runTail.Add(item.Level, trailingSpacingOf(item))
@@ -820,8 +847,24 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 				// box wider than the narrowest thing it can hold.
 				endRun()
 			}
-			run, runContent = run.Add(item.Width), true
-			line = line.Add(item.Width)
+			minW, maxW := item.Width, item.Width
+			if item.TrimStart != 0 {
+				// §8.2's trim, where the fill will take it. The line at the
+				// maximum width begins here if nothing a reader sees is on it
+				// yet, and it is the first line or a line after a forced break;
+				// the run at the minimum begins a line here if nothing is in it
+				// yet, and that line is the one the maximum's is if the two
+				// begin together and a soft wrap's otherwise.
+				trimmed := item.Width.Sub(item.TrimStart)
+				if !lineText && item.TrimStartOn.Trims(!forced, forced) {
+					maxW = trimmed
+				}
+				if !runText && item.TrimStartOn.Trims(!lineText && !forced, !lineText && forced) {
+					minW = trimmed
+				}
+			}
+			run, runContent = run.Add(minW), true
+			line = line.Add(maxW)
 			if !item.Inset {
 				// An inline box's own edge is not a character, so it neither
 				// carries spacing nor clears the spacing of the text before it
@@ -838,6 +881,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 				edge, runEdge = 0, 0
 				lineTail.Add(item.Level, trailingSpacingOf(item))
 				runTail.Add(item.Level, trailingSpacingOf(item))
+				runText, lineText = true, true
 			}
 		}
 	}

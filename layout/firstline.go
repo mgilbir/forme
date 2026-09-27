@@ -246,6 +246,20 @@ func (l *layouter) firstLineItems(items []inlineItem, block *Box,
 			}
 			it.Width = l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size,
 				it.Spacing, itemShaping(it))
+			// §8.2's trims are widths of the same text in the same face and
+			// size, and they change with them: a first line set at twice the
+			// size gives up twice the blank. Only a candidate is asked again —
+			// which characters are candidates was settled from the box's own
+			// style, and the rule that picks them is about the character and
+			// not its size — and one the restyled face has no half-width form
+			// for, or whose restyled features already ask for it, comes back
+			// as zero and is set whole.
+			if it.TrimStart != 0 {
+				it.TrimStart = l.openingTrimOf(*it)
+			}
+			if it.TrimEnd != 0 {
+				it.TrimEnd = trimWidthOf(*it, it.Text)
+			}
 		}
 		if it.Leads {
 			// Against the face the run is actually set in, which is not always

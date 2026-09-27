@@ -271,6 +271,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		l.reportSpacingTrim(b, unhandledTrim)
 	}
 	items = l.markClosingPunctuation(items, trim)
+	items = l.markOpeningPunctuation(items, trim)
 	items = l.linkShapingContext(items)
 
 	// §5.12.1's ::first-line, which is not a box and cannot be one: it changes
@@ -920,7 +921,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						MergePost:    item.MergePost,
 						ContextKerns: item.ContextKerns,
 						Upright:      item.Upright,
-						Features:     item.Off,
+						Features:     runFeatures(item),
 						RTL:          item.Level&1 == 1,
 						Shift:        shift,
 						emphasis:     l.emphasisOf(heldBox(item.Box), heldBox(item.Box).FontSize.Mul(lineScale)),

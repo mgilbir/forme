@@ -75,6 +75,7 @@ var (
 	hangingPunctuationOf       = paragraph.HangingPunctuationOf
 	spacingTrimOf              = paragraph.SpacingTrimOf
 	trailingClosingPunctuation = paragraph.TrailingClosingPunctuation
+	leadingOpeningPunctuation  = paragraph.LeadingOpeningPunctuation
 	leadingHang                = paragraph.LeadingHang
 	trailingHang               = paragraph.TrailingHang
 )

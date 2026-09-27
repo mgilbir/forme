@@ -1181,32 +1181,57 @@ func (m *languageMemo) boxWritingSystem(b *Box) paragraph.WritingSystem {
 }
 
 // reportSpacingTrim reports a text-spacing-trim value whose rule this engine
-// does not follow.
+// does not follow in full.
 //
-// §8.2's values differ in what they do at the *start* of a line — whether a
-// full-width opening bracket keeps the half em of blank in front of it, and on
-// which lines — and that is the half of the property this engine does not do.
-// So "space-first" and "trim-start" are reported and the other two are not:
-// "space-all" asks for full-width everywhere, which is what an engine that
-// trims only at the end of a line already gives it, and "normal" is the initial
-// value.
+// §8.2's values differ in where they take the half em of blank out of a
+// full-width punctuation. This engine takes it at the start of a line, on the
+// lines each value names, and at the end of one that would not otherwise hold
+// the character; so "normal", "space-all", "space-first", "trim-start" and
+// "auto" are done and not reported. Two are not: "trim-both" also trims a
+// closing punctuation at the end of a line that *would* hold it, and
+// "trim-all" trims every one wherever it is.
 //
-// Not reporting the initial value is a decision and not an oversight. Every
-// document that holds CJK text has it, so a finding would appear on documents
-// whose author never wrote the property and never depended on the clause; what
-// it would say is "this engine does not do all of §8.2", which is a fact about
-// the engine and not about the page. The clause that is missing takes room away
-// at the start of a line, and a document that needs it says so.
+// The collapsing of spacing between adjacent punctuation is not done for any
+// value and is not reported for any, and that is a decision and not an
+// oversight. "normal" asks for it, every document that holds CJK text has it,
+// and a finding on each would say "this engine does not do all of §8.2", which
+// is a fact about the engine and not about the page.
 //
-// Once per value, like the other value readers here: "space-first" and
-// "trim-start" are two different requests and each is told (audit C146).
+// Once per value, like the other value readers here: two values are two
+// different requests and each is told (audit C146).
 func (l *layouter) reportSpacingTrim(b *Box, value string) {
+	msg := "text-spacing-trim " + quoteValue(value) + " was not applied"
+	switch value {
+	case "trim-both":
+		msg = "text-spacing-trim " + quoteValue(value) + " was applied at the start " +
+			"of each line and not at its end: a full-width closing punctuation " +
+			"there keeps its full width unless the line cannot hold it otherwise"
+	case "trim-all":
+		msg = "text-spacing-trim " + quoteValue(value) + " was not applied: " +
+			"full-width punctuation within a line keeps its full width, and is " +
+			"trimmed only where \"normal\" would trim it"
+	}
 	l.reportOnce("text-spacing-trim:"+value, Finding{
 		Rule:     RuleUnsupportedValue,
 		Property: "text-spacing-trim",
+		Message:  msg,
+		Source:   sourceOf(b.Element),
+		Path:     PathOf(b.Element),
+	})
+}
+
+// reportSpacingTrimUpright reports a full-width opening punctuation at a place
+// a line could begin, in upright vertical text, under a value that trims it
+// there. Its half-width form is the one 'vhal' states down the column, which
+// nothing here asks a face for, so it is set whole.
+func (l *layouter) reportSpacingTrimUpright(b *Box, value string) {
+	value = ascii.Lower(ascii.TrimCSSSpace(value))
+	l.reportOnce("text-spacing-trim-upright:"+value, Finding{
+		Rule:     RuleUnsupportedValue,
+		Property: "text-spacing-trim",
 		Message: "text-spacing-trim " + quoteValue(value) + " was not applied at the " +
-			"start of a line, so a full-width opening bracket keeps the half em " +
-			"of blank in front of it",
+			"start of a line of upright vertical text, so a full-width opening " +
+			"bracket there keeps the half em of blank above it",
 		Source: sourceOf(b.Element),
 		Path:   PathOf(b.Element),
 	})
