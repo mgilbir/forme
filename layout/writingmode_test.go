@@ -162,8 +162,6 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 		{"a float with an automatic width",
 			`#d { writing-mode: vertical-rl; height: 100px; float: left }`,
 			`<div id="d">ab</div>`, "shrinking a box around its content"},
-		{"text that needs both orientations", turnedCSS, `<div id="d">ab日本</div>`,
-			"standing upright and characters lying along the line at once"},
 		{"text-combine-upright", turnedCSS,
 			`<div id="d"><span style="text-combine-upright: all">12</span></div>`,
 			"text-combine-upright: all"},
@@ -503,29 +501,38 @@ func TestAnUprightBoxIsTurnedEvenWhereItsCharactersStandUpright(t *testing.T) {
 	}
 }
 
-// TestOneOrientationPerTurnedBox.
+// TestAnOrientationDeclaredInsideATurnedBoxIsItsOwn.
 //
-// The turn is one decision for a whole subtree, so a box inside it that asks
-// for the other typesetting mode is a second mode on the same line — and the
-// engine has one. Refusing is the honest answer, and it is the same refusal
-// whichever way round the two are.
-func TestOneOrientationPerTurnedBox(t *testing.T) {
-	for _, c := range []struct{ what, outer, inner string }{
-		{"upright inside mixed", "mixed", "upright"},
-		{"mixed inside upright", "upright", "mixed"},
+// The turn is one decision for a whole subtree, and which way a run's glyphs
+// stand is not part of it: it is a fact about each run, and the box inside the
+// turn that declares another orientation is answered for itself. This used to
+// be refused, both ways round, because one box was one orientation.
+func TestAnOrientationDeclaredInsideATurnedBoxIsItsOwn(t *testing.T) {
+	for _, c := range []struct {
+		what, outer, inner string
+		upright            bool
+	}{
+		{"upright inside mixed", "mixed", "upright", true},
+		{"mixed inside upright", "upright", "mixed", false},
 	} {
-		var said string
-		for _, f := range findingsOf(t,
-			`<div id="d"><p style="text-orientation: `+c.inner+`">ab</p></div>`,
-			`#d { writing-mode: vertical-rl; text-orientation: `+c.outer+`;
-			      width: 60px; height: 100px }`) {
-			if f.Property == "writing-mode" && said == "" {
-				said = f.Message
-			}
+		css := `body { margin: 0 }
+	#d { font-family: Courier; font-size: 20px; line-height: 20px;
+	     writing-mode: vertical-rl; text-orientation: ` + c.outer + `;
+	     width: 60px; height: 100px }`
+		html := `<div id="d"><p style="text-orientation: ` + c.inner + `">ab</p></div>`
+		runs := turnedRuns(t, html, css)
+		if len(runs) != 1 {
+			t.Fatalf("%s drew %d runs, want 1", c.what, len(runs))
 		}
-		if !strings.Contains(said, "not the orientation the box is set in") {
-			t.Errorf("%s was reported as %q, which does not name the orientation",
-				c.what, said)
+		if !runs[0].Sideways || runs[0].Upright != c.upright {
+			t.Errorf("%s: the run is sideways=%v upright=%v, want sideways and "+
+				"upright=%v — the inner box's own orientation", c.what,
+				runs[0].Sideways, runs[0].Upright, c.upright)
+		}
+		for _, f := range findingsOf(t, html, css) {
+			if f.Property == "writing-mode" {
+				t.Errorf("%s was reported: %q", c.what, f.Message)
+			}
 		}
 	}
 }
@@ -584,8 +591,7 @@ func TestSidewaysTurnsEveryCharacterIncludingTheUprightOnes(t *testing.T) {
 		}
 	}
 	// And under "mixed" the same box is turned too — upright, because that is
-	// what mixed says when every character in the box is one. What mixed cannot
-	// have is both at once, and that is the case that is refused.
+	// what mixed says of every character in it.
 	runs := turnedRuns(t, `<div id="d">日本</div>`, turnedCSS)
 	for _, r := range runs {
 		if !r.Upright {
@@ -593,16 +599,21 @@ func TestSidewaysTurnsEveryCharacterIncludingTheUprightOnes(t *testing.T) {
 				"and every character in it stands upright", r.Text)
 		}
 	}
-	var said string
-	for _, f := range findingsOf(t, `<div id="d">ab日本</div>`,
-		`#d { writing-mode: vertical-rl; width: 60px; height: 100px }`) {
-		if f.Property == "writing-mode" && said == "" {
-			said = f.Message
+	// And a box holding both is turned with each character the way UAX #50
+	// says: the Latin lies along the line and the ideographs stand up. It used
+	// to be refused, as the one thing a quarter turn could not draw.
+	for _, r := range turnedRuns(t, `<div id="d">ab日本</div>`, turnedCSS) {
+		want := strings.ContainsAny(r.Text, "日本")
+		if !r.Sideways || r.Upright != want {
+			t.Errorf("under the initial orientation the run %q is sideways=%v "+
+				"upright=%v, want upright=%v", r.Text, r.Sideways, r.Upright, want)
 		}
 	}
-	if !strings.Contains(said, "at once") {
-		t.Errorf("a box of Latin and ideographs in the initial orientation was "+
-			"reported as %q, which does not name the mixture", said)
+	for _, f := range findingsOf(t, `<div id="d">ab日本</div>`,
+		`#d { writing-mode: vertical-rl; width: 60px; height: 100px }`) {
+		if f.Property == "writing-mode" {
+			t.Errorf("a box of Latin and ideographs was reported: %q", f.Message)
+		}
 	}
 }
 
@@ -926,6 +937,37 @@ func TestTheEllipsisOfAClampedVerticalBlockIsSetTheWayItsLinesAre(t *testing.T) 
 	if !ellipsis.Sideways {
 		t.Error("the ellipsis was not marked sideways; it is on a line that runs " +
 			"down the page")
+	}
+	// And it stands in the middle of its line, as the letters do: the line box
+	// is 80 to 100 across the page, and an upright glyph is hung from the
+	// central baseline, which a line of one face centres. See centralShift.
+	if got := ellipsis.At.X.Px(); got != 90 {
+		t.Errorf("the ellipsis is hung from x=%g, want 90 — the middle of its line", got)
+	}
+	// And the room kept for it is an em. On a 195px line of upright letters
+	// and spaces, an em each, 175px is left once the ellipsis has its 20: four
+	// letters and the three spaces between them, 140px, and the ellipsis right
+	// after the fourth. Courier's horizontal advance for the ellipsis is 12px,
+	// which would leave 183 and let a fifth letter in, the ellipsis at 180.
+	const tight = `body { margin: 0 }
+	#d { font-family: Courier; font-size: 20px; line-height: 20px;
+	     writing-mode: vertical-rl; text-orientation: upright;
+	     width: 100px; height: 195px;
+	     -webkit-line-clamp: 1; display: -webkit-box; -webkit-box-orient: vertical }`
+	letters, at := 0, -1.0
+	for _, op := range Paint(layoutOf(t, 400, `<div id="d">a a a a a a a a a a a a</div>`, tight)) {
+		if v, ok := op.(DrawText); ok {
+			switch v.Text {
+			case "a":
+				letters++
+			case "\u2026":
+				at = v.At.Y.Px()
+			}
+		}
+	}
+	if letters != 4 || at != 140 {
+		t.Errorf("the clamped line holds %d letters and its ellipsis is at y=%g, want 4 "+
+			"and 140 — the room kept for an upright ellipsis is an em", letters, at)
 	}
 }
 

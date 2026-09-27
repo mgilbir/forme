@@ -925,6 +925,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						RTL:          item.Level&1 == 1,
 						Shift:        shift,
 						emphasis:     l.emphasisOf(heldBox(item.Box), heldBox(item.Box).FontSize.Mul(lineScale)),
+						drawShift:    l.drawShiftOf(item),
 					})
 				}
 				// Which *side* it hangs off, which is not a second way of saying how
@@ -1048,8 +1049,11 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						// The ellipsis is set the way the line it ends is set.
 						// See clampRoom, which reserves the room for it with the
 						// same question asked.
-						Upright: l.uprightText(ending.box),
+						Upright: l.uprightRun(ending.box, blockEllipsis),
 					})
+					last := &line.Runs[len(line.Runs)-1]
+					last.drawShift, _ = l.centralShift(ending.box, ending.face,
+						ending.size, last.Upright)
 				}
 				parent.Lines = append(parent.Lines, line)
 				l.clampLine()

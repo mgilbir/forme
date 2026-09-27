@@ -8,20 +8,22 @@ import (
 // UAX #50, Unicode Vertical Text Layout: which way a character faces on a line
 // of vertical text.
 //
-// One question is asked of it, and it is asked by a gate rather than by a
-// typesetter. This engine sets vertical text by turning a horizontal page
-// ninety degrees clockwise, which rotates every character on it; that is what
+// This engine sets vertical text by turning a horizontal page ninety degrees
+// clockwise, which rotates every character on it; that is what
 // "text-orientation: mixed" asks for wherever a character's Vertical_Orientation
-// is R, and it is not what mixed asks for anywhere else. So the engine needs to
-// know whether a paragraph contains a character it would draw wrong, and this is
-// how it knows. See layout/writingmode.go for what is done with the answer and
-// cmd/genvertical for how the table is built.
+// is R, and it is not what mixed asks for anywhere else. A character that stands
+// upright is set in a run of its own, measured by its vertical advance and drawn
+// standing on the turned line. So the engine needs to know where a paragraph
+// changes from one to the other, and this is how it knows: SplitAtOrientation
+// cuts the text there and UprightInMixed says which way each part faces. See
+// layout/writingmode.go for what is done with the answer and cmd/genvertical
+// for how the table is built.
 
 // IsUpright reports whether a character stands upright on a line of vertical
 // text — UAX #50's U, or Tu falling back to it.
 //
 // A character this returns true for cannot be set by rotating a horizontal line,
-// so a block containing one is not a block this engine can turn.
+// so under "mixed" it is set upright, in a run of its own.
 func IsUpright(r rune) bool { return inLineBreakRanges(r, uprightRanges[:]) }
 
 // HasUprightText reports whether any character in a string stands upright.
@@ -44,16 +46,16 @@ func HasUprightText(s string) bool {
 // need under "text-orientation: mixed": whether any of them stands upright, and
 // whether any of them lies along the line.
 //
-// Both, and not one, because the answer that matters is whether the run needs
-// *both* — that is the one a quarter turn cannot draw, and it is the only one
-// worth refusing. A run that is entirely upright is a run this engine can set,
-// by setting it the way "text-orientation: upright" asks for; a run with
-// nothing upright in it is the turn itself.
+// It is a question about the picture and not a way to set the text: layout
+// asked it once, to refuse a box that needed both, and it sets such a box now
+// by cutting its text with SplitAtOrientation. The two differ over white space,
+// and on purpose — below.
 //
 // A character that marks no paper is skipped, which is what makes the answer
 // about the picture rather than about the string. The orientation of a space is
-// unobservable — it is blank whichever way up it is — and counting one would
-// make "日本 と" a mixture and refuse a page that has only one orientation on it.
+// unobservable — it is blank whichever way up it is — so "日本 と" has one
+// orientation on the page. Its space is still *set* lying down, at its own
+// horizontal advance, because that is what UAX #50 says of U+0020.
 func OrientationMix(text string) (upright, rotated bool) {
 	for _, r := range text {
 		if charprop.WhiteSpace(r) || MarksNoPaper(r) || IsDefaultIgnorable(r) {
@@ -105,15 +107,7 @@ func AppendUprightUnitStarts(dst []int, text string) []int {
 // takes an advance upright: one that holds a character other than a default
 // ignorable or a combining mark.
 func eachUprightUnit(text string, f func(start int)) {
-	// The cluster boundaries are found once. They were found inside the loop —
-	// the whole string walked again per cluster, which is the same answer every
-	// time and quadratic in the length of the run.
-	bounds := segment.Boundaries(nil, text)
-	for i, start := 0, 0; start < len(text); i++ {
-		end := len(text)
-		if i < len(bounds) {
-			end = bounds[i]
-		}
+	eachCluster(text, func(start, end int) {
 		for _, r := range text[start:end] {
 			if IsDefaultIgnorable(r) || charprop.Is(r, charprop.Mn|charprop.Me) {
 				continue
@@ -121,6 +115,81 @@ func eachUprightUnit(text string, f func(start int)) {
 			f(start)
 			break
 		}
+	})
+}
+
+// SplitAtOrientation cuts text where "text-orientation: mixed" stops setting
+// its characters one way and starts setting them the other: the parts, in
+// order, concatenate to text, and each is set wholly upright or wholly
+// sideways. A text with one orientation throughout is one part.
+//
+// The unit is UAX #50 §3.2.1's: a grapheme cluster, whose orientation is its
+// first character's — except that a cluster holding an enclosing mark is
+// upright whatever it encloses, which is what makes a keycap stand up. CSS
+// Writing Modes §5.1.2 asks the same question of each typographic character
+// unit, which is the same cluster.
+//
+// A cut is between clusters and never inside one, because the orientation is
+// the whole cluster's: a base upright with its mark lying on its side is not a
+// thing a reader has ever seen.
+func SplitAtOrientation(text string) []string {
+	var parts []string
+	start, was, first := 0, false, true
+	eachCluster(text, func(from, to int) {
+		upright := clusterIsUpright(text[from:to])
+		if !first && upright != was {
+			parts = append(parts, text[start:from])
+			start = from
+		}
+		was, first = upright, false
+	})
+	if start < len(text) || len(parts) == 0 {
+		parts = append(parts, text[start:])
+	}
+	return parts
+}
+
+// UprightInMixed reports whether "text-orientation: mixed" sets a run upright,
+// asked of a run SplitAtOrientation has already made one orientation
+// throughout — so its first cluster answers for all of it. The empty run is
+// sideways, which is the default UAX #50 gives everything it does not list.
+func UprightInMixed(text string) bool {
+	upright := false
+	eachCluster(text, func(from, to int) {
+		if from == 0 {
+			upright = clusterIsUpright(text[from:to])
+		}
+	})
+	return upright
+}
+
+// clusterIsUpright is UAX #50 §3.2.1's orientation of one grapheme cluster.
+func clusterIsUpright(cluster string) bool {
+	for _, r := range cluster {
+		if charprop.Is(r, charprop.Me) {
+			return true
+		}
+	}
+	for _, r := range cluster {
+		return IsUpright(r)
+	}
+	return false
+}
+
+// eachCluster calls f with the bounds of each grapheme cluster of text, in
+// order.
+//
+// The boundaries are found once, before the walk. They were found inside it —
+// the whole string walked again per cluster, which is the same answer every
+// time and quadratic in the length of the run.
+func eachCluster(text string, f func(from, to int)) {
+	bounds := segment.Boundaries(nil, text)
+	for i, start := 0, 0; start < len(text); i++ {
+		end := len(text)
+		if i < len(bounds) {
+			end = bounds[i]
+		}
+		f(start, end)
 		start = end
 	}
 }

@@ -1497,7 +1497,19 @@ const wptEnv = "WPT_TESTS"
 // 5.2px out of the box it is wholly under. It reads each glyph's own box now,
 // as HarfBuzz states it (markInk in picture_test.go, over
 // shape.Face.GlyphExtents). wpt.fyi: all three browsers pass.
-const wptCleanPassBaseline = 5993
+//
+// **5993 to 5994, for two orientations on one line**.
+// text-autospace/text-autospace-vertical-upright-001 sets "国X国" in a
+// vertical-rl box, once with the whole box upright and once with only the X
+// in an upright span, and asks for no §8.4.1 spacing either way. The second
+// half was refused: a box whose text under "mixed" needed characters standing
+// and characters lying at once was laid out across the page, since one box was
+// one orientation. Orientation is per run now — the text is cut where UAX #50
+// changes its answer and each run is set the way it faces — and an upright run
+// is hung from the central baseline, CSS Writing Modes §4.2's dominant one on
+// a vertical line. See layout/writingmode.go. wpt.fyi: Chrome and Firefox
+// pass, Safari fails.
+const wptCleanPassBaseline = 5994
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

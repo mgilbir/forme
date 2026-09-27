@@ -1,6 +1,11 @@
 package paragraph
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/mgilbir/forme/internal/costtest"
+)
 
 // The table is Unicode's statement and this is the check that it says what
 // UAX #50 says, at the handful of characters the writing-mode gate turns on.
@@ -78,5 +83,77 @@ func TestUprightUnitStartsAreTheUnitsCounted(t *testing.T) {
 		if n := UprightUnits(c.text); n != len(got) {
 			t.Errorf("%q: %d starts and UprightUnits counts %d", c.text, len(got), n)
 		}
+	}
+}
+
+// TestMixedOrientationIsCutBetweenClusters.
+//
+// "text-orientation: mixed" asks UAX #50 of each typographic character unit,
+// and the run is cut wherever the answer changes. What is pinned is where the
+// cuts fall and what each part is asked:
+//
+//   - a Latin word beside two ideographs is three parts;
+//   - a combining mark goes with the character in front of it, and the cluster
+//     faces the way its first character does, which is §3.2.1's "a base
+//     character upright and a combining mark attached to it sideways" that
+//     does not make sense;
+//   - an enclosing mark stands its whole cluster up, whatever the base is —
+//     the keycap digit;
+//   - a space is its own character: U+0020 lies down between two ideographs,
+//     and the ideographic space U+3000 stands with them.
+func TestMixedOrientationIsCutBetweenClusters(t *testing.T) {
+	for _, c := range []struct {
+		text    string
+		parts   []string
+		upright []bool
+	}{
+		{"ab\u65e5\u672ccd", []string{"ab", "\u65e5\u672c", "cd"}, []bool{false, true, false}},
+		{"e\u0301\u65e5", []string{"e\u0301", "\u65e5"}, []bool{false, true}},
+		{"\u65e5\u3099a", []string{"\u65e5\u3099", "a"}, []bool{true, false}},
+		// The acute is R on its own, and stands up with the ideograph it is on.
+		{"\u65e5\u0301a", []string{"\u65e5\u0301", "a"}, []bool{true, false}},
+		{"a1\u20e3b", []string{"a", "1\u20e3", "b"}, []bool{false, true, false}},
+		{"\u65e5 \u672c", []string{"\u65e5", " ", "\u672c"}, []bool{true, false, true}},
+		{"\u65e5\u3000\u672c", []string{"\u65e5\u3000\u672c"}, []bool{true}},
+		{"abc", []string{"abc"}, []bool{false}},
+		{"", []string{""}, []bool{false}},
+	} {
+		got := SplitAtOrientation(c.text)
+		if len(got) != len(c.parts) {
+			t.Errorf("SplitAtOrientation(%q) = %q, want %q", c.text, got, c.parts)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.parts[i] {
+				t.Errorf("SplitAtOrientation(%q) = %q, want %q", c.text, got, c.parts)
+				break
+			}
+			if u := UprightInMixed(got[i]); u != c.upright[i] {
+				t.Errorf("UprightInMixed(%q) = %v, want %v", got[i], u, c.upright[i])
+			}
+		}
+	}
+}
+
+// TestSplittingAtOrientationIsLinearInTheRun.
+//
+// The cut is asked of every piece of text on a mixed vertical line, and a
+// piece is as long as a word the document never breaks: a line of ideographs
+// and Latin letters alternating is the case that cuts the most. Four times the
+// text should cost four times as much; a split that searched for each cut from
+// the start of the run would cost sixteen.
+func TestSplittingAtOrientationIsLinearInTheRun(t *testing.T) {
+	splitOf := func(n int) func() {
+		text := strings.Repeat("\u65e5a", n)
+		if got := len(SplitAtOrientation(text)); got != 2*n {
+			t.Fatalf("%d alternations cut into %d parts, want %d", n, got, 2*n)
+		}
+		return func() { SplitAtOrientation(text) }
+	}
+	const small, large = 4000, 16000
+	c := costtest.Time(t, "splitting n alternations", splitOf(small), splitOf(large))
+	if c.Ratio > 8 {
+		t.Errorf("splitting %d alternations took %v and %d took %v, a factor of %.1f "+
+			"for four times the text", small, c.Small, large, c.Large, c.Ratio)
 	}
 }

@@ -12,8 +12,9 @@ package paragraph
 // which the data lists explicitly. A "default" count would be code points the
 // data is silent on and an @missing line calls upright — see cmd/genvertical.
 //
-// What reads it is a gate rather than a typesetting rule: this engine sets no
-// upright text, and the table is how it knows to say so. See IsUpright.
+// What reads it is the typesetter: under "text-orientation: mixed" a character
+// in it is set upright, in a run of its own, and the rest lie along the line.
+// See IsUpright and SplitAtOrientation.
 var uprightRanges = [...]struct{ lo, hi rune }{
 	{0x00A7, 0x00A7},
 	{0x00A9, 0x00A9},

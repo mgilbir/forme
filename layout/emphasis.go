@@ -176,7 +176,7 @@ func (l *layouter) readEmphasis(b *Box, raw string, size style.Unit) *runEmphasi
 		return nil
 	}
 	e.markAscent, e.markDescent = extentsOr(primary, e.size)
-	if l.uprightText(b) {
+	if facing, v := l.facingOf(b); v && facing == orientationUpright {
 		// An upright character is hung from the middle of the line, one em
 		// across it: see DrawText.Upright and uprightExtent. That is what it
 		// reaches on either side, and the reach its marks sit beyond.

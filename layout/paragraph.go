@@ -101,7 +101,6 @@ var (
 	spacingAfter                  = paragraph.SpacingAfter
 	spacingAfterOffsets           = paragraph.SpacingAfterOffsets
 	uprightUnits                  = paragraph.UprightUnits
-	orientationMix                = paragraph.OrientationMix
 	isCursiveScript               = paragraph.IsCursiveScript
 	cursiveTrackingSuppressesText = paragraph.CursiveTrackingSuppresses
 	isDefaultIgnorable            = paragraph.IsDefaultIgnorable

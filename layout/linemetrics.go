@@ -288,7 +288,7 @@ func (l *layouter) spaceAdvance(block *Box, fallback *shape.Face) style.Unit {
 	// block landed at three fifths of the column it belongs in.
 	return l.br.MeasureSpacedInContext(face, " ", block.FontSize,
 		paragraph.TextSpacing{},
-		shaping{ContextKerns: true, Upright: l.uprightText(block), Off: l.featuresFor(block)}).
+		shaping{ContextKerns: true, Upright: l.uprightRun(block, " "), Off: l.featuresFor(block)}).
 		Add(s.Letter).Add(s.Word)
 }
 

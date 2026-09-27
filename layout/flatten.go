@@ -914,6 +914,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if unhandledAutospace != "" {
 		l.reportAutospace(b, unhandledAutospace)
 	}
+	// Whether the box's text is cut where its orientation changes, which is a
+	// question about the box and asked once. See splitsByOrientation.
+	splitsOrientation := l.splitsByOrientation(b)
 	orthography := l.orthographyAt(boxElement(b))
 	boundaryNoWrap, boundaryBreakSpaces := l.boundaryWhiteSpace(b, ws, in)
 	carried := paragraph.Carried{
@@ -1127,6 +1130,16 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		if !p.Tab && !p.Space {
 			if parts := splitAtAutospace(p.Text, autospace); len(parts) > 1 {
 				runs = cutRunsAt(runs, parts)
+			}
+			// And where "text-orientation: mixed" on a vertical line stops
+			// standing its characters up and starts laying them along the line,
+			// or the other way: a run is measured and drawn one way, so a word
+			// of Latin beside an ideograph is two runs. Each is then asked which
+			// way it faces, in textItem. See writingmode.go.
+			if splitsOrientation {
+				if parts := paragraph.SplitAtOrientation(p.Text); len(parts) > 1 {
+					runs = cutRunsAt(runs, parts)
+				}
 			}
 			// And again where §8.2's cursive tracking begins or ends, for the
 			// same reason: a run carries one letter-spacing, so a run holding
@@ -1392,6 +1405,11 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 	above, below := a.above, a.below
 	if a.run.Face != nil && a.run.Face != a.boxFace && usesNormalLineHeight(b) {
 		above, below = l.leadingInFace(b, a.run.Face)
+		// On a vertical line that run is aligned by its central baseline and
+		// not its alphabetic one, so its extents sit that much further down
+		// the frame. Zero on a horizontal line. See centralShift.
+		_, moved := l.centralShift(b, a.run.Face, a.size, false)
+		above, below = above.Sub(moved), below.Add(moved)
 	}
 	// A run whose small capitals were made out of the capitals is set smaller
 	// than the box's own size — that is the whole of what makes it a small
@@ -1416,9 +1434,10 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		Text: a.run.Text, Box: b, Face: a.run.Face, Size: size,
 		Leads: true, Above: above, Below: below,
 		// Whether this run stands upright on a vertical line, which changes
-		// what it measures to and not only how it is drawn. See
-		// layouter.uprightText.
-		Upright: l.uprightText(b),
+		// what it measures to and not only how it is drawn. Asked of the run
+		// and not the box: under "mixed" the text was cut where the answer
+		// changes, and each piece of it has its own. See layouter.uprightRun.
+		Upright: l.uprightRun(b, a.run.Text),
 		// §5.2's "auto-phrase" suppresses hyphenation, so an opportunity a
 		// hyphen made is one the line falls back to rather than one it takes.
 		HyphenLastResort: a.wb.AutoPhrase,
@@ -1526,6 +1545,9 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 			item.HyphenAbove, item.HyphenBelow = above, below
 			if usesNormalLineHeight(b) {
 				item.HyphenAbove, item.HyphenBelow = l.leadingInFace(b, face)
+				_, moved := l.centralShift(b, face, a.size, false)
+				item.HyphenAbove = item.HyphenAbove.Sub(moved)
+				item.HyphenBelow = item.HyphenBelow.Add(moved)
 			}
 		}
 	}

@@ -2483,7 +2483,9 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 	under := p.decorationMarks(run, at, turn, false)
 	over := p.decorationMarks(run, at, turn, true)
 	text := DrawText{
-		At:            at,
+		// The glyphs' own origin, which on a vertical line is not always the
+		// baseline the decorations were measured from. See TextRun.drawShift.
+		At:            runPoint(at, run.drawShift, turn),
 		Sideways:      turn.sideways,
 		Anticlockwise: turn.anticlockwise,
 		Upright:       run.Upright,
@@ -2637,6 +2639,16 @@ func turnOfLine(l LineFragment) runTurn {
 
 func turnOfRun(v DrawText) runTurn {
 	return runTurn{sideways: v.Sideways, anticlockwise: v.Anticlockwise}
+}
+
+// runPoint is placeRun for a point: the one across a run's baseline from at,
+// down by across in the run's own axes.
+func runPoint(at Point, across style.Unit, turn runTurn) Point {
+	if across == 0 {
+		return at
+	}
+	r := placeRun(Rect{Y: across}, at, turn)
+	return Point{X: r.X, Y: r.Y}
 }
 
 func placeRun(r Rect, at Point, turn runTurn) Rect {

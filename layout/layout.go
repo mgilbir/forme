@@ -301,7 +301,6 @@ func newLayouter(root *Box, avail Size, set FontSet, rec *Recorder) *layouter {
 		inlineOffsets:    map[*Box]Point{},
 		inlineAligns:     map[*Box]vAlignState{},
 		intrinsic:        map[*Box]intrinsicWidths{},
-		turnedUpright:    map[*Box]bool{},
 		turnedMode:       map[*Box]writingMode{},
 		grids:            map[*Box]*tableGrid{},
 		tableDemands:     map[*Box][]tableColumnDemand{},
@@ -500,16 +499,14 @@ type layouter struct {
 	// intrinsic memoizes the two content-based widths of a box, which are what
 	// a float with an auto width is sized by.
 	intrinsic map[*Box]intrinsicWidths
-	// turnedUpright records, for each box whose content is laid out sideways,
-	// whether its characters stand upright on the line rather than lying along
-	// it. Only the box that *starts* the turn is in here, because only it can:
-	// the turn is refused outright for a subtree that changes the writing mode
-	// again. See uprightText, which is what reads it, and writingmode.go.
-	turnedUpright map[*Box]bool
-	// turnedMode is the same set keyed to the mode each box was turned in, which
-	// is what the boxes inside it need: their own declarations are physical and
-	// have to be read in the frame the turn will put them back through. See
-	// insideTurn and untuneEdges.
+	// turnedMode records each box whose content is laid out sideways, keyed to
+	// the mode it was turned in. Only the box that *starts* the turn is in
+	// here, because only it can: the turn is refused outright for a subtree
+	// that changes the writing mode again. The boxes inside it need it twice:
+	// their own declarations are physical and have to be read in the frame the
+	// turn will put them back through (insideTurn and untuneEdges), and their
+	// text faces whichever way that mode and their own text-orientation say
+	// (facingOf).
 	turnedMode map[*Box]writingMode
 	// grids and tableDemands memoize the two expensive answers about a table:
 	// where its cells sit in the grid, and what each column asks for. Both are

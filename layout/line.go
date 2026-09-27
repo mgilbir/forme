@@ -254,4 +254,15 @@ type TextRun struct {
 	// emphasis is what CSS Text Decoration 3 §3's emphasis marks over this
 	// run are, as layout decided them, or nil for none. See emphasis.go.
 	emphasis *runEmphasis
+
+	// drawShift is how far below the run's own baseline its glyphs are drawn
+	// from, which is not always the baseline itself: on a vertical line the
+	// dominant baseline is the central one, so an upright run is drawn from
+	// the middle of its box's column and a run set in a fallback face from its
+	// own alphabetic baseline under that middle. Zero everywhere else, which is
+	// every horizontal run. See layouter.centralShift.
+	//
+	// It moves the glyphs and nothing ruled across them: a decoration is
+	// measured from the declaring box's baseline, which is the one Shift says.
+	drawShift style.Unit
 }

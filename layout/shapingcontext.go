@@ -559,6 +559,17 @@ func sameShaping(a, b inlineItem) bool {
 	if a.Spacing != b.Spacing || a.Level != b.Level {
 		return false
 	}
+	// Nor across a change of orientation on a vertical line. An upright run is
+	// shaped top to bottom with the vertical features and a sideways one left
+	// to right without them, so neither is the other's context: the two are
+	// not one string shaped one way, and CSS Writing Modes §5.1.1 sets the
+	// letters of a cursive script in their isolated forms when they stand
+	// upright, which is the join this would otherwise make. The runs differ
+	// here only where "text-orientation: mixed" cut a paragraph in two, or a
+	// span declared another orientation. See layout/writingmode.go.
+	if a.Upright != b.Upright {
+		return false
+	}
 	// Of those three, the face has no test: a planted defect dropping it leaves
 	// every one passing, because the only Arabic face in the checkout is one and
 	// two runs cannot be set in different ones. It is kept because a face is
@@ -795,8 +806,7 @@ func sharesGlyphsWith(items []inlineItem, from, to int, breaks []int, tr translu
 	// where it was and moved the other half with the span.
 	//
 	// Which way a run's glyphs stand is the one other thing drawn per run,
-	// and it cannot differ here: it is decided by the block the page was
-	// turned at (see uprightText), so every run of one paragraph has it.
+	// and sameShaping has already refused a boundary where it changes.
 	if a.Offset != b.Offset {
 		return false
 	}
