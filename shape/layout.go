@@ -77,15 +77,15 @@ import (
 //     conditions cover the instance is applied, which is how a font states
 //     different lookups for a weight — and so are the Device tables GPOS states
 //     as VariationIndexes, which move its kerning and its anchors (gposvar.go).
+//   - What HarfBuzz does for a font whose tables do not cover what a model
+//     needs: placing the marks of a face that positions none (fallback.go),
+//     drawing the Arabic joining forms out of the character map, or out of
+//     HarfBuzz's table for a face laid out as Windows-1256 (arabicfallback.go),
+//     and composing Hebrew presentation forms for a face with no mark
+//     positioning (hebrew.go). See plan.go.
 //
 // # What is not, and what each absence costs
 //
-//   - Of what HarfBuzz does for a font whose tables do not cover what a model
-//     needs, the Windows-1256 Arabic fallback. The rest is done: placing the
-//     marks of a face that positions none (fallback.go), drawing the Arabic
-//     joining forms out of the character map (arabicfallback.go), and
-//     composing Hebrew presentation forms for a face with no mark positioning
-//     (hebrew.go). See plan.go.
 //   - Choosing a language from the text. Which script a run is in is decidable
 //     from its characters; which language it is in is not — "colour" and "color"
 //     are the same letters — so the default language system is used unless the
