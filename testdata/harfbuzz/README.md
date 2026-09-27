@@ -92,8 +92,8 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `instancevaried.py`, `instancevaried.expected.txt` | a variable face's font-wide metrics and its GPOS devices off its default — see below |
 | `variedlayout_fixture.py`, `fonts/VariedLayout*.ttf` | the faces that oracle needs and no foundry made |
 | `fonts/VariedAxes.ttf` | built by the same script: five axes and two named instances, which layout's tests of where CSS sets a variable face use |
-| `colrink.py`, `colrink.expected.txt` | the ink of colour glyphs, painted from COLR or read from CBDT — see below |
-| `colrink_fixture.py`, `fonts/ColourInk*.ttf`, `fonts/BitmapInk.ttf` | the faces that oracle needs and no foundry made |
+| `colrink.py`, `colrink.expected.txt` | the ink of colour glyphs, painted from COLR or read from CBDT or sbix — see below |
+| `colrink_fixture.py`, `fonts/ColourInk*.ttf`, `fonts/BitmapInk.ttf`, `fonts/SbixInk*.ttf` | the faces that oracle needs and no foundry made |
 | `ignorables_fixture.py`, `fonts/Ignorables.ttf`, `ignorables.txt`, `ignorables.expected.txt` | a corpus of the characters nothing is drawn for, shaped by `shape.py` in the face it needs — see below |
 
 Each corpus is weighted towards the places shaping decides something rather than
@@ -294,13 +294,18 @@ fixture's two tables differ so that the choice shows.
 A colour glyph's box is where it paints, and HarfBuzz measures it by painting
 it: a COLRv1 glyph through its paint graph — every transform, clip, group and
 composite — and a COLRv0 glyph as the union of its layers, unless the table
-states a clip box, and a CBDT glyph by the metrics in front of its image in the
-largest strike. `shape/colrink.go` and `shape/bitmapink.go` do the same.
+states a clip box, a CBDT glyph by the metrics in front of its image in the
+largest strike, and an sbix glyph by the size its PNG's IHDR states, placed at
+the offsets in front of it, in the largest strike. `shape/colrink.go`,
+`shape/bitmapink.go` and `shape/sbixink.go` do the same.
 `colrink.py` asks HarfBuzz for the extents of every glyph of
 `fonts/ColourInk.ttf` — at its default and at three weights, since its
 variable paints move — of `fonts/ColourInkStatic.ttf`, the same face not
-varying with a composite LoadInstance cannot instance, and of
-`fonts/BitmapInk.ttf`, all built by `colrink_fixture.py`, and shapes a few
+varying with a composite LoadInstance cannot instance, of
+`fonts/BitmapInk.ttf`, and of `fonts/SbixInk*.ttf` — an sbix face, one whose
+boxes are millions of units across, and three whose tables HarfBuzz's
+sanitizer refuses or takes by a byte — all built by `colrink_fixture.py`, and
+shapes a few
 strings in the first across the page and down it, where HarfBuzz places the
 marks and hangs the glyphs by their painted boxes. `shape/colrink_test.go` holds the package to all of it.
 

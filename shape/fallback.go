@@ -31,7 +31,8 @@ import (
 //
 // The ink of a glyph is read from the glyph header of a TrueType face, by
 // running the charstring of a CFF one (cffink.go), by painting a colour glyph
-// (colrink.go), and from a colour bitmap's metrics (bitmapink.go). Where a
+// (colrink.go), and from a bitmap's size or metrics (sbixink.go,
+// bitmapink.go). Where a
 // glyph's ink cannot be had at all, the marks' advances are cancelled and they
 // are left where they are, which is what HarfBuzz itself does for a glyph
 // whose extents it cannot get.
@@ -175,14 +176,20 @@ type extents struct {
 
 // glyphExtents is a glyph's ink, where the face can say.
 //
-// A colour bitmap glyph's is what its metrics state, and a colour glyph's the
-// box it paints, which HarfBuzz asks before the outline, in that order
-// (bitmapink.go, colrink.go). For a TrueType face it is the glyph header's box with
+// A bitmap glyph's is the box its sbix image covers or its CBDT metrics state,
+// and a colour glyph's the box it paints, which HarfBuzz asks before the
+// outline, in that order (sbixink.go, bitmapink.go, colrink.go). For a
+// TrueType face it is the glyph header's box with
 // the left side bearing hmtx states, which is how HarfBuzz reads a TrueType
 // glyph at the instance a face was cut at. An empty glyph has no ink and says
 // so. For a CFF face it is the box the glyph's charstring draws, measured as
 // HarfBuzz measures it (see cffink.go). A face with neither cannot answer.
 func (f *Face) glyphExtents(gid int) (extents, bool) {
+	if f.sbix != nil {
+		if e, ok := f.sbix.extents(gid); ok {
+			return e, true
+		}
+	}
 	if f.bitmap != nil {
 		if e, ok := f.bitmap.extents(gid); ok {
 			return e, true

@@ -1,7 +1,7 @@
 # Asks HarfBuzz for the ink of colour glyphs — hb_font_get_glyph_extents on a
-# face with COLR or CBDT — and for what depends on it, and writes the answers,
-# so that shape/colrink_test.go can hold shape/colrink.go and
-# shape/bitmapink.go to them.
+# face with COLR, CBDT or sbix — and for what depends on it, and writes the
+# answers, so that shape/colrink_test.go can hold shape/colrink.go,
+# shape/bitmapink.go and shape/sbixink.go to them.
 #
 #   make hbcolrink
 #
@@ -20,6 +20,16 @@
 #                      a component placed by matching points, which a face
 #                      from LoadInstance cannot have
 #   BitmapInk.ttf      a CBDT with two strikes, every glyph asked about
+#   SbixInk.ttf        an sbix with four strikes, one null, every glyph asked
+#                      about: images, duplicates, formats HarfBuzz does not
+#                      read, and boxes rounding by halves
+#   SbixInkLarge.ttf   sbix images millions of units across, where single
+#                      precision rounds
+#   SbixInkRejected.ttf  an sbix HarfBuzz's sanitizer refuses, a strike
+#                      outside the table
+#   SbixInkOps.ttf, SbixInkOpsEdge.ttf  an sbix whose checking costs one strike
+#                      more than the sanitizer allows it, and one exactly as
+#                      much
 #
 # Every glyph of every colour face in the Google Fonts tree was compared out of
 # tree when the reader was written, and every one agrees; these faces are the

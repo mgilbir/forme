@@ -2068,15 +2068,21 @@ Fonts built for the colour ink oracle
 Files:   testdata/harfbuzz/fonts/ColourInk.ttf
          testdata/harfbuzz/fonts/ColourInkStatic.ttf
          testdata/harfbuzz/fonts/BitmapInk.ttf
+         testdata/harfbuzz/fonts/SbixInk.ttf
+         testdata/harfbuzz/fonts/SbixInkLarge.ttf
+         testdata/harfbuzz/fonts/SbixInkRejected.ttf
+         testdata/harfbuzz/fonts/SbixInkOps.ttf
+         testdata/harfbuzz/fonts/SbixInkOpsEdge.ttf
 Source:  testdata/harfbuzz/colrink_fixture.py, in this repository, which
          builds them with fontTools
 Licence: the licence in LICENSE; they are not anyone else's work
 
-Three small faces made from nothing by the script named above: one painting
-with every paint format a COLR table has, variable and not, and one whose
+Small faces made from nothing by the script named above: one painting
+with every paint format a COLR table has, variable and not, one whose
 CBLC and CBDT tables
-say each thing a bitmap face's extents are read from, its images
-placeholders. They are listed here because every font the repository keeps
+say each thing a bitmap face's extents are read from, and sbix faces that do
+the same for that table and for what HarfBuzz's sanitizer refuses in it, their
+images placeholders. They are listed here because every font the repository keeps
 is, and for where they came from; no third party's work is in them.
 
 ============================================================================

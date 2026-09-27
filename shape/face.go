@@ -161,9 +161,12 @@ type Face struct {
 	// colrink.go.
 	colr *colrInk
 	// bitmap reads the ink of a colour bitmap glyph from its metrics, which is
-	// asked before anything else: nil for a face with no CBDT. See
-	// bitmapink.go.
+	// asked before COLR is: nil for a face with no CBDT. See bitmapink.go.
 	bitmap *cbdtInk
+	// sbix reads the ink of an sbix bitmap glyph from its image's size, which
+	// is asked before anything else: nil for a face with no sbix table, or one
+	// HarfBuzz would refuse. See sbixink.go.
+	sbix *sbixInk
 	// simple is set when the face is to be embedded as a simple font: one byte
 	// per character through WinAnsiEncoding, rather than as a composite font
 	// keyed by glyph index.
@@ -427,6 +430,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		f.colr = newCOLRInk(f, tables, prog.NumGlyphs)
 	}
 	f.bitmap = newCBDTInk(tables, f.unitsPerEm)
+	f.sbix = newSbixInk(tables, prog.NumGlyphs, f.unitsPerEm)
 	f.vert = readVerticalTables(tables, prog.NumGlyphs, budget)
 	if err := budget.Err(); err != nil {
 		return nil, err

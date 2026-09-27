@@ -284,7 +284,12 @@ hbcolrink:
 	$(PYTHON) $(HARFBUZZ_DIR)/colrink.py $(HARFBUZZ_DIR)/colrink.expected.txt \
 		ColourInk.ttf=$(HARFBUZZ_DIR)/fonts/ColourInk.ttf \
 		ColourInkStatic.ttf=$(HARFBUZZ_DIR)/fonts/ColourInkStatic.ttf \
-		BitmapInk.ttf=$(HARFBUZZ_DIR)/fonts/BitmapInk.ttf
+		BitmapInk.ttf=$(HARFBUZZ_DIR)/fonts/BitmapInk.ttf \
+		SbixInk.ttf=$(HARFBUZZ_DIR)/fonts/SbixInk.ttf \
+		SbixInkLarge.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkLarge.ttf \
+		SbixInkRejected.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkRejected.ttf \
+		SbixInkOps.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkOps.ttf \
+		SbixInkOpsEdge.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkOpsEdge.ttf
 
 # A variable face set upright away from its default instance, and a kern
 # table's vertical subtables: two faces built here with VVAR and without, and

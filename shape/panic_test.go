@@ -257,6 +257,7 @@ func FuzzLoadAndUse(f *testing.F) {
 		"NotoSansJavanese.ttf", // the universal engine's features
 		"NotoSansArabic.ttf",   // cursive joining and mark filtering
 		"CFF2Blend.otf",        // CFF2: blends, Font DICTs, HVAR, VVAR and VORG
+		"SbixInk.ttf",          // sbix strikes, duplicates and image formats
 	} {
 		if data, err := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", name)); err == nil {
 			f.Add(data)
@@ -445,6 +446,14 @@ func useFace(face *Face) {
 		_, _, _ = face.GlyphVerticalMetrics(gid)
 		_ = face.GlyphCode(gid)
 		_, _, _ = face.HalfWidthTrim(gid)
+		_, _, _, _, _ = face.GlyphExtents(gid)
+	}
+	// And the ink of the first few dozen glyphs, which is read from whichever
+	// table answers for each — a bitmap's strike, a colour glyph's paint, a
+	// composite's components — and each of those is its own reader of the
+	// file's offsets. The glyphs shaped below reach only the few the cmap
+	// maps the sample text to.
+	for gid := 2; gid < min(face.NumGlyphs(), 64); gid++ {
 		_, _, _, _, _ = face.GlyphExtents(gid)
 	}
 	for _, r := range []rune{'a', 0x0628, 0x0915, 0x1B13, 0x2011, 0x3000, 0x10FFFF} {

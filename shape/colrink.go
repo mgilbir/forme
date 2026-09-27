@@ -54,8 +54,8 @@ import (
 //
 // # What is not here
 //
-// sbix, the bitmap table HarfBuzz asks before COLR (CBDT, the other, is read:
-// bitmapink.go), which no face in the corpora carries; and VARC. And the table
+// VARC. The two bitmap tables HarfBuzz asks before COLR are read elsewhere:
+// sbix in sbixink.go and CBDT in bitmapink.go. And the table
 // is read as far as it is sound rather than refused whole where HarfBuzz's
 // sanitizer would refuse it: a malformed COLR table answers from what can be
 // read of it where HarfBuzz answers from the outlines.
