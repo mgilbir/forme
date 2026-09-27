@@ -341,6 +341,10 @@ var properties = map[string]property{
 	"text-fit":              {true, "none"},
 	"text-decoration-line":  {false, "none"},
 	"text-decoration-color": {false, "currentcolor"},
+	// CSS Text Decoration 3 §4. It inherits, unlike a decoration: a <span>'s
+	// shadow replaces its paragraph's rather than adding to it. See
+	// layout/textshadow.go.
+	"text-shadow": {true, "none"},
 	// CSS Text Decoration 4 §2.2 and §2.3, and the two of them do not inherit
 	// the same way: the thickness is part of the decoration, which reaches a
 	// descendant by being *drawn across* it rather than by being inherited,

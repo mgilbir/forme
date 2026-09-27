@@ -771,9 +771,33 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 	// ClipPath: part of what the mark is, exactly as a rectangle clip is.
 	var markingPaths []string
 	for i, op := range ops {
-		v, ok := op.(DrawText)
-		if !ok {
+		// A shadow of a run is the run's glyphs, moved and recoloured, and a
+		// sharp one is exactly those glyphs in that colour: it is compared as
+		// what it puts on the page. A blurred one is a different mark, keyed by
+		// its blur, and reaches further — three deviations — for every question
+		// about where its ink is.
+		var v DrawText
+		key := paths[i]
+		var blur style.Unit
+		switch o := op.(type) {
+		case DrawText:
+			v = o
+		case DrawTextShadow:
+			v, blur = o.Run, o.StdDev
+			if blur > 0 {
+				k := "shadow blurred " + num(blur)
+				if key != "" {
+					k = key + " and " + k
+				}
+				key = k
+			}
+		default:
 			continue
+		}
+		ink := textInk(v)
+		if blur > 0 {
+			d := blur.Mul(blurReach)
+			ink = ink.Outset(Edges{Top: d, Right: d, Bottom: d, Left: d})
 		}
 		if !leavesInk(v.Text) {
 			// A space marks no paper. It is drawn so that text extraction
@@ -800,7 +824,7 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 			// a character that marks no paper — and skips them *by position*, so
 			// what is left still says where every visible glyph is.
 			marking = append(marking, v)
-			markingPaths = append(markingPaths, paths[i])
+			markingPaths = append(markingPaths, key)
 			continue
 		}
 		if invisibleInk(v, under) {
@@ -812,13 +836,13 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 			// document shows.
 			continue
 		}
-		if buriedUnder(covers, i, textInk(v)) {
+		if buriedUnder(covers, i, ink) {
 			continue
 		}
-		if v.Face != nil && !page.Empty() && intersect(textInk(v), page).Empty() {
+		if v.Face != nil && !page.Empty() && intersect(ink, page).Empty() {
 			continue
 		}
-		if v.Clip.Active && intersect(textInk(v), v.Clip.Rect).Empty() {
+		if v.Clip.Active && intersect(ink, v.Clip.Rect).Empty() {
 			// Clipped away entirely. The letters sit outside the clip, so
 			// nothing of this run reaches the page.
 			//
@@ -838,7 +862,7 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 			continue
 		}
 		marking = append(marking, trimRunSpace(v))
-		markingPaths = append(markingPaths, paths[i])
+		markingPaths = append(markingPaths, key)
 	}
 
 	var out []textMark

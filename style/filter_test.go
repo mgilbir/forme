@@ -27,3 +27,30 @@ func TestTheFilterGrammarIsFilterEffects(t *testing.T) {
 		}
 	}
 }
+
+// TestTheTextShadowGrammarIsTextDecoration3 checks §4's "none | [ <color>? &&
+// [ <length>{2} <length [0,∞]>? ] ]#".
+func TestTheTextShadowGrammarIsTextDecoration3(t *testing.T) {
+	for _, v := range []string{
+		"none", "1px 2px", "1px 2px 3px", "red 1px 2px", "1px 2px 3px red",
+		"1px 2px, red 3px 4px 5px", "-1px -2px", "currentcolor 0 0",
+	} {
+		if got := expandOf(t, "text-shadow: 9px 9px; text-shadow: "+v).Get("text-shadow"); got == "9px 9px" {
+			t.Errorf("%q was dropped", v)
+		}
+	}
+	for _, v := range []string{
+		"1px", "1px 2px 3px 4px", "1px 2px -3px", "red 1px red 2px", "1px red 2px",
+		"none, 1px 2px", "1px 2px,", "inset 1px 2px", "1px 2px 3px 4px red",
+	} {
+		if got := expandOf(t, "text-shadow: 9px 9px; text-shadow: "+v).Get("text-shadow"); got != "9px 9px" {
+			t.Errorf("%q was kept as %q", v, got)
+		}
+	}
+	// And it inherits.
+	doc := parseDoc(t, `<p id="t"><span id="s">x</span></p>`)
+	got := Apply(doc, []Sheet{author(t, "#t { text-shadow: red 1px 1px }")})
+	if v := got.Styles[elementFor(t, doc, "#s")].Get("text-shadow"); v == "" || v == "none" {
+		t.Errorf("a child's text-shadow is %q, want the parent's", v)
+	}
+}

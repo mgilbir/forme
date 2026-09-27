@@ -25,8 +25,8 @@ import (
 // nothing to tell an author about it.
 //
 // Of the ones that do apply, this engine acts on the font properties, the
-// line-height, the two spacings and the colour: the ones that decide how the
-// line is measured and what colour it comes out. The rest are reported, because
+// line-height, the two spacings, the colour and the text shadow: the ones that
+// decide how the line is measured and what it comes out looking like. The rest are reported, because
 // an author who writes them will not see them and has no other way to find out.
 //
 // text-transform is on the reported list and it is worth saying why, since it
@@ -38,7 +38,7 @@ import (
 // firstLineApplies are the properties this engine takes from a ::first-line.
 var firstLineApplies = []string{
 	"font-family", "font-size", "font-weight", "font-style",
-	"line-height", "letter-spacing", "word-spacing", "color",
+	"line-height", "letter-spacing", "word-spacing", "color", "text-shadow",
 }
 
 // firstLinePaints are the ones that are drawn behind the line rather than

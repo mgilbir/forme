@@ -69,6 +69,9 @@ func init() {
 	g["color"] = single(colour)
 	g["background-color"] = single(colour)
 	g["text-decoration-color"] = single(colour)
+	// css-text-decor-3 §4: none | [ <color>? && [ <length>{2} <length [0,∞]>? ] ]#,
+	// which is drop-shadow()'s argument list, repeated.
+	g["text-shadow"] = oneOf(single(kw("none")), commaList(dropShadowArgs))
 
 	// css-fonts-4.
 	g["font-family"] = commaList(familyName)

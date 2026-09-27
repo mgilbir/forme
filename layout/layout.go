@@ -197,6 +197,11 @@ type Fragment struct {
 	// filters is, on the root fragment only, every filtered box's chain, which
 	// the painter wraps each such box's group in. See filter.go.
 	filters map[*Box][]FilterFunction
+	// paintLengths is, on the root fragment only, what a length the painter
+	// reads is resolved against beyond its box's font size: the page, for the
+	// viewport units the cascade leaves unresolved, and the root's font size.
+	// See textshadow.go.
+	paintLengths style.LengthContext
 
 	// radii is the box's used border-radius, CSS Backgrounds 3 §4, and zero
 	// for a box with square corners. See radius.go.
@@ -367,6 +372,7 @@ func (l *layouter) layout() *Fragment {
 		l.resolveBackgrounds(frag, page)
 		l.resolveClips(frag)
 		l.resolveFilters(frag)
+		frag.paintLengths = l.paintLengths()
 		return frag
 	}
 	frag, m := l.block(root, avail.W,
@@ -414,7 +420,19 @@ func (l *layouter) layout() *Fragment {
 	// And the filters, whose groups are clipped as a whole by what
 	// resolveClips set aside for them.
 	l.resolveFilters(frag)
+	frag.paintLengths = l.paintLengths()
 	return frag
+}
+
+// paintLengths is the length context the painter resolves a computed length
+// in, less the box's own font size, which the painter supplies.
+func (l *layouter) paintLengths() style.LengthContext {
+	return style.LengthContext{
+		RootFontSize:   l.rootFontSize,
+		ViewportWidth:  l.avail.W,
+		ViewportHeight: l.avail.H,
+		ViewportKnown:  true,
+	}
 }
 
 type layouter struct {

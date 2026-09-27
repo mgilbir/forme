@@ -529,19 +529,19 @@ func TestShorthandWithAWideKeyword(t *testing.T) {
 // plausible and wrong.
 func TestUnsupportedPropertyIsReported(t *testing.T) {
 	doc := parseDoc(t, "<p id=\"target\">x</p>")
-	got := Apply(doc, []Sheet{author(t, "p { text-shadow: 1px 1px red; font-family: kept }")})
+	got := Apply(doc, []Sheet{author(t, "p { box-shadow: 1px 1px red; font-family: kept }")})
 
 	var found *Finding
 	for i := range got.Findings {
-		if got.Findings[i].Property == "text-shadow" {
+		if got.Findings[i].Property == "box-shadow" {
 			found = &got.Findings[i]
 		}
 	}
 	if found == nil {
-		t.Fatalf("dropping text-shadow was not reported; findings were %v", got.Findings)
+		t.Fatalf("dropping box-shadow was not reported; findings were %v", got.Findings)
 	}
 	if !found.Unsupported {
-		t.Error("dropping text-shadow was reported as malformed input, and it is correct CSS")
+		t.Error("dropping box-shadow was reported as malformed input, and it is correct CSS")
 	}
 	// The declaration beside it still applied, so one unknown property does not
 	// cost the rule.
@@ -554,27 +554,27 @@ func TestUnsupportedPropertyIsReported(t *testing.T) {
 // unimplemented property forty times tells the author once. A report a person
 // will not read is a report that does not exist.
 //
-// The example was flex-wrap until flexbox was implemented, and swapping it is
-// what this test is *for* on the other side: a property that stops being
-// reported is a property something started reading, and the registry's own
-// guard in style/unimplemented_test.go is what makes the two impossible to
-// confuse.
+// The example was flex-wrap until flexbox was implemented, and text-shadow until
+// text shadows were drawn, and swapping it is what this test is *for* on the
+// other side: a property that stops being reported is a property something
+// started reading, and the registry's own guard in style/unimplemented_test.go
+// is what makes the two impossible to confuse.
 func TestUnsupportedPropertyIsReportedOnce(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 40; i++ {
-		b.WriteString("p { text-shadow: 1px 1px red }\n")
+		b.WriteString("p { box-shadow: 1px 1px red }\n")
 	}
 	doc := parseDoc(t, "<p>x</p>")
 	got := Apply(doc, []Sheet{author(t, b.String())})
 
 	n := 0
 	for _, f := range got.Findings {
-		if f.Property == "text-shadow" {
+		if f.Property == "box-shadow" {
 			n++
 		}
 	}
 	if n != 1 {
-		t.Errorf("text-shadow was reported %d times, want once", n)
+		t.Errorf("box-shadow was reported %d times, want once", n)
 	}
 }
 
@@ -607,7 +607,7 @@ func TestFindingsAreBounded(t *testing.T) {
 // and the one declaration this engine does not implement comes after it.
 func TestTheBoundDoesNotHideWhatIsUnsupported(t *testing.T) {
 	for _, c := range []struct{ what, tail string }{
-		{"well past the bound", "p { text-shadow: 1px 1px red }"},
+		{"well past the bound", "p { box-shadow: 1px 1px red }"},
 		{"the first one past it", ""},
 	} {
 		t.Run(c.what, func(t *testing.T) {
@@ -617,7 +617,7 @@ func TestTheBoundDoesNotHideWhatIsUnsupported(t *testing.T) {
 				// Exactly maxFindings errors, so the unsupported declaration
 				// is the finding the note is written in place of.
 				n = maxFindings
-				c.tail = "p { text-shadow: 1px 1px red }"
+				c.tail = "p { box-shadow: 1px 1px red }"
 			}
 			for i := 0; i < n; i++ {
 				b.WriteString("p.c" + itoa(i) + " { color: 'x" + itoa(i) + "' }\n")
@@ -631,14 +631,14 @@ func TestTheBoundDoesNotHideWhatIsUnsupported(t *testing.T) {
 			for _, f := range got.Findings {
 				if f.Unsupported {
 					unsupported++
-					if f.Property != "text-shadow" || !strings.Contains(f.Message, "text-shadow") {
+					if f.Property != "box-shadow" || !strings.Contains(f.Message, "box-shadow") {
 						t.Errorf("the unsupported finding names %q: %q", f.Property, f.Message)
 					}
 				}
 			}
 			if unsupported != 1 {
 				t.Errorf("%d findings are Unsupported, want the note alone; a page with "+
-					"text-shadow on it would count as one with nothing unsupported", unsupported)
+					"box-shadow on it would count as one with nothing unsupported", unsupported)
 			}
 		})
 	}

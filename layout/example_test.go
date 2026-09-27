@@ -41,6 +41,8 @@ func Example() {
 		switch op.(type) {
 		case layout.DrawText: // op.Text, op.Face, op.Size, op.At, op.RTL …
 			texts++
+		case layout.DrawTextShadow: // op.Run, op.StdDev — a shadow of text; not text itself
+			texts++
 		case layout.FillRect: // op.Rect, op.Color
 			fills++
 		case layout.DrawImage: // op.Image, op.Rect

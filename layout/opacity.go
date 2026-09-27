@@ -197,6 +197,19 @@ func dimOps(ops []Op, at int, alpha float64) ([]Op, []groupMark) {
 			}
 			v.Color.A *= alpha
 			kept = append(kept, v)
+		case DrawTextShadow:
+			// A shadow carries a colour, and a blur is linear, so the alpha
+			// folds into it exactly as into the run it shadows.
+			if v.Run.Color.A == 0 || v.Run.Text == "" {
+				kept = append(kept, op)
+				continue
+			}
+			marks = append(marks, groupMark{text: true})
+			if alpha == 0 {
+				continue
+			}
+			v.Run.Color.A *= alpha
+			kept = append(kept, v)
 		case FilterGroup:
 			// The group is composited as one, so an alpha is the group's: it
 			// joins the chain's opacity, exactly, and the group is one mark

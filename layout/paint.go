@@ -38,10 +38,11 @@ import (
 // rather than a "border" primitive, because a backend that had to understand
 // border-collapse would be a second layout engine.
 //
-// There are nine: FillRect, DrawText, DrawImage, TileImage, FillGradient and
-// FillPath, which put ink on the page; ClipPath and FilterGroup, which hold
-// operations and clip what they put there to a shape or filter it as a group;
-// and Link, which puts none and says where a hyperlink is. A backend that switches over them must have a case for each, and
+// There are ten: FillRect, DrawText, DrawTextShadow, DrawImage, TileImage,
+// FillGradient and FillPath, which put ink on the page; ClipPath and
+// FilterGroup, which hold operations and clip what they put there to a shape or
+// filter it as a group; and Link, which puts none and says where a hyperlink
+// is. A backend that switches over them must have a case for each, and
 // one that only draws may skip Link. The set grows only by addition — an
 // operation's meaning, once stated, is not changed — so a backend that meets a
 // kind it has no case for has met something new, and should say so rather than
@@ -416,7 +417,8 @@ func PaintReporting(root *Fragment, rec *Recorder) []Op {
 		// told what it cut.
 		rec = NewRecorder(nil)
 	}
-	p := &painter{colors: map[string]style.RGBA{}, rec: rec, filters: root.filters}
+	p := &painter{colors: map[string]style.RGBA{}, rec: rec, filters: root.filters,
+		lengths: root.paintLengths}
 	p.dimming(root, 1, nil)
 	p.findInlineLevels(root)
 	p.canvasBackground(root)
@@ -816,6 +818,10 @@ type painter struct {
 	// filters is every filtered box's chain, from the root fragment. See
 	// filter.go.
 	filters map[*Box][]FilterFunction
+	// lengths is what a length the painter reads resolves against, from the
+	// root fragment, and shadows memoizes shadowsOf. See textshadow.go.
+	lengths style.LengthContext
+	shadows map[shadowKey][]textShadow
 	// joinRefused says the work budget refused the joining of an inline box's
 	// outline pieces once, so every outline after it is drawn a ring per
 	// piece rather than some joined and some not. See joinedOutline.
@@ -1436,6 +1442,22 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 			}
 			if !c.admits(b) {
 				v.Clip = v.Clip.meet(c)
+			}
+			kept = append(kept, v)
+
+		case DrawTextShadow:
+			// A run's shadow is cut as the run is, by the same two
+			// questions, asked of where its blur reaches; the clip applies
+			// to the blurred shadow.
+			grow := func(r Rect) Rect {
+				d := v.StdDev.Mul(blurReach)
+				return r.Outset(Edges{Top: d, Right: d, Bottom: d, Left: d})
+			}
+			if c.hides(shadowInk(v)) {
+				continue
+			}
+			if !c.admits(grow(textInk(v.Run))) {
+				v.Run.Clip = v.Run.Clip.meet(c)
 			}
 			kept = append(kept, v)
 
@@ -2408,6 +2430,9 @@ func (p *painter) lineRun(f *Fragment, content Rect, around dim, line *LineFragm
 // paintRun paints one run of text at its pen position, with the lines ruled
 // across it.
 func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTurn) {
+	// The run's shadows, which go under everything else it paints: CSS Text
+	// Decoration 3 §5.1. See textshadow.go.
+	shadows := p.shadowsOf(run.Box)
 	if _, isControl := controlOf(run.Text); isControl {
 		// CSS Text 3 requires a control character to be visible, and no
 		// face has a glyph for one — so the mark is synthesized here
@@ -2418,7 +2443,15 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 		// the page beside the box, and would put the control character
 		// itself into the text extracted from the page, where it is
 		// exactly the thing a reader does not want back.
-		p.emit(controlBox(at, run.Width, run.Size, colour, turn)...)
+		box := controlBox(at, run.Width, run.Size, colour, turn)
+		if len(shadows) > 0 {
+			var rects []Rect
+			for _, op := range box {
+				rects = append(rects, op.(FillRect).Rect)
+			}
+			p.paintShadows(shadows, nil, nil, rects, nil)
+		}
+		p.emit(box...)
 		return
 	}
 	// The two lines that sit clear of the letters are drawn first, so the
@@ -2427,8 +2460,9 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 	// the order every renderer uses, and it only matters where a
 	// decoration's colour differs from the text's — which is precisely the
 	// case §16.3.1 exists to describe.
-	p.decorate(run, at, turn, false)
-	p.emit(DrawText{
+	under := p.decorationMarks(run, at, turn, false)
+	over := p.decorationMarks(run, at, turn, true)
+	text := DrawText{
 		At:            at,
 		Sideways:      turn.sideways,
 		Anticlockwise: turn.anticlockwise,
@@ -2445,11 +2479,17 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 		Size:          run.Size,
 		Color:         colour,
 		CharSpacing:   run.LetterSpacing,
-	})
-	p.decorate(run, at, turn, true)
+	}
+	if len(shadows) > 0 {
+		p.paintShadows(shadows, rectsOf(under), &text, nil, rectsOf(over))
+	}
+	p.decorate(under)
+	p.emit(text)
+	p.decorate(over)
 }
 
-// decorate paints the lines ruled across one run.
+// decorationMarks is the lines ruled across one run, where they go and in what
+// colour; decorate paints them, and a text shadow shadows them.
 //
 // over selects the pass: the line-through, which goes on top of the letters, or
 // the underline and overline, which go under them.
@@ -2467,16 +2507,17 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 // overlining div are ruled by one straight line. at.Y is the run's own baseline
 // and carries the run's own shift, which is undone here and the declaring box's
 // put in its place.
-func (p *painter) decorate(run TextRun, at Point, turn runTurn, over bool) {
+func (p *painter) decorationMarks(run TextRun, at Point, turn runTurn, over bool) []FillRect {
 	if len(run.Decorations) == 0 || run.Width <= 0 {
-		return
+		return nil
 	}
+	var out []FillRect
 	for _, d := range run.Decorations {
 		if (d.Kind == decorationLineThrough) != over {
 			continue
 		}
 		colour, ok := p.color(heldBox(d.By), "text-decoration-color")
-		if !ok || colour.A == 0 {
+		if !ok {
 			continue
 		}
 		// The band in the run's own axes, from an origin at the start of its
@@ -2498,10 +2539,32 @@ func (p *painter) decorate(run TextRun, at Point, turn runTurn, over bool) {
 		if band.Empty() {
 			continue
 		}
-		p.emit(FillRect{
+		out = append(out, FillRect{
 			Rect: placeRun(band, at, turn), Color: colour, Overhang: true,
 		})
 	}
+	return out
+}
+
+// decorate paints decoration lines. One of a transparent colour is not painted,
+// though it is still shadowed: a shadow is of the line's shape and not of its
+// ink, as a transparent run's shadow is.
+func (p *painter) decorate(marks []FillRect) {
+	for _, m := range marks {
+		if m.Color.A == 0 {
+			continue
+		}
+		p.emit(m)
+	}
+}
+
+// rectsOf is where a set of fills are.
+func rectsOf(fs []FillRect) []Rect {
+	out := make([]Rect, len(fs))
+	for i, f := range fs {
+		out[i] = f.Rect
+	}
+	return out
 }
 
 // placeRun puts a rectangle measured in a run's own axes onto the page.

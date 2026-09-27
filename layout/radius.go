@@ -511,6 +511,8 @@ func opBounds(op Op) (Rect, bool) {
 		return v.Path.Bounds(), true
 	case FilterGroup:
 		return v.Extent(), true
+	case DrawTextShadow:
+		return shadowInk(v), true
 	}
 	return Rect{}, false
 }

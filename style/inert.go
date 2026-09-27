@@ -217,12 +217,12 @@ var inertValues = map[string]inertValue{
 	// report said a declaration had been dropped when there was no effect in it
 	// to drop.
 
-	// CSS Backgrounds 3 §6 and CSS Text Decoration 4 §6. Nothing is drawn behind
-	// a box or behind a glyph, so a declaration asking for no shadow asks for the
-	// page that is already there. A shadow that asks for something stays
-	// reported: an author who wrote one gets a flat page instead.
-	"box-shadow":  {produced: "none", because: "no shadow is drawn behind a box"},
-	"text-shadow": {inherits: true, produced: "none", because: "no shadow is drawn behind text"},
+	// CSS Backgrounds 3 §6. Nothing is drawn behind a box, so a declaration
+	// asking for no shadow asks for the page that is already there. A shadow
+	// that asks for something stays reported: an author who wrote one gets a
+	// flat page instead. text-shadow was here and is implemented; see
+	// layout/textshadow.go.
+	"box-shadow": {produced: "none", because: "no shadow is drawn behind a box"},
 
 	// CSS UI 4 §8.1 and CSS Contain 2 §4. A page laid out once has no pointer to
 	// put a cursor under, and it renders every box it lays out rather than

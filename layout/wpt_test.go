@@ -1459,7 +1459,14 @@ const wptEnv = "WPT_TESTS"
 // §9.2.1.1 lifted out of it, which is in the box tree nowhere under the span
 // — and the two groups hold the same run. wpt.fyi: Chrome and Firefox pass,
 // Safari fails.
-const wptCleanPassBaseline = 5989
+//
+// **5989 to 5990, for text-shadow** (issue #26). hyphens/shy-styling-001 asks
+// for a hyphen made at a soft hyphen to take the soft hyphen's style — large,
+// red, and "text-shadow: 3px 3px 3px black" — and its references draw a
+// hyphen so styled. The pages matched while text-shadow was unimplemented, and
+// both carried the finding. The shadow is drawn now, a DrawTextShadow under the
+// run, and the two hyphens cast the same one. wpt.fyi: all three browsers pass.
+const wptCleanPassBaseline = 5990
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -2131,6 +2138,12 @@ func normaliseOps(ops []Op) string {
 				continue
 			}
 			lines = append(lines, fmt.Sprintf("path %s %s", v.Path, v.Color))
+		case DrawTextShadow:
+			if strings.TrimSpace(v.Run.Text) == "" || v.Run.Color.A == 0 {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("shadow %q at %s,%s blur %s",
+				v.Run.Text, num(v.Run.At.X), num(v.Run.At.Y), num(v.StdDev)))
 		case FillGradient:
 			// Only the blank-page check reads this too: a gradient that shows
 			// anywhere is something painted.

@@ -35,15 +35,16 @@ backend.Begin(out.Page.Width, out.Page.Height, origin, out.Scale)
 
 for _, op := range out.Ops {
     switch op := op.(type) {
-    case layout.DrawText:     // op.Text, op.Face, op.Size, op.At, op.RTL …
-    case layout.FillRect:     // op.Rect, op.Color
-    case layout.DrawImage:    // op.Image, op.Rect
-    case layout.TileImage:    // op.Image, op.Clip, op.Tile — a repeated background
-    case layout.FillGradient: // op.Gradient, op.Clip, op.Tile — a CSS gradient, tiled
-    case layout.FillPath:     // op.Path, op.Color — a shape with curves in it, even-odd
-    case layout.ClipPath:     // op.Path, op.Ops — what op.Ops draw, clipped to the shape
-    case layout.FilterGroup:  // op.Filters, op.Ops — what op.Ops draw, blurred or faded as one
-    case layout.Link:         // op.Rects, op.Href — a hyperlink's areas; draws nothing
+    case layout.DrawText:       // op.Text, op.Face, op.Size, op.At, op.RTL …
+    case layout.DrawTextShadow: // op.Run, op.StdDev — a shadow of text; not text itself
+    case layout.FillRect:       // op.Rect, op.Color
+    case layout.DrawImage:      // op.Image, op.Rect
+    case layout.TileImage:      // op.Image, op.Clip, op.Tile — a repeated background
+    case layout.FillGradient:   // op.Gradient, op.Clip, op.Tile — a CSS gradient, tiled
+    case layout.FillPath:       // op.Path, op.Color — a shape with curves in it, even-odd
+    case layout.ClipPath:       // op.Path, op.Ops — what op.Ops draw, clipped to the shape
+    case layout.FilterGroup:    // op.Filters, op.Ops — what op.Ops draw, blurred or faded as one
+    case layout.Link:           // op.Rects, op.Href — a hyperlink's areas; draws nothing
     }
 }
 ```
@@ -141,7 +142,7 @@ record of what it thought of.
 
 | | |
 |---|---|
-| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,989 pass with nothing unsupported reported in either document** |
+| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,990 pass with nothing unsupported reported in either document** |
 | **Unicode's bidi conformance** | 861,948 cases across `BidiTest.txt` and `BidiCharacterTest.txt`, no failures |
 | **Unicode's grapheme boundaries** | all 766 cases of `GraphemeBreakTest.txt` |
 | **Unicode's normalisation forms** | all 20,034 cases of `NormalizationTest.txt`, both NFC invariants |

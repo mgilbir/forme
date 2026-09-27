@@ -236,7 +236,6 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 		// edge — none of them arrives, and the author has no other way to learn
 		// it.
 		"box-shadow: 1px 1px red",
-		"text-shadow: 1px 1px red",
 		"content-visibility: hidden",
 		"contain: paint",
 		"isolation: isolate",
