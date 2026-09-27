@@ -236,6 +236,8 @@ func init() {
 	g["clip"] = single(either(kw("auto"), rectFn))
 	// css-color-4 §11.2.
 	g["opacity"] = single(num(numeric{number: true, percent: true}))
+	// filter-effects-1 §5: none | <filter-value-list>.
+	g["filter"] = filterValue
 	// css-images-3 §5.5-6.
 	g["object-fit"] = single(kw("fill", "contain", "cover", "none", "scale-down"))
 	g["object-position"] = position
@@ -955,4 +957,90 @@ func rectFn(v css.ComponentValue) verdict {
 		return invalid
 	}
 	return repeated(either(kw("auto"), num(lengthSlot)), 4, 4)(parts)
+}
+
+// filterValue is Filter Effects 1 §5's "none | [ <filter-function> | <url> ]+",
+// with §6.1's ten functions and their arguments.
+//
+// It says which values are CSS and not which this engine applies: every
+// function here is valid, and layout reports the ones it does not draw.
+func filterValue(it []css.ComponentValue) verdict {
+	if len(it) == 1 {
+		if name, ok := identOf(it[0]); ok && name == "none" {
+			return valid
+		}
+	}
+	if len(it) == 0 {
+		return invalid
+	}
+	amount := num(numeric{number: true, percent: true}.nonNeg())
+	out := valid
+	for _, v := range it {
+		if v.IsToken() && v.Token.Kind == css.URL {
+			continue
+		}
+		if !v.IsFunction() {
+			return invalid
+		}
+		args := items(v.Values)
+		var got verdict
+		switch ascii.Lower(v.Token.Value) {
+		case "url":
+			got = valid
+		case "blur":
+			got = optionalOne(args, num(lengthSlot.nonNeg()))
+		case "brightness", "contrast", "grayscale", "invert", "opacity", "saturate", "sepia":
+			got = optionalOne(args, amount)
+		case "hue-rotate":
+			got = optionalOne(args, num(angleSlot))
+		case "drop-shadow":
+			got = dropShadowArgs(args)
+		default:
+			return invalid
+		}
+		if out = out.and(got); !out.ok {
+			return invalid
+		}
+	}
+	return out
+}
+
+// optionalOne is a function's arguments when they are at most one, of a term.
+func optionalOne(args []css.ComponentValue, t term) verdict {
+	switch len(args) {
+	case 0:
+		return valid
+	case 1:
+		return t(args[0])
+	}
+	return invalid
+}
+
+// dropShadowArgs is drop-shadow()'s "<color>? && <length>{2,3}", the third
+// length a standard deviation and never negative.
+func dropShadowArgs(args []css.ComponentValue) verdict {
+	out := valid
+	lengths := 0
+	sawColour := false
+	for i, a := range args {
+		if got := colour(a); got.ok && !sawColour && (i == 0 || i == len(args)-1) {
+			sawColour = true
+			out = out.and(got)
+			continue
+		}
+		slot := lengthSlot
+		if lengths == 2 {
+			slot = lengthSlot.nonNeg()
+		}
+		got := num(slot)(a)
+		if !got.ok {
+			return invalid
+		}
+		out = out.and(got)
+		lengths++
+	}
+	if lengths < 2 || lengths > 3 {
+		return invalid
+	}
+	return out
 }

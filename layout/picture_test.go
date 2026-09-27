@@ -229,6 +229,11 @@ func picFillsIn(ops []Op, masks []mask) []coloured {
 
 		case ClipPath:
 			out = append(out, picFillsIn(v.Ops, []mask{newMask(v.Path)})...)
+
+		case FilterGroup:
+			if m, ok := filteredFills(v); ok {
+				out = append(out, m)
+			}
 		}
 	}
 	// Every mark made here, including those of the groups inside, is clipped
@@ -1890,6 +1895,23 @@ func flattenGroups(ops []Op, within string) ([]Op, []string) {
 	var out []Op
 	var paths []string
 	for _, op := range ops {
+		if g, ok := op.(FilterGroup); ok {
+			// A run in a filtered group is a mark of what the filter did to
+			// it: the comparison has no glyph rasteriser to blur one with, so
+			// two documents agree only where they filter the same run the
+			// same way.
+			key := fmt.Sprintf("filter %+v", g.Filters)
+			if g.Clip.Active {
+				key += " cut to " + rectKey(g.Clip.Rect)
+			}
+			if within != "" {
+				key = within + " and " + key
+			}
+			inner, innerPaths := flattenGroups(g.Ops, key)
+			out = append(out, inner...)
+			paths = append(paths, innerPaths...)
+			continue
+		}
 		if g, ok := op.(ClipPath); ok {
 			key := g.Path.String()
 			if within != "" {
@@ -1904,4 +1926,156 @@ func flattenGroups(ops []Op, within string) ([]Op, []string) {
 		paths = append(paths, within)
 	}
 	return out, paths
+}
+
+// Rendering a filtered group.
+//
+// A FilterGroup is one mark: the group composited on a surface of its own,
+// filtered, and composited onto the page. What the group holds that is text is
+// compared as marks, keyed by the filter — see flattenGroups — and what is
+// fills is rendered here.
+//
+// An opacity is exact: the group's colour at a point, with its alpha scaled. A
+// blur is exact too, for the groups the suite draws, because a group of
+// rectangles of solid colour is a piecewise constant picture and a Gaussian
+// blur of one has a closed form. Cut the group into the cells its edges make,
+// each one colour; the blur at a point is the sum over the cells of each cell's
+// premultiplied colour times the Gaussian's weight on it, and that weight is a
+// product of two differences of the normal distribution function, one per axis.
+// There is no sampling and no kernel to truncate.
+//
+// Anything else in a blurred group — a gradient, a picture, a curve — is not a
+// set of flat cells, and the group is then compared as one opaque mark keyed by
+// what it holds, which calls two documents different unless they drew the same
+// thing: the direction this comparison errs in.
+
+// maxBlurCells bounds the cells a blurred group is cut into. The blur at each
+// sample reads every one, and a cell comparison samples every pixel of the
+// blurred area.
+const maxBlurCells = 4096
+
+// groupShade is a filtered group's colour at a point.
+type groupShade struct {
+	marks []coloured
+	sigma float64 // pixels; zero for no blur
+	alpha float64
+	// cells are the group cut into flat pieces, premultiplied, for a blur.
+	cells []blurCell
+}
+
+type blurCell struct {
+	x0, y0, x1, y1 float64
+	r, g, b, a     float64 // premultiplied
+}
+
+func (s groupShade) at(x, y float64) style.RGBA {
+	var r, g, b, a float64
+	if s.sigma <= 0 {
+		c, ok := compositeAt(s.marks, x, y)
+		if !ok {
+			return style.RGBA{}
+		}
+		r, g, b, a = c.R*c.A, c.G*c.A, c.B*c.A, c.A
+	} else {
+		phi := func(z float64) float64 { return 0.5 * math.Erfc(-z/math.Sqrt2) }
+		for _, c := range s.cells {
+			w := (phi((c.x1-x)/s.sigma) - phi((c.x0-x)/s.sigma)) *
+				(phi((c.y1-y)/s.sigma) - phi((c.y0-y)/s.sigma))
+			r, g, b, a = r+c.r*w, g+c.g*w, b+c.b*w, a+c.a*w
+		}
+	}
+	a *= s.alpha
+	if a <= 0 {
+		return style.RGBA{}
+	}
+	k := s.alpha / a
+	return style.RGBA{R: r * k, G: g * k, B: b * k, A: math.Min(a, 1)}
+}
+
+// compositeAt is what a set of flat marks paints at a point on a transparent
+// surface, and false where a picture is there, which has no colour to blend.
+func compositeAt(fs []coloured, x, y float64) (style.RGBA, bool) {
+	ux, _ := style.FromPx(x)
+	uy, _ := style.FromPx(y)
+	var r, g, b, a float64
+	remaining := 1.0
+	for i := len(fs) - 1; i >= 0; i-- {
+		f := fs[i]
+		if ux < f.r.X || ux >= f.r.Right() || uy < f.r.Y || uy >= f.r.Bottom() {
+			continue
+		}
+		if f.img != "" || f.shade != nil || len(f.masks) > 0 {
+			return style.RGBA{}, false
+		}
+		w := f.c.A * remaining
+		r, g, b, a = r+f.c.R*w, g+f.c.G*w, b+f.c.B*w, a+w
+		remaining -= w
+		if remaining <= 0 {
+			break
+		}
+	}
+	if a <= 0 {
+		return style.RGBA{}, true
+	}
+	return style.RGBA{R: r / a, G: g / a, B: b / a, A: a}, true
+}
+
+// filteredFills is the mark a filtered group makes, or false when it makes
+// none.
+func filteredFills(v FilterGroup) (coloured, bool) {
+	marks := picFillsIn(v.Ops, nil)
+	if len(marks) == 0 {
+		return coloured{}, false
+	}
+	ext := v.Extent()
+	if ext.Empty() {
+		return coloured{}, false
+	}
+	sh := groupShade{marks: marks, alpha: 1}
+	for _, f := range v.Filters {
+		switch f.Kind {
+		case FilterBlur:
+			sh.sigma = f.StdDev.Px()
+		case FilterOpacity:
+			sh.alpha *= f.Amount
+		}
+	}
+	flat := true
+	for _, m := range marks {
+		flat = flat && m.img == "" && m.shade == nil && len(m.masks) == 0
+	}
+	if flat && sh.sigma > 0 {
+		xs := edges(ext.X, ext.Right(), marks)
+		ys := edgesY(ext.Y, ext.Bottom(), marks)
+		if (len(xs)-1)*(len(ys)-1) > maxBlurCells {
+			flat = false
+		} else {
+			for i := 0; i+1 < len(xs); i++ {
+				for j := 0; j+1 < len(ys); j++ {
+					mx := xs[i].Px() + (xs[i+1].Px()-xs[i].Px())/2
+					my := ys[j].Px() + (ys[j+1].Px()-ys[j].Px())/2
+					c, _ := compositeAt(marks, mx, my)
+					if c.A <= 0 {
+						continue
+					}
+					sh.cells = append(sh.cells, blurCell{
+						x0: xs[i].Px(), y0: ys[j].Px(), x1: xs[i+1].Px(), y1: ys[j+1].Px(),
+						r: c.R * c.A, g: c.G * c.A, b: c.B * c.A, a: c.A,
+					})
+				}
+			}
+		}
+	}
+	if !flat {
+		var b strings.Builder
+		fmt.Fprintf(&b, "filter %+v clip %v:", v.Filters, v.Clip)
+		for _, m := range marks {
+			fmt.Fprintf(&b, " %s %v %s %T", rectKey(m.r), m.c, m.img, m.shade)
+			for _, k := range m.masks {
+				b.WriteString(" in " + k.path.String())
+			}
+		}
+		return coloured{r: ext, c: style.RGBA{A: 1}, img: b.String()}, true
+	}
+	return coloured{r: ext, shade: sh}, true
 }

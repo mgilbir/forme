@@ -53,6 +53,8 @@ func Example() {
 			fills++
 		case layout.ClipPath: // op.Path, op.Ops — what op.Ops draw, clipped to the shape
 			fills++
+		case layout.FilterGroup: // op.Filters, op.Ops — what op.Ops draw, blurred or faded as one
+			fills++
 		case layout.Link: // op.Rects, op.Href — a hyperlink's areas; draws nothing
 			links++
 		}

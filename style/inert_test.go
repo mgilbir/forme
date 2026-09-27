@@ -230,7 +230,6 @@ func TestADeclarationThatAsksForSomethingIsStillReported(t *testing.T) {
 		"break-before: left",
 		"break-after: recto",
 		"break-before: region",
-		"filter: blur(1px)",
 		// The other half of every entry added above: the value that asks for a
 		// page this engine does not draw. A shadow, a blend, a clip, a mask, a
 		// mark over the text, an alternate glyph, a ring held off the border

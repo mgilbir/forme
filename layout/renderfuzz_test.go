@@ -197,6 +197,10 @@ func writeRenderKey(b *strings.Builder, ops []Op) {
 			fmt.Fprintf(b, "link %v %q\n", v.Rects, v.Href)
 		case FillPath:
 			fmt.Fprintf(b, "path %s %v clip=%v overhang=%v\n", v.Path, v.Color, v.Clip, v.Overhang)
+		case FilterGroup:
+			fmt.Fprintf(b, "filter %+v clip=%v {\n", v.Filters, v.Clip)
+			writeRenderKey(b, v.Ops)
+			b.WriteString("}\n")
 		case ClipPath:
 			fmt.Fprintf(b, "clip to %s {\n", v.Path)
 			writeRenderKey(b, v.Ops)

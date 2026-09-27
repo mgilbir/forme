@@ -189,6 +189,14 @@ type Fragment struct {
 	// each one is inside is already in clipSelf or clipContent, so these add
 	// only the corners. nil is no curve. See radius.go.
 	roundSelf, roundContent *roundClip
+	// filterClip and filterRound are what clips a filtered box's group, which
+	// is applied after the filter rather than to what the group holds: the
+	// clip and the curves around the box, and its own "clip". See filter.go.
+	filterClip  Clip
+	filterRound *roundClip
+	// filters is, on the root fragment only, every filtered box's chain, which
+	// the painter wraps each such box's group in. See filter.go.
+	filters map[*Box][]FilterFunction
 
 	// radii is the box's used border-radius, CSS Backgrounds 3 §4, and zero
 	// for a box with square corners. See radius.go.
@@ -358,6 +366,7 @@ func (l *layouter) layout() *Fragment {
 		frag := icb.Children[0]
 		l.resolveBackgrounds(frag, page)
 		l.resolveClips(frag)
+		l.resolveFilters(frag)
 		return frag
 	}
 	frag, m := l.block(root, avail.W,
@@ -401,6 +410,10 @@ func (l *layouter) layout() *Fragment {
 	// never about layout, and a clipped box still occupies every inch of the
 	// space it did — so nothing computed above depends on it.
 	l.resolveClips(frag)
+
+	// And the filters, whose groups are clipped as a whole by what
+	// resolveClips set aside for them.
+	l.resolveFilters(frag)
 	return frag
 }
 

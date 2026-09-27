@@ -28,7 +28,9 @@ func paintedInNoto(t *testing.T, htmlSrc, cssSrc string) []DrawText {
 	frag := Layout(built.Root, Size{W: w, H: h}, notoSet{face: embeddedFallback(t)},
 		NewRecorder(nil))
 	var out []DrawText
-	for _, op := range Paint(frag) {
+	// Including what a group holds: a filtered span's runs are inside one.
+	flat, _ := flattenGroups(Paint(frag), "")
+	for _, op := range flat {
 		if d, ok := op.(DrawText); ok {
 			out = append(out, d)
 		}
@@ -59,6 +61,7 @@ func TestAGlyphIsNotSharedAcrossWhatThePainterDecidesPerRun(t *testing.T) {
 	for _, decl := range []string{
 		"visibility: hidden",
 		"opacity: 0.5",
+		"filter: blur(1px)",
 		"position: relative; top: 5px",
 	} {
 		for _, markup := range []string{

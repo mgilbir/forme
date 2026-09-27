@@ -903,7 +903,10 @@ func translucentStep(cur *Box) (found *Box, done bool) {
 		return nil, true
 	case cur.IsText():
 		return nil, false
-	case groupsItsPaint(cur):
+	case groupsItsPaint(cur), filtersItsPaint(cur):
+		// A filtered box is a group of its own as a translucent one is (Filter
+		// Effects 1 §5), and a glyph shared across its edge would be drawn in
+		// one group or the other and not both.
 		return cur, true
 	}
 	return nil, false

@@ -509,6 +509,8 @@ func opBounds(op Op) (Rect, bool) {
 		return b, true
 	case ClipPath:
 		return v.Path.Bounds(), true
+	case FilterGroup:
+		return v.Extent(), true
 	}
 	return Rect{}, false
 }

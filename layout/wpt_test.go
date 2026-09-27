@@ -1450,7 +1450,16 @@ const wptEnv = "WPT_TESTS"
 // border edge's curve and the padding edge's, a FillPath — and the comparison
 // renders them, so the pair is compared as what it paints and passes clean.
 // wpt.fyi: all three browsers pass.
-const wptCleanPassBaseline = 5988
+//
+// **5988 to 5989, for filter** (issue #26). normal-flow/block-in-inline-float-
+// in-layer-001 puts "filter: blur(1px)" on a <span> around a block, and its
+// reference on a <div>; both pages matched while filter was unimplemented,
+// with the finding on both. The blur is drawn now, as a FilterGroup around
+// everything the element paints — including, for the <span>, the block
+// §9.2.1.1 lifted out of it, which is in the box tree nowhere under the span
+// — and the two groups hold the same run. wpt.fyi: Chrome and Firefox pass,
+// Safari fails.
+const wptCleanPassBaseline = 5989
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

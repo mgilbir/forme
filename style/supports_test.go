@@ -42,7 +42,9 @@ func TestASupportsBlockAppliesWhenTheEngineUnderstandsTheDeclaration(t *testing.
 
 		// or
 		{"or, one known", `(transform: rotate(1deg)) or (color: red)`, true},
-		{"or, neither known", `(transform: rotate(1deg)) or (filter: blur(1px))`, false},
+		{"or, neither known", `(transform: rotate(1deg)) or (clip-path: circle(40%))`, false},
+		// filter is known now: layout draws blur() and opacity().
+		{"or, the filter known", `(transform: rotate(1deg)) or (filter: blur(1px))`, true},
 
 		// Grouping, which is the only way "and" and "or" may be mixed.
 		{"a group", `((color: red) or (transform: x)) and (display: block)`, true},

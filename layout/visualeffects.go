@@ -159,6 +159,13 @@ func (l *layouter) resolveClips(root *Fragment) {
 			round = inheritedRound[anc]
 		}
 		self := from.meet(l.clipRectOf(f))
+		if filtersItsPaint(f.Box) {
+			// Filter Effects 1 §5: a filter is applied first and clipping
+			// after, so what clips a filtered box clips its group, and nothing
+			// inside it is cut by anything outside it. See filter.go.
+			f.filterClip, f.filterRound = self, round
+			self, round = Clip{}, nil
+		}
 		content := self
 		roundContent := round
 		if l.overflowClips(f.Box) {

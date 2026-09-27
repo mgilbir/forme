@@ -161,11 +161,11 @@ var inertValues = map[string]inertValue{
 	// neither box is turned and neither property changes anything, which is what
 	// the layout-time check asks before it says a word.
 
-	// The identities: CSS Filter Effects 1 §5 and CSS Transforms 2. CSS Color
-	// 4 §3's opacity was here and is not any more — it is implemented, and what
-	// it cannot express is reported at the box that asked for it rather than at
-	// the declaration. See layout/opacity.go.
-	"filter":          {produced: "none", because: "nothing is filtered"},
+	// The identities of CSS Transforms 2. CSS Color 4 §3's opacity was here and
+	// is not any more — it is implemented, and what it cannot express is
+	// reported at the box that asked for it rather than at the declaration. See
+	// layout/opacity.go. Filter Effects 1's filter has gone the same way: see
+	// layout/filter.go.
 	"transform":       {produced: "none", because: "nothing is transformed"},
 	"transform-style": {produced: "flat", because: "there is no 3D rendering context"},
 	// backface-visibility is the second property whose every value is inert,

@@ -186,7 +186,7 @@ func cloneForTest(f *Fragment) *Fragment {
 // fragmentDiff describes the first difference between two fragment trees, or
 // is empty when there is none. Boxes, faces and images are compared by
 // identity, which is what two layouts of one box tree share; everything else
-// is compared by value, field by field.
+// is compared by value, field by field, and a map entry by entry.
 func fragmentDiff(path string, a, b *Fragment) string {
 	return diffValue(path, reflect.ValueOf(a), reflect.ValueOf(b), map[[2]uintptr]bool{})
 }
@@ -253,7 +253,27 @@ func diffValue(path string, a, b reflect.Value, seen map[[2]uintptr]bool) string
 			}
 		}
 		return ""
-	case reflect.Map, reflect.Func, reflect.Chan:
+	case reflect.Map:
+		// By content, a key by identity — the keys are boxes, which two
+		// layouts of one box tree share — and a value by value.
+		if a.IsNil() != b.IsNil() && (a.Len() != 0 || b.Len() != 0) {
+			return fmt.Sprintf("%s: nil against empty", path)
+		}
+		if a.Len() != b.Len() {
+			return fmt.Sprintf("%s: %d entries against %d", path, a.Len(), b.Len())
+		}
+		iter := a.MapRange()
+		for iter.Next() {
+			bv := b.MapIndex(iter.Key())
+			if !bv.IsValid() {
+				return fmt.Sprintf("%s: a key on one side only", path)
+			}
+			if d := diffValue(fmt.Sprintf("%s[%v]", path, iter.Key()), iter.Value(), bv, seen); d != "" {
+				return d
+			}
+		}
+		return ""
+	case reflect.Func, reflect.Chan:
 		if a.Pointer() != b.Pointer() {
 			return fmt.Sprintf("%s: a different %v", path, a.Type())
 		}

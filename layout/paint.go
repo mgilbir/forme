@@ -38,10 +38,10 @@ import (
 // rather than a "border" primitive, because a backend that had to understand
 // border-collapse would be a second layout engine.
 //
-// There are eight: FillRect, DrawText, DrawImage, TileImage, FillGradient and
-// FillPath, which put ink on the page; ClipPath, which holds operations and
-// clips what they put there to a shape; and Link, which puts none and says
-// where a hyperlink is. A backend that switches over them must have a case for each, and
+// There are nine: FillRect, DrawText, DrawImage, TileImage, FillGradient and
+// FillPath, which put ink on the page; ClipPath and FilterGroup, which hold
+// operations and clip what they put there to a shape or filter it as a group;
+// and Link, which puts none and says where a hyperlink is. A backend that switches over them must have a case for each, and
 // one that only draws may skip Link. The set grows only by addition — an
 // operation's meaning, once stated, is not changed — so a backend that meets a
 // kind it has no case for has met something new, and should say so rather than
@@ -416,11 +416,15 @@ func PaintReporting(root *Fragment, rec *Recorder) []Op {
 		// told what it cut.
 		rec = NewRecorder(nil)
 	}
-	p := &painter{colors: map[string]style.RGBA{}, rec: rec}
+	p := &painter{colors: map[string]style.RGBA{}, rec: rec, filters: root.filters}
 	p.dimming(root, 1, nil)
 	p.findInlineLevels(root)
 	p.canvasBackground(root)
-	p.stackingContext(root)
+	if filtersItsPaint(root.Box) {
+		p.filtering(root.Box, root.filterClip, root.filterRound, func() { p.stackingContext(root) })
+	} else {
+		p.stackingContext(root)
+	}
 	p.settleGroups()
 	for _, b := range p.order {
 		p.groups[b].report(rec)
@@ -809,6 +813,9 @@ type painter struct {
 	orderPrefixes map[*Box][]orderStep
 	// reported is what reportOnce has said, per box.
 	reported map[any]bool
+	// filters is every filtered box's chain, from the root fragment. See
+	// filter.go.
+	filters map[*Box][]FilterFunction
 	// joinRefused says the work budget refused the joining of an inline box's
 	// outline pieces once, so every outline after it is drawn a ring per
 	// piece rather than some joined and some not. See joinedOutline.
@@ -958,11 +965,20 @@ func (p *painter) stackingContext(f *Fragment) {
 // into the enclosing context by gather.
 func (p *painter) stackLevel(s stackLevel) {
 	if s.level != nil {
+		if filtersItsPaint(s.level.box) {
+			p.filteredLevel(s.level)
+			return
+		}
 		p.paintLevel(s.level)
 		return
 	}
 	if !sealsItsDescendants(s.frag.Box) {
 		p.unit(s.frag)
+		return
+	}
+	if filtersItsPaint(s.frag.Box) {
+		f := s.frag
+		p.filtering(f.Box, f.filterClip, f.filterRound, func() { p.stackingContext(f) })
 		return
 	}
 	p.stackingContext(s.frag)
@@ -990,7 +1006,7 @@ func (p *painter) stackLevel(s stackLevel) {
 // sealed by its opacity and not by the number.
 func sealsItsDescendants(b *Box) bool {
 	_, auto := usedZIndex(b)
-	return !auto || b.Position == PositionFixed || groupsItsPaint(b)
+	return !auto || b.Position == PositionFixed || groupsItsPaint(b) || filtersItsPaint(b)
 }
 
 // # Who stacks where
@@ -1041,11 +1057,13 @@ func usedZIndex(b *Box) (z int, auto bool) {
 // §E.2 steps 3, 7 and 8 rather than in the layer its display would put it in:
 // every positioned box and every stacking context.
 //
-// A stacking context that is not positioned is one of two things this engine
+// A stacking context that is not positioned is one of three things this engine
 // implements: a box with an opacity below one, which CSS Color 4 paints
-// at the stacking order a positioned element with "z-index: 0" would have, and
-// a flex or grid item with a z-index. The first stacks at zero whatever its z-index says, because z-index
-// does not apply to it; the second stacks at its number.
+// at the stacking order a positioned element with "z-index: 0" would have; a
+// box with a filter, which Filter Effects 1 §5 makes one "the same way that CSS
+// opacity does"; and a flex or grid item with a z-index. The first two stack at
+// zero whatever their z-index says, because z-index does not apply to them; the
+// third stacks at its number.
 //
 // It is asked of a box, and a non-atomic inline box is one too: what such a
 // box paints is gathered into an inline level and sorted as one entry. A block
@@ -1053,7 +1071,7 @@ func usedZIndex(b *Box) (z int, auto bool) {
 // part of the inline's level, which is how it comes to be painted where the
 // inline is. See inlinestacking.go.
 func stacksAsLevel(b *Box) bool {
-	if b.Position.positioned() || groupsItsPaint(b) {
+	if b.Position.positioned() || groupsItsPaint(b) || filtersItsPaint(b) {
 		return true
 	}
 	_, auto := usedZIndex(b)
@@ -1417,6 +1435,19 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 				continue
 			}
 			if !c.admits(b) {
+				v.Clip = v.Clip.meet(c)
+			}
+			kept = append(kept, v)
+
+		case FilterGroup:
+			// A filter is applied before the clip, so the clip goes on the
+			// group and not into what it holds: a blur cut by a rectangle is
+			// not the blur of what the rectangle leaves.
+			ext := v.Extent()
+			if c.hides(ext) {
+				continue
+			}
+			if !c.admits(ext) {
 				v.Clip = v.Clip.meet(c)
 			}
 			kept = append(kept, v)
@@ -1846,6 +1877,11 @@ func markOverhang(ops []Op) {
 			r.Overhang = true
 			ops[i] = r
 		case ClipPath:
+			inner := append([]Op(nil), r.Ops...)
+			markOverhang(inner)
+			r.Ops = inner
+			ops[i] = r
+		case FilterGroup:
 			inner := append([]Op(nil), r.Ops...)
 			markOverhang(inner)
 			r.Ops = inner

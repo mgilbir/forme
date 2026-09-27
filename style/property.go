@@ -541,6 +541,9 @@ var properties = map[string]property{
 	// — the value has to travel by the keyword rather than by default.
 	"clip":    {false, "auto"},
 	"opacity": {false, "1"},
+	// Filter Effects 1 §5. It does not inherit, and "none" filters nothing. See
+	// layout/filter.go for which functions are applied.
+	"filter": {false, "none"},
 	// CSS Images 3 §5.5 and §5.6. They are about a replaced element's *content*
 	// rather than about its box: the box is sized by the rules above, and these
 	// two say what the picture inside it does with the rectangle it was given

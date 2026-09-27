@@ -709,6 +709,11 @@ func checkOp(op Op, consider func(Rect), checkOps func([]Op)) {
 			}
 			consider(r)
 		}
+	case FilterGroup:
+		// What is inside it, each by its own rule. A blur spreads ink past
+		// what it blurs, and that is ink no layout decision placed, for the
+		// reason FillRect.Overhang gives.
+		checkOps(o.Ops)
 	case ClipPath:
 		// What is inside it, each by its own rule; the curve only takes
 		// ink away. Nested no deeper than the clipping boxes that made it,
