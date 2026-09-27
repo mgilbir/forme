@@ -2253,7 +2253,10 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 		}
 	}
 
-	if !hasWidth {
+	var width style.Unit
+	if hasWidth {
+		width = clamp(declared)
+	} else {
 		// An auto width fills whatever the margins leave, which is why a plain
 		// <div> is as wide as its parent. An auto margin against an auto width
 		// is zero — there is nothing left over to distribute.
@@ -2263,11 +2266,33 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 		if marginRightAuto {
 			out.Right = 0
 		}
-		width := available.Sub(out.Horizontal())
-		return clamp(maxZero(width))
+		fill := maxZero(available.Sub(out.Horizontal()))
+		width = clamp(fill)
+		if width == fill {
+			return width
+		}
+		// The fill broke a minimum or a maximum, and §10.4 does not stop at
+		// the clamp:
+		//
+		//	If the tentative used width is greater than 'max-width', the rules
+		//	above are applied again, but this time using the computed value of
+		//	'max-width' as the computed value for 'width'.
+		//
+		// and the same for 'min-width'. "The rules above" are §10.3.3's, so the
+		// margins are solved again against a width that is no longer auto —
+		// which is the whole of what "max-width: 600px; margin: 0 auto" means,
+		// and the reason a box narrowed in a right-to-left containing block
+		// hangs from the right edge rather than the left: the margin that gives
+		// way is the end one, and in right-to-left that is margin-left.
+		// Returning the clamped width with the margins the fill solved for left
+		// both at zero, so the narrowed box sat at the containing block's left
+		// edge whatever its margins or its parent's direction said.
+		//
+		// So it continues into the declared-width rules below, with the auto
+		// margins auto again. The out values they were zeroed to are
+		// overwritten there for every auto side, and the declared sides are
+		// as the author wrote them in both.
 	}
-
-	width := clamp(declared)
 	slack := available.Sub(width).Sub(margin.Horizontal())
 
 	// §10.3.3's first sentence, which is easy to read past because it is about

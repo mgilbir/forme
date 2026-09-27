@@ -747,11 +747,21 @@ func (l *layouter) avoidFloats(b *Box, containing style.Unit, origin flow,
 
 	box, width := borderBox(y, left, right)
 	x := box.X
-	if hasWidth && (leftAuto || rightAuto) {
+	if leftAuto || rightAuto {
 		// §10.3.3's auto margins, resolved against the band rather than against
 		// the containing block. That is the only substitution the rule makes:
 		// the box has been fitted to a band, so the room it has to share out is
 		// the band's room, and an auto margin still takes all of what is left.
+		//
+		// It is asked of every width and not only a declared one. An auto width
+		// that fills the band leaves no slack, so the answer there is the one it
+		// always was; but an auto width the band did not decide — narrowed by
+		// max-width, or a table wrapper shrunk to its table — is, by §10.4 and
+		// §17.4, a width the margins are solved against exactly as though it
+		// had been declared, which is what resolveWidth does with the same box
+		// once no float is beside it. Asking only of a declared width left a
+		// "max-width: 100px; margin: 0 auto" box at the band's start, a hundred
+		// pixels from the centre it has one float further down.
 		//
 		// It is what puts a "width: 200px; margin-left: auto" box against the
 		// *right* float rather than against the left edge of a block that has a
