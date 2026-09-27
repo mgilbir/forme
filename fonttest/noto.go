@@ -50,6 +50,10 @@ const NotoEnv = "NOTO_FONTS"
 // CJKEnv names the variable holding the CID-keyed CJK faces.
 const CJKEnv = "NOTO_CJK"
 
+// CFFEnv names the variable holding the CFF faces neither library above has:
+// CFF2 variable fonts, and name-keyed CFF fonts.
+const CFFEnv = "CFF_FONTS"
+
 // corpus is one fetched font library: the variable that names it, where the
 // Makefile puts it, and the face whose presence says a directory is it.
 //
@@ -62,8 +66,8 @@ type corpus struct {
 	fetches string // the Makefile target that puts it there
 }
 
-// noto is the fallback library, and cjk the CID-keyed faces the CFF reader is
-// checked against. They are variables rather than constants so that the rule
+// noto is the fallback library, cjk the CID-keyed faces the CFF reader is
+// checked against, and cff the CFF2 and name-keyed CFF faces. They are variables rather than constants so that the rule
 // itself can be tested against a directory that is not there.
 var (
 	noto = corpus{
@@ -77,6 +81,12 @@ var (
 		dir:     filepath.Join("..", "testdata", "notocjk"),
 		marker:  "NotoSansJP-Regular.otf",
 		fetches: "make notocjk",
+	}
+	cff = corpus{
+		env:     CFFEnv,
+		dir:     filepath.Join("..", "testdata", "cff-fonts"),
+		marker:  "SourceSans3-Regular.otf",
+		fetches: "make cff-fonts",
 	}
 )
 
@@ -200,3 +210,16 @@ func CJKDir(t TB) string { t.Helper(); return cjk.at(t) }
 
 // CJKFile reads one of the fetched CID-keyed faces by name.
 func CJKFile(t TB, name string) []byte { t.Helper(); return cjk.file(t, name) }
+
+// CFFDir is the fetched CFF2 and name-keyed CFF faces, or the reason there are
+// none.
+//
+// A corpus of its own for the same reason the CJK faces are one: what it holds
+// is a kind of program nothing else here carries. Every CJK face is a
+// CID-keyed CFF and the OFL library is TrueType throughout, so a CFF2 table —
+// charstrings that blend their own variations — and a name-keyed CFF with
+// subroutines to prune were read by nothing real until this was fetched.
+func CFFDir(t TB) string { t.Helper(); return cff.at(t) }
+
+// CFFFile reads one of the fetched CFF2 or name-keyed CFF faces by name.
+func CFFFile(t TB, name string) []byte { t.Helper(); return cff.file(t, name) }

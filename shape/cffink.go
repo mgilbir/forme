@@ -567,6 +567,22 @@ type t2Run struct {
 	// capped is set when a charstring ran into HarfBuzz's cap, and spent when
 	// the budget ran out; either leaves the glyph without ink.
 	capped, spent bool
+	// path, when it is not nil, is handed every segment the charstring draws,
+	// in font units, as HarfBuzz's draw functions are: a move, a line or a
+	// curve. It is how two programs' outlines are compared point for point —
+	// a subset against the font it was cut from — where a box would let a
+	// point that moved inside it go unnoticed. offX and offY are where a seac
+	// draws the glyph it is running, which is its accent's offset while the
+	// accent runs and nothing otherwise.
+	path       func(t2Seg)
+	offX, offY float64
+}
+
+// t2Seg is one segment a charstring draws: op is 'M', 'L' or 'C', and pts the
+// point it goes to, after a curve's two control points.
+type t2Seg struct {
+	op  byte
+	pts [6]float64
 }
 
 // t2Frame is one charstring or subroutine being run, and how far into it.
@@ -701,6 +717,9 @@ func (in *t2Interp) clear() { in.n = 0 }
 func (in *t2Interp) moveTo(x, y float64) {
 	in.open = false
 	in.x, in.y = x, y
+	if r := in.run; r.path != nil {
+		r.path(t2Seg{op: 'M', pts: [6]float64{x + r.offX, y + r.offY}})
+	}
 }
 
 func (in *t2Interp) lineTo(x, y float64) {
@@ -710,12 +729,19 @@ func (in *t2Interp) lineTo(x, y float64) {
 	}
 	in.x, in.y = x, y
 	in.bounds.update(x, y)
+	if r := in.run; r.path != nil {
+		r.path(t2Seg{op: 'L', pts: [6]float64{x + r.offX, y + r.offY}})
+	}
 }
 
 func (in *t2Interp) curveTo(x1, y1, x2, y2, x3, y3 float64) {
 	if !in.open {
 		in.open = true
 		in.bounds.update(in.x, in.y)
+	}
+	if r := in.run; r.path != nil {
+		ox, oy := r.offX, r.offY
+		r.path(t2Seg{op: 'C', pts: [6]float64{x1 + ox, y1 + oy, x2 + ox, y2 + oy, x3 + ox, y3 + oy}})
 	}
 	in.bounds.update(x1, y1)
 	in.bounds.update(x2, y2)
@@ -1069,7 +1095,9 @@ func (in *t2Interp) seac() {
 		in.err = true
 		return
 	}
+	in.run.offX, in.run.offY = dx, dy
 	ab, ok := in.run.bounds(accent, true)
+	in.run.offX, in.run.offY = 0, 0
 	if in.run.draw {
 		ab.shift(dx, dy)
 		in.bounds.include(ab)

@@ -79,6 +79,35 @@ func TestACharstringThatNestsPastTheDepthIsRefused(t *testing.T) {
 	}
 }
 
+// TestASeacTenSubroutinesDeepIsFound is the limit itself: ten subroutines
+// may be running at once and an eleventh may not, as Type 2 states it and
+// HarfBuzz reads it. The walk counted the glyph's own charstring as one of the
+// ten, so a seac exactly ten deep went unfound — and the subset then dropped
+// the two glyphs the accented letter is drawn from.
+func TestASeacTenSubroutinesDeepIsFound(t *testing.T) {
+	const bchar, achar = 65, 66
+	chain := func(n int) [][]byte {
+		local := make([][]byte, n)
+		for i := range local {
+			if i == n-1 {
+				local[i] = csSeac(bchar, achar)
+				continue
+			}
+			local[i] = append(callSubr(i+1), csReturn)
+		}
+		return local
+	}
+	code := append(callSubr(0), csReturn)
+	if b, a, ok := cffSeac(code, chain(maxCharstringDepth), nil, fullBudget()); !ok || b != bchar || a != achar {
+		t.Errorf("a seac ten subroutines deep gave %d, %d, %v; want %d, %d, true",
+			b, a, ok, bchar, achar)
+	}
+	if b, a, ok := cffSeac(code, chain(maxCharstringDepth+1), nil, fullBudget()); ok {
+		t.Errorf("a seac eleven subroutines deep was followed to %d and %d; "+
+			"the eleventh call is past the limit", b, a)
+	}
+}
+
 // TestACharstringThatReturnsAndCallsAgainIsBounded is the other half, and the
 // half the depth cannot see.
 //

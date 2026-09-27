@@ -84,6 +84,7 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `vertical_fixture.py`, `fonts/Vertical*.ttf` | the three faces that oracle needs and no foundry made |
 | `cffink.py`, `cffink.expected.txt` | the ink of CFF glyphs — see below |
 | `cffink_fixture.py`, `fonts/CFFInk.otf` | the face that oracle needs and no foundry made |
+| `cffsubrs.py`, `cffsubrs.expected.txt` | which subroutines of a name-keyed CFF a subset keeps, asked of fontTools — see below |
 | `verticalinstance.py`, `verticalinstance.expected.txt` | a variable face set upright off its default, and a kern table's vertical subtables — see below |
 | `verticalinstance_fixture.py`, `fonts/VerticalVariable*.ttf`, `fonts/VerticalKern*.ttf` | the faces that oracle needs and no foundry made |
 | `instancevaried.py`, `instancevaried.expected.txt` | a variable face's font-wide metrics and its GPOS devices off its default — see below |
@@ -189,6 +190,24 @@ the reader was written, and every one agrees; the file holds a sample so that
 it stays small.
 
 `make hbcffink` regenerates it.
+
+## The subroutines a subset keeps
+
+A subset carries only the subroutines its glyphs reach, and reaching one can
+take a chain of calls through others, each named by a number pushed in front of
+it. `cffsubrs.py` runs fontTools' subsetter — keeping subroutines rather than
+inlining them — over sets of glyphs of three name-keyed faces, `fonts/CFFInk.otf`
+and the static Source Sans 3 and Source Serif 4 (`make cff-fonts`), and writes
+which of each face's original global and local subroutines survive each set.
+`shape/cffsubrs_test.go` holds the subsetter to that, subroutine for
+subroutine, and holds every kept glyph of every subset to the outline it drew
+before, point for point.
+
+It is fontTools rather than HarfBuzz because the question is a subsetter's, and
+fontTools' subsetter is the one that keeps subroutines. The file records the
+fontTools release as well as HarfBuzz's, and is held to the pin like the rest.
+
+`make cffsubrs` regenerates it.
 
 ## Upright text away from the default instance
 

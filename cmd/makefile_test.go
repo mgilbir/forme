@@ -135,6 +135,7 @@ func TestEveryFetchStampMovesWithWhatItFetches(t *testing.T) {
 			"NOTO_LICENSE", "UNIFONT_VER", "UNIFONT_SHA256", "UNIFONT_UPPER_SHA256",
 			"IPAFONT_URL", "IPAFONT_SHA256"},
 		"CJK_STAMP": {"NOTO_CJK_COMMIT", "CJK_FACES"},
+		"CFF_STAMP": {"SOURCE_SANS_COMMIT", "SOURCE_SERIF_COMMIT", "NOTO_CJK_COMMIT", "CFF_FILES"},
 		"WPT_STAMP": {"WPT_COMMIT", "WPT_DIRS"},
 	}
 	stamps := map[string]string{}

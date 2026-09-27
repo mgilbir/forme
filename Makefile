@@ -1,4 +1,4 @@
-.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink hbcolrink hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink cffsubrs hbcolrink hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -50,6 +50,7 @@ CORPUS_ENV = \
 	WPT_TESTS="$(abspath $(WPT_DIR))" \
 	NOTO_FONTS="$(abspath $(NOTO_DIR))" \
 	NOTO_CJK="$(abspath $(CJK_DIR))" \
+	CFF_FONTS="$(abspath $(CFF_DIR))" \
 	CSS_PARSING_TESTS="$(abspath $(CSS_TESTS_DIR))" \
 	UNICODE_BIDI_TESTS="$(abspath $(BIDI_DIR))" \
 	UNICODE_GRAPHEME_TESTS="$(abspath $(GRAPHEME_DIR))" \
@@ -59,7 +60,7 @@ CORPUS_ENV = \
 # The inputs of every generated table are corpora too: cmd/regenerate_test.go
 # regenerates each table from them and compares, and with TABLE_INPUTS=required
 # above, a table whose inputs are not here is a failure rather than a skip.
-CORPORA = wpt noto-fonts notocjk ucd css-tests bidi-tests grapheme-tests \
+CORPORA = wpt noto-fonts notocjk cff-fonts ucd css-tests bidi-tests grapheme-tests \
 	normalization-tests $(HTML_ENTITIES) $(TABLE_SOURCES) notice-sources
 
 test-corpora:
@@ -185,7 +186,7 @@ hbenv:
 # indiccategories.expected.txt — are read from a source checkout of the same
 # release: HarfBuzz's own generators, and its own source; see
 # usecategories.py, usescripts.py and indiccategories.py.
-hboracles: hbshaping hbvertical hbcffink hbcolrink hbverticalinstance hbinstancevaried hblanguages varinstance
+hboracles: hbshaping hbvertical hbcffink cffsubrs hbcolrink hbverticalinstance hbinstancevaried hblanguages varinstance
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
@@ -253,6 +254,15 @@ hbcffink:
 		NotoSansTC-Regular.otf=$(CJK_DIR)/NotoSansTC-Regular.otf \
 		NotoSansHK-Regular.otf=$(CJK_DIR)/NotoSansHK-Regular.otf \
 		NotoSerifJP-Regular.otf=$(CJK_DIR)/NotoSerifJP-Regular.otf
+
+# Which subroutines of a name-keyed CFF a subset keeps, asked of fontTools'
+# subsetter: the CFFInk.otf fixture and the static Source fonts, so this needs
+# `make cff-fonts` first. See cffsubrs.py.
+cffsubrs:
+	$(PYTHON) $(HARFBUZZ_DIR)/cffsubrs.py $(HARFBUZZ_DIR)/cffsubrs.expected.txt \
+		CFFInk.otf=$(HARFBUZZ_DIR)/fonts/CFFInk.otf \
+		SourceSans3-Regular.otf=$(CFF_DIR)/SourceSans3-Regular.otf \
+		SourceSerif4-Regular.otf=$(CFF_DIR)/SourceSerif4-Regular.otf
 
 # The ink of colour glyphs, painted from COLR or read from a CBDT bitmap's
 # metrics: every glyph of two faces built here for each thing painting can do
@@ -827,6 +837,63 @@ $(CJK_STAMP):
 	done
 	@echo "$$(ls $(CJK_DIR)/*.otf | wc -l | tr -d ' ') CJK faces in $(CJK_DIR)"
 	touch $@
+
+# Fonts whose outlines are CFF that neither library above has: CFF2 variable
+# fonts, and static CFF fonts that are not CID-keyed.
+#
+# The OFL library is TrueType throughout and every face in the CJK set is a
+# CID-keyed CFF, so nothing fetched here had a CFF2 table — a variable font
+# whose charstrings blend their own variations — or a name-keyed CFF with
+# subroutines worth the name: Unifont and the Noto CJK faces are CID-keyed, and
+# the one name-keyed program in the tree is a fixture built to carry one of
+# everything. These are real fonts, from their publishers:
+#
+#   - Source Sans 3 and Source Serif 4, Adobe's own, each as the variable CFF2
+#     font and as a static Regular. The variable Serif has two axes, an avar,
+#     an MVAR and six Font DICTs; the Sans has one axis, two variation-data
+#     groups, and 1,686 local subroutines. The static ones are name-keyed CFF
+#     carrying 738 and 629 global subroutines and 648 and 543 local ones.
+#   - Noto Sans JP's variable font, from noto-cjk at the commit the CJK faces
+#     above are taken at: a CFF2 of 17,936 glyphs in eighteen Font DICTs, with
+#     a VORG and a VVAR.
+#
+# Each is held to its SHA-256, and each publisher's licence is fetched beside
+# its fonts. All five are under the SIL Open Font License 1.1, and Adobe's
+# reserve the font name "Source"; none of them is redistributed, only read by
+# the tests.
+#
+#	<name here>=<sha256>=<URL>
+SOURCE_SANS_COMMIT := 87b37a2daaed80fcb8e8ccb0085c4d72ddade12e
+SOURCE_SERIF_COMMIT := 80d3f8894c09c937bebfa9011247d2e1c79fd6f4
+SOURCE_SANS_URL := https://raw.githubusercontent.com/adobe-fonts/source-sans/$(SOURCE_SANS_COMMIT)
+SOURCE_SERIF_URL := https://raw.githubusercontent.com/adobe-fonts/source-serif/$(SOURCE_SERIF_COMMIT)
+CFF_DIR := testdata/cff-fonts
+CFF_FILES := \
+	SourceSans3-Regular.otf=08df266400933d3178d081a45f94a08814c3e55b4b7dd2e0ff69cb1329f13ab6=$(SOURCE_SANS_URL)/OTF/SourceSans3-Regular.otf \
+	SourceSans3VF-Upright.otf=3d0dfd6a3a644ab3d462a737923ffac41fb0ae007ce9ba83c24e6bfa76aa56c7=$(SOURCE_SANS_URL)/VF/SourceSans3VF-Upright.otf \
+	SourceSans-LICENSE.md=56af9b9c6715597e458284a474dc118a50a4150e9d547c70f7b4a33c3e6a9328=$(SOURCE_SANS_URL)/LICENSE.md \
+	SourceSerif4-Regular.otf=edf160d0d584deee8a3bb2c3371b2a7624ca63580fbe02c57c1f4c91e84d8787=$(SOURCE_SERIF_URL)/OTF/SourceSerif4-Regular.otf \
+	SourceSerif4Variable-Roman.otf=867b73c6a954a4a64616906d179f94572a748790a1d022ebeeff07f56ea0221a=$(SOURCE_SERIF_URL)/VAR/SourceSerif4Variable-Roman.otf \
+	SourceSerif-LICENSE.md=c21d7293d87b6d7ab1d0229a2f55b77f33a7613a6a4e66f6693d68d7d8d09464=$(SOURCE_SERIF_URL)/LICENSE.md \
+	NotoSansJP-VF.otf=85e5ef353081175fb9f764f037c550dd4b5ad913cb030c0de98a5d4d4018014b=$(NOTO_CJK_URL)/Sans/Variable/OTF/Subset/NotoSansJP-VF.otf \
+	NotoSansCJK-LICENSE=6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2=$(NOTO_CJK_URL)/Sans/LICENSE
+CFF_STAMP := $(call stamp,$(CFF_DIR),$(CFF_FILES))
+
+.PHONY: cff-fonts clean-cff-fonts
+
+cff-fonts: $(CFF_STAMP)
+
+$(CFF_STAMP):
+	mkdir -p $(CFF_DIR)
+	for e in $(foreach f,$(CFF_FILES),'$(f)'); do \
+	  name=$${e%%=*}; rest=$${e#*=}; sum=$${rest%%=*}; url=$${rest#*=}; \
+	  $(call pinned,$(CFF_DIR)/$$name,$$url,$$sum) || exit 1; \
+	done
+	for f in $(CFF_DIR)/*.otf; do $(call sfnt,$$f); done
+	touch $@
+
+clean-cff-fonts:
+	rm -rf $(CFF_DIR)
 
 fontsweep:
 	go run ./cmd/fontsweep $(GF_DIR)/ofl $(CJK_DIR)
@@ -1443,11 +1510,11 @@ $(NOTO_STAMP):
 # never looked at again.
 verify-fonts:
 	for f in $(NOTO_DIR)/*.ttf $(NOTO_DIR)/*.otf $(WPT_DIR)/fonts/*.ttf \
-	         $(WPT_DIR)/fonts/*.otf $(WPT_DIR)/fonts/*.woff; do \
+	         $(WPT_DIR)/fonts/*.otf $(WPT_DIR)/fonts/*.woff $(CFF_DIR)/*.otf; do \
 	  [ -e "$$f" ] || continue; \
 	  $(call sfnt,$$f); \
 	done
-	@echo "every font in $(NOTO_DIR) and $(WPT_DIR)/fonts is one"
+	@echo "every font in $(NOTO_DIR), $(WPT_DIR)/fonts and $(CFF_DIR) is one"
 
 clean-noto-fonts:
 	rm -rf $(NOTO_DIR)

@@ -110,6 +110,10 @@ func writeFDSelect(fds []int) []byte {
 
 // # Dropping the subroutines only dropped glyphs used
 //
+// This part is not only the CID-keyed font's: a name-keyed subset keeps its
+// glyph numbering and still loses the subroutines no kept glyph reaches, by
+// the same walk (see subsetCFF).
+//
 // A subroutine is named in a charstring by a number pushed just before the call
 // — its index less a bias that depends on how many the INDEX holds — so taking
 // subroutines out of an INDEX renumbers the rest, changes the bias, and means
@@ -296,7 +300,11 @@ func (p *subrPruning) run(body csBody, code []byte, region, depth, stems, nested
 		}
 		switch v {
 		case 10, 29: // callsubr, callgsubr
-			if len(ops) == 0 || nested+1 >= maxCharstringDepth {
+			// nested is how many subroutines are running already: the tenth
+			// may be called and the eleventh may not, which is the limit
+			// Type 2 states and the one HarfBuzz keeps. This refused the tenth,
+			// and a glyph nesting exactly that deep kept every subroutine.
+			if len(ops) == 0 || nested >= maxCharstringDepth {
 				return 0, 0, false, errKeepSubrs
 			}
 			top := ops[len(ops)-1]
