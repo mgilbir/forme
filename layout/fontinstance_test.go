@@ -528,3 +528,67 @@ func TestAParentsFaceIsNotCutForItsChildsSize(t *testing.T) {
 		t.Errorf("%d instances were cut, want the one at 900 an ex is measured in", in.count)
 	}
 }
+
+// TestABackendEmbedsTheInstance is what a backend that keys its font resources
+// by DrawText.Face, and embeds a subset of each, ends up writing: the bold
+// run's face is its own font, and the program it subsets to is the
+// instance's, named as the instance and with the instance's advances, which
+// are not the default's. The regular run's face is a different font. Nothing
+// on the display list says "instance"; the face is the instance.
+func TestABackendEmbedsTheInstance(t *testing.T) {
+	root, _, _ := variedDoc(t, `<p id="p">AVATAR <b>AVATAR</b></p>`)
+	var regular, bold *shape.Face
+	var boldGlyphs []shape.Glyph
+	for _, op := range Paint(root) {
+		d, ok := op.(DrawText)
+		if !ok || !strings.Contains(ShapedText(d), "AVATAR") {
+			continue
+		}
+		switch {
+		case regular == nil:
+			regular = d.Face
+		case bold == nil && d.Face != regular:
+			bold = d.Face
+			boldGlyphs, _ = ShapedGlyphs(d)
+		}
+	}
+	if regular == nil || bold == nil {
+		t.Fatalf("the regular and the bold runs were not drawn in two faces (%v, %v)", regular, bold)
+	}
+	want, err := shape.LoadInstance(realFont(), map[string]float64{"wght": 700})
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, kept, err := bold.SubsetGlyphs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	embedded, err := shape.Load(program)
+	if err != nil {
+		t.Fatalf("the bold face's subset does not load: %v", err)
+	}
+	if embedded.IsVariable() || embedded.Name() != want.Name() {
+		t.Errorf("the embedded program is %q (variable %v), want the instance %q",
+			embedded.Name(), embedded.IsVariable(), want.Name())
+	}
+	keptSet := map[int]bool{}
+	for _, g := range kept {
+		keptSet[g] = true
+	}
+	differs := false
+	for _, g := range boldGlyphs {
+		if !keptSet[g.GID] {
+			t.Errorf("glyph %d is drawn in the bold run and not in its subset", g.GID)
+			continue
+		}
+		got, w := embedded.GlyphAdvance(g.GID), want.GlyphAdvance(g.GID)
+		if got != w || bold.GlyphAdvance(g.GID) != w {
+			t.Errorf("glyph %d advances %v in the embedded program and %v in the face drawn, want the instance's %v",
+				g.GID, got, bold.GlyphAdvance(g.GID), w)
+		}
+		differs = differs || w != regular.GlyphAdvance(g.GID)
+	}
+	if !differs {
+		t.Error("no glyph of the bold run advances differently from the regular one, so this test tells nothing apart")
+	}
+}
