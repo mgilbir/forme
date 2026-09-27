@@ -513,3 +513,18 @@ func TestACFF2FaceIsReportedAsCFF2(t *testing.T) {
 		t.Errorf("the text was not set in the next family, serif, but in %v", f)
 	}
 }
+
+// TestAParentsFaceIsNotCutForItsChildsSize: an element that sets a font-size
+// asks for its parent's x-height only when the size is in ex. A weight nothing
+// is set in is not an instance, and does not spend the document's budget.
+func TestAParentsFaceIsNotCutForItsChildsSize(t *testing.T) {
+	_, _, set := variedDoc(t, `<div style="font-weight: 900"><p id="p" style="font-size: 20px; font-weight: 400">x</p></div>`)
+	if in := instancerOf(set); in.count != 0 {
+		t.Errorf("%d instances were cut for a document whose text is all at the default weight", in.count)
+	}
+	// The same size in ex asks, and gets the 900 instance's x-height.
+	_, _, set = variedDoc(t, `<div style="font-weight: 900"><p id="p" style="font-size: 2ex; font-weight: 400">x</p></div>`)
+	if in := instancerOf(set); in.count != 1 {
+		t.Errorf("%d instances were cut, want the one at 900 an ex is measured in", in.count)
+	}
+}

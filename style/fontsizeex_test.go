@@ -119,3 +119,30 @@ func TestAnElementThatOnlyInheritsIsNotResolvedAgain(t *testing.T) {
 			"only inherited a number", child, grand)
 	}
 }
+
+// TestOnlyAnExSizeAsksForTheFace: the x-height is asked for where a font-size
+// is written in ex — inside a calc() too, and in any case — and nowhere else.
+// Asking is not free for a caller whose Metrics chooses a face: layout's sets a
+// variable face at the parent's weight to answer, which cuts an instance.
+func TestOnlyAnExSizeAsksForTheFace(t *testing.T) {
+	for _, tc := range []struct {
+		sheet string
+		asked bool
+		want  float64
+	}{
+		{`#parent { font-size: 20px } #child { font-size: 2em }`, false, 40},
+		{`#parent { font-size: 20px } #child { font-size: 30px }`, false, 30},
+		{`#parent { font-size: 20px } #child { font-size: larger }`, false, 24},
+		{`#parent { font-size: 20px } #child { font-size: 2EX }`, true, 32},
+		{`#parent { font-size: 20px } #child { font-size: calc(1em + 1ex) }`, true, 36},
+	} {
+		m := &fakeMetrics{fraction: 0.8, known: true}
+		got := sizeOf(t, m, tc.sheet, "#child")
+		if asked := len(m.families) > 0; asked != tc.asked {
+			t.Errorf("%s: the x-height was asked %d times, want asked %v", tc.sheet, len(m.families), tc.asked)
+		}
+		if got != tc.want {
+			t.Errorf("%s: the child's font-size is %gpx, want %g", tc.sheet, got, tc.want)
+		}
+	}
+}
