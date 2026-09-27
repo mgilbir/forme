@@ -655,6 +655,9 @@ func trimRunSpace(v DrawText) DrawText {
 	}
 	if lead := v.Text[:strings.Index(v.Text, trimmed)]; lead != "" {
 		w, _ := style.FromPx(v.Face.Measure(lead, v.Size.Px()))
+		if v.WidthScale > 0 {
+			w = w.Mul(v.WidthScale)
+		}
 		if v.Upright {
 			// What the run was placed with: the face's vertical advances, or
 			// one em a character where it states none. See DrawText.Upright.
@@ -1030,13 +1033,20 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 	// a pen that added the spacing after each glyph would move the marks off
 	// the letter they are drawn on. See spacingAfterGlyph.
 	spaceAfter := spacingAfterGlyph(v, text, glyphs)
+	// A run squeezed across (DrawText.WidthScale) has its advances and offsets
+	// along it squeezed with it, and its glyphs are other shapes than the
+	// face's: the mark says by how much.
+	squeeze, squeezed := 1.0, ""
+	if v.WidthScale > 0 {
+		squeeze, squeezed = v.WidthScale, fmt.Sprintf(" squeezed %g", v.WidthScale)
+	}
 	for i, g := range glyphs {
-		adv, _ := style.FromPx(g.XAdvance * v.Size.Px() / 1000)
+		adv, _ := style.FromPx(g.XAdvance * squeeze * v.Size.Px() / 1000)
 		if v.Upright {
 			adv, _ = style.FromPx(-g.YAdvance * v.Size.Px() / 1000)
 		}
 		if !blankCluster(text, g.Cluster) {
-			off, _ := style.FromPx(g.XOffset * v.Size.Px() / 1000)
+			off, _ := style.FromPx(g.XOffset * squeeze * v.Size.Px() / 1000)
 			at := Point{X: along.Add(off), Y: v.At.Y}
 			if v.Sideways {
 				at = Point{X: v.At.X, Y: along.Add(runStep(v, off))}
@@ -1044,7 +1054,7 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 			out = append(out, textMark{
 				what: fmt.Sprintf("%s glyph %d", what, g.GID),
 				x:    at.X, y: at.Y,
-				shape:  fmt.Sprintf("%s glyph %d", shape, g.GID),
+				shape:  fmt.Sprintf("%s glyph %d%s", shape, g.GID, squeezed),
 				opaque: opaque,
 			})
 		}
@@ -1416,6 +1426,9 @@ func joinRuns(runs []DrawText) [][]DrawText {
 		// share a column and advance towards each other, so joining them would
 		// splice a word out of two that are upside down to one another.
 		sideways, anticlockwise, upright bool
+		// And two runs squeezed by different amounts are two different sets
+		// of shapes. See DrawText.WidthScale.
+		widthScale float64
 		// Two runs cut by different clips do not put the same ink down even
 		// where they abut, so they are not joined. Clip is comparable, which is
 		// what lets it sit in a map key at all.
@@ -1448,7 +1461,7 @@ func joinRuns(runs []DrawText) [][]DrawText {
 			continue
 		}
 		k := key{runAcross(v), v.Size, v.CharSpacing, v.Face, v.Color, v.Sideways,
-			v.Anticlockwise, v.Upright, v.Clip}
+			v.Anticlockwise, v.Upright, v.WidthScale, v.Clip}
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}
@@ -1546,6 +1559,10 @@ func runAdvance(v DrawText) style.Unit {
 		return along.Add(v.CharSpacing.Mul(float64(spacedUnits(text))))
 	}
 	w, _ := style.FromPx(v.Face.Measure(text, v.Size.Px()))
+	if v.WidthScale > 0 {
+		// Squeezed across, as a backend draws it. See DrawText.WidthScale.
+		w = w.Mul(v.WidthScale)
+	}
 	// Units and not runes: §8.2's spacing goes after each typographic character
 	// unit, which is a grapheme cluster. See paragraph.SpacedUnits.
 	return w.Add(v.CharSpacing.Mul(float64(spacedUnits(text))))

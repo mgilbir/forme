@@ -927,6 +927,11 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						emphasis:     l.emphasisOf(heldBox(item.Box), heldBox(item.Box).FontSize.Mul(lineScale)),
 						drawShift:    l.drawShiftOf(item),
 					})
+					if item.Combine {
+						run := &line.Runs[len(line.Runs)-1]
+						run.combined = true
+						run.combineScale, run.combineWidth = l.combineFit(item)
+					}
 				}
 				// Which *side* it hangs off, which is not a second way of saying how
 				// much. §4.1.2 hangs the white space past the line's end, and the

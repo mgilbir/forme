@@ -265,4 +265,11 @@ type TextRun struct {
 	// It moves the glyphs and nothing ruled across them: a decoration is
 	// measured from the declaring box's baseline, which is the one Shift says.
 	drawShift style.Unit
+	// combined marks a text-combine-upright composition, drawn across the page
+	// in the em square the line gave it; combineScale is the factor its text is
+	// squeezed by to fit the em (one where it fits), and combineWidth how wide
+	// it is drawn once squeezed. See layout/combine.go.
+	combined     bool
+	combineScale float64
+	combineWidth style.Unit
 }

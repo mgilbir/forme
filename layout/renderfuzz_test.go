@@ -181,11 +181,11 @@ func writeRenderKey(b *strings.Builder, ops []Op) {
 		case DrawText:
 			fmt.Fprintf(b, "text %q at %v,%v %s %v %v rtl=%v sideways=%v "+
 				"anticlockwise=%v upright=%v pre=%q post=%q merge=%q,%q "+
-				"kerns=%v spacing=%v features=%+v clip=%v\n",
+				"kerns=%v spacing=%v widthscale=%v features=%+v clip=%v\n",
 				v.Text, v.At.X, v.At.Y, faceName(v.Face), v.Size, v.Color,
 				v.RTL, v.Sideways, v.Anticlockwise, v.Upright,
 				v.PreContext, v.PostContext, v.MergePre, v.MergePost,
-				v.ContextKerns, v.CharSpacing, v.Features, v.Clip)
+				v.ContextKerns, v.CharSpacing, v.WidthScale, v.Features, v.Clip)
 		case DrawImage:
 			fmt.Fprintf(b, "image %v %q\n", v.Rect, v.Key)
 		case TileImage:

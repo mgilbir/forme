@@ -1250,6 +1250,15 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			AfterBase: lastBaseOr(p.Text, state.AfterBase),
 		}
 	}
+	if l.combinesText(b) {
+		// The whole box's text is one text-combine-upright composition. It is
+		// made out of the items rather than instead of them; see combineItems.
+		// A composition is like an inline-block for the white space after it:
+		// its own trailing space is gone, and a space in the next box is the
+		// first of a run rather than one collapsing into it.
+		out = l.combineItems(b, out)
+		state.AfterCollapsibleSpace = false
+	}
 	return out, inlineState{
 		BreakOpportunity:      trailing.Offered,
 		AfterCollapsibleSpace: state.AfterCollapsibleSpace,
@@ -1843,6 +1852,23 @@ func (l *layouter) nextInContext(b *Box) *Box {
 // nextSiblingOf is the box written after b inside its parent.
 func (l *layouter) nextSiblingOf(b *Box) *Box {
 	kids := b.Parent.Children
+	if i, ok := l.indexInParent(b); ok && i+1 < len(kids) {
+		return kids[i+1]
+	}
+	return nil
+}
+
+// prevSiblingOf is the box written before b inside its parent.
+func (l *layouter) prevSiblingOf(b *Box) *Box {
+	if i, ok := l.indexInParent(b); ok && i > 0 {
+		return b.Parent.Children[i-1]
+	}
+	return nil
+}
+
+// indexInParent is where b is among its parent's children.
+func (l *layouter) indexInParent(b *Box) (int, bool) {
+	kids := b.Parent.Children
 	i, ok := l.childIndex[b]
 	if !ok || i >= len(kids) || kids[i] != b {
 		// Fill the whole parent rather than this one child: the walk is about to
@@ -1856,13 +1882,10 @@ func (l *layouter) nextSiblingOf(b *Box) *Box {
 		}
 		i, ok = l.childIndex[b]
 		if !ok {
-			return nil
+			return 0, false
 		}
 	}
-	if i+1 < len(kids) {
-		return kids[i+1]
-	}
-	return nil
+	return i, true
 }
 
 // isForcedBreak reports whether a box ends the line wherever it falls.

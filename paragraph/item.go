@@ -409,6 +409,23 @@ type Item struct {
 	// characters, one em each. A line filled with one and drawn with another
 	// would be filled to a width the page does not have.
 	Upright bool
+	// Combine says the run is a text-combine-upright composition (CSS Writing
+	// Modes §9.1): its text set across a vertical line, squeezed into one em,
+	// and standing in the line as one upright character. It takes one em
+	// along the line whatever its text measures — §9.1.2's "the effective size
+	// of the composition is assumed to be 1em square" — and it is one unit for
+	// every other purpose, letter-spacing and justification included: "the
+	// resulting composition is treated as a single glyph representing the
+	// Object Replacement Character U+FFFC". It is never cut: a line may begin
+	// before it and after it and not inside it, so an item carrying it has no
+	// last-resort break (BreakWord), and the layout rules that cut a character
+	// off an item's end — hanging punctuation, text-spacing-trim — do not ask
+	// one.
+	//
+	// It goes with Upright, which a composition also is: it stands on the line
+	// the way an ideograph does, and every rule that asks whether a run stands
+	// up gets the answer a single upright character would give.
+	Combine bool
 	// HyphenLastResort says a line may be sent back to the opportunity in front
 	// of this item only when there is no other — because the opportunity is one
 	// a soft hyphen or a hyphenation dictionary made, and "word-break:
@@ -1042,7 +1059,8 @@ func (it Item) shaping() Shaping {
 	return Shaping{
 		Before: it.PreContext, After: it.PostContext,
 		MergeBefore: it.MergePre, MergeAfter: it.MergePost, MergeGroup: it.MergeGroup,
-		ContextKerns: it.ContextKerns, Upright: it.Upright, Off: it.Off,
+		ContextKerns: it.ContextKerns, Upright: it.Upright, Combine: it.Combine,
+		Off: it.Off,
 	}
 }
 

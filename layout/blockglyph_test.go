@@ -259,17 +259,23 @@ func (b *blockFont) fills(v DrawText, measure func(s string, size float64) float
 	after := spacingAfter(v.Text)
 
 	scale := v.Size.Px() / float64(b.unitsPerEm)
+	// A run squeezed across (DrawText.WidthScale) is its rectangles squeezed
+	// about its origin: each one narrower, and each advance with it.
+	squeeze := 1.0
+	if v.WidthScale > 0 {
+		squeeze = v.WidthScale
+	}
 	pen := v.At.X
 	var out []Op
 	for _, i := range order {
 		br := rects[i]
-		step, ok := style.FromPx(adv[i])
+		step, ok := style.FromPx(adv[i] * squeeze)
 		if !ok {
 			return nil, false
 		}
 		if !br.blank {
-			x0, ok0 := style.FromPx(float64(br.x0) * scale)
-			x1, ok1 := style.FromPx(float64(br.x1) * scale)
+			x0, ok0 := style.FromPx(float64(br.x0) * scale * squeeze)
+			x1, ok1 := style.FromPx(float64(br.x1) * scale * squeeze)
 			y0, ok2 := style.FromPx(float64(br.y0) * scale)
 			y1, ok3 := style.FromPx(float64(br.y1) * scale)
 			if !ok0 || !ok1 || !ok2 || !ok3 {

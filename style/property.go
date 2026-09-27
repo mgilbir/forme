@@ -371,14 +371,19 @@ var properties = map[string]property{
 	// lines stack, which way each character faces on one, and whether a short run
 	// is set across the line. Two of them inherit — a rule on the root turns the
 	// whole document, which is how every document that uses them is written — and
-	// text-combine-upright does not, because it is about one run and not about a
-	// paragraph.
+	// so does text-combine-upright, whose §9.1 table says "Inherited: yes". It
+	// was registered as not inheriting, on the reading that a composition is
+	// about one run; but §9.1.1's run rules are written *because* it inherits —
+	// "<tcy>12<span>34</span></tcy>" combines nothing, the 34 inheriting "all"
+	// and making one sequence with the 12 — and a span inside a composing
+	// element was being set as though nothing had been asked of it.
 	//
-	// Registering them is not a claim that all their values are laid out. Only
-	// "vertical-rl" is, and only for boxes turnable() accepts; everything else is
-	// reported per box rather than per stylesheet, because whether the page is
-	// wrong is a question about the box and not about the declaration. See
-	// layout/writingmode.go for the whole of that argument.
+	// Registering them is not a claim that all their values are laid out, and
+	// not all of them are: a box the turn will not take, and
+	// "text-combine-upright: digits", are reported per box rather than per
+	// stylesheet, because whether the page is wrong is a question about the box
+	// and not about the declaration. See layout/writingmode.go for the whole of
+	// that argument.
 	// CSS Multi-column Layout 1 §3 and §4. None of them inherits: a multicol
 	// container's columns are its own, and a block inside one is not itself
 	// divided into columns because its parent was.
@@ -487,7 +492,7 @@ var properties = map[string]property{
 
 	"writing-mode":         {true, "horizontal-tb"},
 	"text-orientation":     {true, "mixed"},
-	"text-combine-upright": {false, "none"},
+	"text-combine-upright": {true, "none"},
 	"unicode-bidi":         {false, "normal"},
 
 	// Generated content. It does not inherit — a ::before on a parent must not

@@ -537,6 +537,10 @@ func (l *layouter) kindsUnder(b *Box) uint8 {
 func (l *layouter) textKinds(b *Box) uint8 {
 	facing, vertical := l.facingOf(b)
 	switch {
+	case vertical && l.combinesText(b):
+		// A text-combine-upright composition is one upright character, U+FFFC,
+		// which takes a mark, whatever its text is. See paintRun.
+		return kindUpright
 	case !vertical || facing == orientationSideways:
 		return kindSideways
 	case facing == orientationUpright:

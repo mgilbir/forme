@@ -521,8 +521,10 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) str
 	// text box's own is read where its runs are cut (uprightRun), so an
 	// upright span on a mixed line is a run that stands up and nothing more.
 	if combine := trimmedLower(b.Style.Get("text-combine-upright")); !mode.sideways() &&
-		combine != "" && combine != "none" {
-		return "\"text-combine-upright: " + combine + "\" asks for a run set across the line, which this engine does not do"
+		combine != "" && combine != "none" && combine != "all" {
+		// "all" is laid out: see layout/combine.go. "digits" is not, and the
+		// box is refused for it as every value was before.
+		return "\"text-combine-upright: " + combine + "\" asks for runs of digits set across the line, which this engine does not do"
 	}
 	for _, c := range b.Children {
 		if why := l.subtreeRefusesToTurn(root, mode, c); why != "" {
@@ -594,17 +596,27 @@ func trimmedLower(s string) string { return ascii.Lower(ascii.TrimCSSSpace(s)) }
 // along the line whatever was declared — §5.1's property has no effect in a
 // horizontal typographic mode.
 func (l *layouter) facingOf(b *Box) (textOrientation, bool) {
-	for at := b; at != nil; at = at.Parent {
-		mode, turned := l.turnedMode[at]
-		if !turned {
-			continue
-		}
-		if mode.sideways() {
-			return orientationSideways, true
-		}
-		return orientationOf(b), true
+	mode, turned := l.turnedModeOf(b)
+	switch {
+	case !turned:
+		return orientationMixed, false
+	case mode.sideways():
+		return orientationSideways, true
 	}
-	return orientationMixed, false
+	return orientationOf(b), true
+}
+
+// turnedModeOf is the writing mode a box is laid out in, when that is one of
+// the turned ones: the mode of the nearest box, this one or above it, that the
+// turn started at. It is insideTurn with the box itself counted, which is the
+// question about the box's own text rather than about its edges.
+func (l *layouter) turnedModeOf(b *Box) (writingMode, bool) {
+	for at := b; at != nil; at = at.Parent {
+		if mode, turned := l.turnedMode[at]; turned {
+			return mode, true
+		}
+	}
+	return horizontalTB, false
 }
 
 // uprightRun reports whether a run of a box's text is set upright, standing

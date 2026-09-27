@@ -223,3 +223,40 @@ func TestOnlyAMarkedCharacterAsksForItsKindOfLeading(t *testing.T) {
 		}
 	}
 }
+
+// TestACompositionTakesOneMark.
+//
+// A text-combine-upright composition is one character, U+FFFC, to its marks
+// (CSS Writing Modes §9.1.2; CSS Text Decoration 3 §3.1 marks a character, and
+// the composition is one): one mark, centred on its em along the line and set
+// beyond it as an upright character's, whatever its text. On the 50px line of
+// the first test, "o", a composition of "oo" and "o": the composition's square
+// is 10..30 along the line, so its mark's pen is 15, and it is 23.75 right of
+// the baseline at 67.5, 91.25, where the lying letters' marks are 26.25 right
+// of it at 93.75. Its text, three characters wide by their own letters, gets
+// none of its own.
+func TestACompositionTakesOneMark(t *testing.T) {
+	_, _, marks := verticalMarks(t, verticalFallbacksSet(t),
+		`<div id="d">o<span style="text-combine-upright: all">oo</span>o</div>`,
+		emphasisVerticalCSS+` #d { line-height: 50px }`)
+	if len(marks) != 3 {
+		t.Fatalf("drew %d marks, want 3: %+v", len(marks), marks)
+	}
+	markAt(t, "over the first o", marks[0], 93.75, 0)
+	markAt(t, "over the composition", marks[1], 91.25, 15)
+	markAt(t, "over the last o", marks[2], 93.75, 30)
+}
+
+// TestACompositionsLeadingIsAnUprightCharacters: a box holding only a
+// composition asks for the leading an upright character's marks need — on the
+// 25px line of TestTheLeadingForAnUprightRunsMarks, 27.5 over the baseline and
+// 5 under, a line 32.5 across — and not the 37.5 its letters would ask for
+// lying along the line.
+func TestACompositionsLeadingIsAnUprightCharacters(t *testing.T) {
+	root, _, _ := verticalMarks(t, verticalFallbacksSet(t),
+		`<div id="d"><span style="text-combine-upright: all">oo</span></div>`,
+		emphasisVerticalCSS+` #d { line-height: 25px }`)
+	if w := find(t, root, "d").Lines[0].Rect.W.Px(); w != 32.5 {
+		t.Errorf("the line is %g across, want 32.5", w)
+	}
+}

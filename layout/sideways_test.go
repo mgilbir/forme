@@ -253,18 +253,14 @@ func TestASidewaysModeIgnoresTheTwoPropertiesThatCannotApply(t *testing.T) {
 			"\"a\" lying along the line and \"b\" standing on it, so the case above "+
 			"proves nothing about sideways modes", runs)
 	}
-	// text-combine-upright is still refused there.
+	// text-combine-upright sets the span's letter across the page, as a
+	// composition: a run that is neither turned nor stood up, on a turned line.
 	runs = turnedRuns(t, `<div id="d">a<span style="text-combine-upright: all">b</span></div>`,
 		turnedCSS)
-	if len(runs) == 0 {
-		t.Fatal("text-combine-upright in a vertical box drew nothing")
-	}
-	for _, r := range runs {
-		if r.Sideways {
-			t.Error("\"text-combine-upright: all\" inside a vertical-rl box was turned " +
-				"anyway, so the case above proves nothing about sideways modes")
-			break
-		}
+	if len(runs) != 2 || !runs[0].Sideways || runs[1].Sideways || runs[1].Upright {
+		t.Errorf("\"text-combine-upright: all\" inside a vertical-rl box drew %+v, want "+
+			"\"a\" lying along the line and \"b\" set across the page, so the case "+
+			"above proves nothing about sideways modes", runs)
 	}
 }
 

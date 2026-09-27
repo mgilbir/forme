@@ -169,6 +169,16 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 	// MeasureShaped hands those straight back to the sum.
 	var w style.Unit
 	switch {
+	case how.Combine:
+		// A text-combine-upright composition is one em along the line, and one
+		// character for the spacing after it. What its text measures across
+		// the page decides only how much it is squeezed, and that is the
+		// painter's; see Item.Combine.
+		w = size.Add(SpacingAdvance(string(runeObject), sp))
+		if !merged {
+			br.measured[key] = w
+		}
+		return w
 	case how.Upright && face.StatesVerticalMetrics():
 		// A run set upright on a line of vertical text advances by its glyphs'
 		// vertical advances — the face's 'vmtx', as shaping with
@@ -668,6 +678,10 @@ type Shaping struct {
 	// advance is the face's vertical one, or one em per typographic character
 	// unit where the face states none. See Item.Upright.
 	Upright bool
+	// Combine says the run is a text-combine-upright composition, which
+	// measures one em along the line and one unit of letter-spacing whatever
+	// its text is. See Item.Combine.
+	Combine bool
 	// Off is what a document turned off: a font's own rules that a CSS property
 	// or a CSS Text rule has overruled. See shape.Features.
 	Off shape.Features

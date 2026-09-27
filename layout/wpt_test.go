@@ -1509,7 +1509,16 @@ const wptEnv = "WPT_TESTS"
 // is hung from the central baseline, CSS Writing Modes §4.2's dominant one on
 // a vertical line. See layout/writingmode.go. wpt.fyi: Chrome and Firefox
 // pass, Safari fails.
-const wptCleanPassBaseline = 5994
+//
+// **5994 to 5995, for text-combine-upright**.
+// text-autospace/text-autospace-vertical-combine-001 sets "国<span>XX</span>国"
+// in a vertical-rl box with the span at "text-combine-upright: all", and asks
+// for no §8.4.1 spacing either side of it. The box was refused, the property
+// being one this engine did not lay out. It is laid out now: the span's text is
+// one composition, an em along the line and one U+FFFC for every rule that
+// asks about a character, drawn across the page squeezed into its em square.
+// See layout/combine.go. wpt.fyi: Chrome and Firefox pass, Safari fails.
+const wptCleanPassBaseline = 5995
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)

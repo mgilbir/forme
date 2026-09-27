@@ -91,7 +91,10 @@ func (l *layouter) markClosingPunctuation(items []inlineItem, st spacingTrim) []
 func canTrimAsClosing(item inlineItem) bool {
 	return item.Text != "" && item.Face != nil && !item.Tab && !item.Forced &&
 		!item.Inset && item.AtomicBox == nil && item.Float == nil && item.Abs == nil &&
-		!item.HangStart && !item.HangEnd && !item.MayHangEnd
+		!item.HangStart && !item.HangEnd && !item.MayHangEnd &&
+		// A text-combine-upright composition is one glyph, U+FFFC, and not
+		// the bracket its text may end with. See combine.go.
+		!item.Combine
 }
 
 // trimWidthOf is what the face says the item's last character gives up, in

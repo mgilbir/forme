@@ -162,9 +162,9 @@ func TestABoxThisEngineCannotTurnIsReported(t *testing.T) {
 		{"a float with an automatic width",
 			`#d { writing-mode: vertical-rl; height: 100px; float: left }`,
 			`<div id="d">ab</div>`, "shrinking a box around its content"},
-		{"text-combine-upright", turnedCSS,
-			`<div id="d"><span style="text-combine-upright: all">12</span></div>`,
-			"text-combine-upright: all"},
+		{"text-combine-upright: digits", turnedCSS,
+			`<div id="d"><span style="text-combine-upright: digits 2">12</span></div>`,
+			"text-combine-upright: digits 2"},
 		{"a floated child", turnedCSS, `<div id="d"><p style="float: left">ab</p></div>`,
 			"floated or positioned"},
 		{"a positioned box", `#d { writing-mode: vertical-rl; width: 60px; height: 100px;

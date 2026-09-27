@@ -185,6 +185,21 @@ type DrawText struct {
 	// bunched at the left of a gap the right size.
 	CharSpacing style.Unit
 
+	// WidthScale squeezes the run across the direction its glyphs advance in:
+	// every glyph is drawn this many times its width, and every advance and
+	// offset along the run is scaled with it, about At — a PDF backend's Tz of
+	// a hundred times this. Zero is the run as the face draws it, which is
+	// every run but one.
+	//
+	// The one is a text-combine-upright composition (CSS Writing Modes §9.1)
+	// too wide for the em it has to fit: a horizontal run, neither Sideways
+	// nor Upright, standing in a vertical line, which §9.1.3 lets a UA
+	// compress "by scaling the text geometrically" where the face has no
+	// width variant that makes it fit. When set it is between nought and one.
+	// A backend that ignored it would draw the composition wider than its
+	// square, across the lines on either side. See layout/combine.go.
+	WidthScale float64
+
 	// Features is what the document turned off: a font's own rules that a CSS
 	// property or a CSS Text rule has overruled.
 	//
@@ -1632,6 +1647,11 @@ func textInkAt(v DrawText, above, below style.Unit) Rect {
 	var width style.Unit
 	if v.Face != nil {
 		w, _ := style.FromPx(v.Face.Measure(v.Text, v.Size.Px()))
+		if v.WidthScale > 0 {
+			// Squeezed across, as the backend is told to draw it. See
+			// DrawText.WidthScale.
+			w = w.Mul(v.WidthScale)
+		}
 		// The characters letter-spacing goes after, and not every rune: a run
 		// of zero-width formatting characters is not a run of typographic
 		// character units, and counting them makes a word's ink reach a
@@ -2502,6 +2522,14 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 		Color:         colour,
 		CharSpacing:   run.LetterSpacing,
 	}
+	if run.combined {
+		// A text-combine-upright composition is drawn across the page in its
+		// square, and not along the line; its decorations above are along the
+		// line, across the square, as the one glyph §9.1.2 says it is.
+		if v, ok := combinedText(run, at, turn, colour); ok {
+			text = v
+		}
+	}
 	// The emphasis marks, which CSS Text Decoration 3 §5.1 paints over the
 	// text and under the line-through. See emphasis.go.
 	marks := p.emphasisMarks(run, text, at, turn)
@@ -2535,8 +2563,23 @@ func (p *painter) emphasisMarks(run TextRun, text DrawText, at Point, turn runTu
 	if !ok {
 		colour = text.Color
 	}
+	if run.combined {
+		// A text-combine-upright composition is one character to its marks as
+		// to everything else but its own drawing — §9.1.2's single glyph
+		// representing U+FFFC — and it stands on the line in an em square hung
+		// from the central baseline, as an upright character does. So it takes
+		// one mark, centred on its em along the line and set beyond it as an
+		// upright run's. text is drawn across the page and says nothing of
+		// that.
+		spans := []unitSpan{{text: combinedUnit, lo: 0, hi: run.Size, have: true}}
+		return run.emphasis.marks(spans, at, true, colour, turn)
+	}
 	return run.emphasis.marks(unitSpans(text), at, run.Upright, colour, turn)
 }
+
+// combinedUnit is the character a text-combine-upright composition is for
+// every purpose but its drawing: CSS Writing Modes §9.1.2's U+FFFC.
+const combinedUnit = "\uFFFC"
 
 // decorationMarks is the lines ruled across one run, where they go and in what
 // colour; decorate paints them, and a text shadow shadows them.

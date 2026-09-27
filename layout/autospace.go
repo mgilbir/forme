@@ -233,6 +233,14 @@ func (l *layouter) autospaceBetween(a, b inlineItem, last, first rune) (style.Un
 		(b.Upright && !paragraph.IsAutospaceIdeograph(first)) {
 		return 0, false
 	}
+	// A text-combine-upright composition is neither: §9.1.2 treats it as "a
+	// single glyph representing the Object Replacement Character U+FFFC" for
+	// spacing, and that is no letter and no ideograph, whatever its text is.
+	// The same §8.4.1 exclusion names it by name, besides. The suite's
+	// text-autospace-vertical-combine-001 asks for no gap either side of one.
+	if a.Combine || b.Combine {
+		return 0, false
+	}
 	box := commonAncestor(heldBox(a.Box), heldBox(b.Box))
 	if box == nil {
 		return 0, false

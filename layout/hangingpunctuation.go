@@ -120,7 +120,7 @@ func (l *layouter) markStopsAndCommas(items []inlineItem, hp hangingPunctuation)
 func canHangAsStop(item inlineItem) bool {
 	return item.Text != "" && item.Face != nil && !item.Tab && !item.Forced &&
 		!item.Inset && item.AtomicBox == nil && item.Float == nil && item.Abs == nil &&
-		!item.HangStart && !item.HangEnd
+		!item.HangStart && !item.HangEnd && !item.Combine
 }
 
 // hangingFor is the property as it applies to the character that would hang,
@@ -175,7 +175,9 @@ func edgeRun(items []inlineItem, step int) (int, bool) {
 			// and its "last" counterpart are that row.
 			continue
 		case item.Text == "" || item.Face == nil || item.Tab || item.Forced ||
-			item.AtomicBox != nil:
+			item.AtomicBox != nil || item.Combine:
+			// A text-combine-upright composition is one glyph, U+FFFC, and not
+			// the punctuation its text may begin or end with. See combine.go.
 			return 0, false
 		}
 		return i, true

@@ -327,6 +327,11 @@ func (l *layouter) justifyBetweenCharacters(items []inlineItem, xs, widths []sty
 		if items[k].Face == nil || items[k].Text == "" {
 			return 0
 		}
+		if items[k].Combine {
+			// One glyph, U+FFFC, for justification as for everything but its
+			// own drawing. See paragraph.Item.Combine.
+			return 1
+		}
 		return paragraph.SpacedUnits(items[k].Text)
 	}
 	// §8.2's rule, which this method shares because it is the same notion:

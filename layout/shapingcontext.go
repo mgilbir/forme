@@ -570,6 +570,13 @@ func sameShaping(a, b inlineItem) bool {
 	if a.Upright != b.Upright {
 		return false
 	}
+	// And never across the edge of a text-combine-upright composition, which
+	// §9.1.2 bidi-isolates and composes "similar to the contents of an
+	// inline-block box": it has no neighbours to join or kern with, on either
+	// side, even an ideograph standing upright beside it. See combine.go.
+	if a.Combine || b.Combine {
+		return false
+	}
 	// Of those three, the face has no test: a planted defect dropping it leaves
 	// every one passing, because the only Arabic face in the checkout is one and
 	// two runs cannot be set in different ones. It is kept because a face is
@@ -627,7 +634,8 @@ func itemShaping(it *inlineItem) shaping {
 	return shaping{
 		Before: it.PreContext, After: it.PostContext,
 		MergeBefore: it.MergePre, MergeAfter: it.MergePost, MergeGroup: it.MergeGroup,
-		ContextKerns: it.ContextKerns, Upright: it.Upright, Off: it.Off,
+		ContextKerns: it.ContextKerns, Upright: it.Upright, Combine: it.Combine,
+		Off: it.Off,
 	}
 }
 
