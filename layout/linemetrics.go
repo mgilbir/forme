@@ -131,11 +131,20 @@ func (l *layouter) leadingInFace(b *Box, face *shape.Face) (above, below style.U
 }
 
 func (l *layouter) leadingInFaceAt(b *Box, face *shape.Face, size style.Unit) (above, below style.Unit) {
-	h := l.lineHeightInFaceAt(b, face, size)
-	above = l.baselineInFaceAt(b, face, h, size)
+	above, below = l.textLeadingInFaceAt(b, face, size)
 	// And far enough on one side to hold the box's emphasis marks, where the
 	// leading leaves them too little room. See withEmphasis.
-	return l.withEmphasis(b, size, above, h.Sub(above))
+	return l.withEmphasis(b, size, above, below)
+}
+
+// textLeadingInFaceAt is leadingInFaceAt without the emphasis marks: how far
+// the text's own half-leading and extents reach, which is what the marks'
+// leading is then measured against. See runLeading, which has to move a run's
+// extents before the marks are asked.
+func (l *layouter) textLeadingInFaceAt(b *Box, face *shape.Face, size style.Unit) (above, below style.Unit) {
+	h := l.lineHeightInFaceAt(b, face, size)
+	above = l.baselineInFaceAt(b, face, h, size)
+	return above, h.Sub(above)
 }
 
 // verticalAlignOf reads the vertical-align property of an inline-level box.

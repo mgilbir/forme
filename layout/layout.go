@@ -446,6 +446,9 @@ type layouter struct {
 	// emphases memoizes emphasisOf: what a box's emphasis marks are, at the
 	// size its text is set at. See emphasis.go.
 	emphases map[emphasisKey]*runEmphasis
+	// runKinds memoizes emphasisKinds: which kinds of run — upright, lying
+	// along the line — a box's text holds on a vertical line.
+	runKinds map[*Box]uint8
 
 	rec   *Recorder
 	avail Size

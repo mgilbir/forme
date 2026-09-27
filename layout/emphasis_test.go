@@ -763,10 +763,10 @@ func TestMarksAreLinearInTheText(t *testing.T) {
 		text := face
 		text.Text = strings.Repeat("ab, ", n)
 		text.CharSpacing = rpx(1)
-		if got := len(e.marks(text, red, runTurn{})); got != 2*n {
+		if got := len(e.marks(unitSpans(text), text.At, false, red, runTurn{})); got != 2*n {
 			t.Fatalf("%d marks over %d words, want %d", got, n, 2*n)
 		}
-		return func() { e.marks(text, red, runTurn{}) }
+		return func() { e.marks(unitSpans(text), text.At, false, red, runTurn{}) }
 	}
 	c := costtest.Time(t, "the marks of a run", mark(500), mark(2000))
 	if c.Ratio > 8 {

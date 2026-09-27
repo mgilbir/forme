@@ -2504,7 +2504,7 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 	}
 	// The emphasis marks, which CSS Text Decoration 3 §5.1 paints over the
 	// text and under the line-through. See emphasis.go.
-	marks := p.emphasisMarks(run, text, turn)
+	marks := p.emphasisMarks(run, text, at, turn)
 	if len(shadows) > 0 {
 		p.paintShadows(shadows, rectsOf(under), &text, nil, marks, rectsOf(over))
 	}
@@ -2522,7 +2522,12 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 
 // emphasisMarks is a run's emphasis marks in text-emphasis-color, which is the
 // text's colour where it says "currentcolor".
-func (p *painter) emphasisMarks(run TextRun, text DrawText, turn runTurn) []DrawText {
+//
+// at is the run's pen on its box's baseline, which the marks are measured
+// from; text's own pen may be across the line from it (TextRun.drawShift).
+// Along the line the two are one point, so text's units are where they are
+// from either.
+func (p *painter) emphasisMarks(run TextRun, text DrawText, at Point, turn runTurn) []DrawText {
 	if run.emphasis == nil || run.Width <= 0 {
 		return nil
 	}
@@ -2530,7 +2535,7 @@ func (p *painter) emphasisMarks(run TextRun, text DrawText, turn runTurn) []Draw
 	if !ok {
 		colour = text.Color
 	}
-	return run.emphasis.marks(text, colour, turn)
+	return run.emphasis.marks(unitSpans(text), at, run.Upright, colour, turn)
 }
 
 // decorationMarks is the lines ruled across one run, where they go and in what

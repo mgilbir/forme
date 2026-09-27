@@ -7,6 +7,7 @@ import (
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/internal/charprop"
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/segment"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
@@ -47,6 +48,23 @@ import (
 // an upright run, centred across the band the mark's line takes. The two
 // sideways modes are horizontal typographic modes: their marks are over or under
 // and lie along the line with its text.
+//
+// # Two kinds of run on one vertical line
+//
+// The text a mark sits against is not always one thing on a vertical line.
+// Under "text-orientation: mixed" a paragraph's ideographs stand upright and
+// its Latin lies along the line (layout/writingmode.go), and the two reach
+// across the line differently: a run lying along it reaches the element's
+// ascent over its alphabetic baseline and its descent under it, and an upright
+// one is hung from the central baseline and reaches half an em either side of
+// that (DrawText.Upright). So a mark is set against the glyphs of its own run
+// as they are drawn — reach says how far that is — and measured from the box's
+// alphabetic baseline, which every run of the box is laid out on. It is not
+// measured from the run's own pen: an upright run's pen is on the central
+// baseline, and a run the fallback stack set in another face has its pen on
+// its own alphabetic baseline, moved to align the two faces' central ones
+// (centralShift). Measured from the box's baseline, every mark lying beside a
+// run of one kind is on one line, whatever face each character is in.
 //
 // # The line's height
 //
@@ -117,8 +135,15 @@ type runEmphasis struct {
 	// baseline, and markAscent and markDescent the same of the marks' own
 	// line. The marks take the band markAscent+markDescent deep beyond the
 	// text's reach on their side.
+	//
+	// ascent and descent are the element's first available face's, which is
+	// what a run lying along the line reaches. A run standing upright on a
+	// vertical one reaches half of em either side of the central baseline,
+	// which is central below the alphabetic one (negative: above it). See
+	// reach.
 	ascent, descent         style.Unit
 	markAscent, markDescent style.Unit
+	em, central             style.Unit
 	// width is the mark's advance, for a mark lying along the line; along,
 	// above and below are its upright extent (see uprightExtent), for one
 	// standing on a vertical line.
@@ -128,6 +153,18 @@ type runEmphasis struct {
 
 // band is how deep the marks' line is.
 func (e *runEmphasis) band() style.Unit { return e.markAscent.Add(e.markDescent) }
+
+// reach is how far a run of the element's text reaches over and under its
+// alphabetic baseline: the element's ascent and descent for a run lying along
+// the line, and for one standing upright on a vertical line its em box hung
+// from the central baseline. The marks go beyond it on their side.
+func (e *runEmphasis) reach(upright bool) (over, under style.Unit) {
+	if upright && e.upright {
+		half := e.em.Div(2)
+		return half.Sub(e.central), half.Add(e.central)
+	}
+	return e.ascent, e.descent
+}
 
 type emphasisKey struct {
 	b    *Box
@@ -176,13 +213,14 @@ func (l *layouter) readEmphasis(b *Box, raw string, size style.Unit) *runEmphasi
 		return nil
 	}
 	e.markAscent, e.markDescent = extentsOr(primary, e.size)
-	if facing, v := l.facingOf(b); v && facing == orientationUpright {
+	e.ascent, e.descent = extentsOr(primary, size)
+	if vertical {
 		// An upright character is hung from the middle of the line, one em
-		// across it: see DrawText.Upright and uprightExtent. That is what it
-		// reaches on either side, and the reach its marks sit beyond.
-		e.ascent, e.descent = size.Div(2), size.Div(2)
-	} else {
-		e.ascent, e.descent = extentsOr(primary, size)
+		// across it: see DrawText.Upright and uprightExtent. The middle is the
+		// central baseline, where an upright run of this box is drawn from.
+		// See reach.
+		e.em = size
+		e.central, _ = l.centralShift(b, primary, size, true)
 	}
 	m := e.drawn(Point{}, style.RGBA{}, runTurn{sideways: vertical})
 	if vertical {
@@ -396,14 +434,44 @@ func (l *layouter) emphasisFace(b *Box, primary *shape.Face, mark string) *shape
 // text-emphasis-line-height tests. Blink grows each side on its own to hold
 // what is over it, which is more than §3.6 asks for wherever the half-leading
 // is short and the total is not, and fails them.
+//
+// On a vertical line the box's text may hold both kinds of run (see the note
+// at the top of this file), and the marks of each are beyond its own reach:
+// the box's leading has to hold both, so it is the larger of what each kind
+// asks on each side, for every kind the box's text holds (emphasisKinds).
+//
+// It is asked of the box and not of each run, and that is not a loss of
+// precision anybody could see. Every line a box's text is on carries the box's
+// own leading — its strut, for a block, and the edges of its inline box for
+// any other — so a run of one kind on a line is already under the leading of
+// every kind its box holds, and a run asking for less would change nothing.
 func (l *layouter) withEmphasis(b *Box, size, above, below style.Unit) (style.Unit, style.Unit) {
 	e := l.emphasisOf(b, size)
 	if e == nil {
 		return above, below
 	}
+	if !e.upright {
+		return e.lead(false, above, below)
+	}
+	upright, sideways := l.emphasisKinds(b)
+	switch {
+	case upright && sideways:
+		a1, b1 := e.lead(true, above, below)
+		a2, b2 := e.lead(false, above, below)
+		return style.Max(a1, a2), style.Max(b1, b2)
+	case upright:
+		return e.lead(true, above, below)
+	}
+	return e.lead(false, above, below)
+}
+
+// lead is withEmphasis for one kind of run: the text reaching reach(upright)
+// over and under the baseline, and the box above and below it.
+func (e *runEmphasis) lead(upright bool, above, below style.Unit) (style.Unit, style.Unit) {
+	over, under := e.reach(upright)
 	// The leading either side of the text, over its baseline first, and what
 	// the marks ask of each.
-	start, end := above.Sub(e.ascent), below.Sub(e.descent)
+	start, end := above.Sub(over), below.Sub(under)
 	needStart, needEnd := e.band(), style.Unit(0)
 	if !e.over {
 		needStart, needEnd = 0, e.band()
@@ -420,7 +488,106 @@ func (l *layouter) withEmphasis(b *Box, size, above, below style.Unit) (style.Un
 	default:
 		start, end = needStart, needEnd
 	}
-	return e.ascent.Add(start), e.descent.Add(end)
+	return over.Add(start), under.Add(end)
+}
+
+// emphasisKinds is which kinds of run a box's text holds on a vertical line
+// — standing upright, lying along it — counting only the characters that take
+// a mark, since those are what the marks are set against. A box holding no
+// marked character is counted as lying along the line, which is what the
+// marks of an empty line were reserved for before a line held two kinds.
+//
+// It is the box's own text for a text box and everything under it for any
+// other, and it is kept per box, so each box is asked once and the walk under
+// a block is linear in its text.
+func (l *layouter) emphasisKinds(b *Box) (upright, sideways bool) {
+	k := l.kindsUnder(b)
+	if k == 0 {
+		return false, true
+	}
+	return k&kindUpright != 0, k&kindSideways != 0
+}
+
+const (
+	kindUpright uint8 = 1 << iota
+	kindSideways
+)
+
+func (l *layouter) kindsUnder(b *Box) uint8 {
+	if k, ok := l.runKinds[b]; ok {
+		return k
+	}
+	var k uint8
+	if b.IsText() {
+		k = l.textKinds(b)
+	} else {
+		for _, c := range b.Children {
+			k |= l.kindsUnder(c)
+		}
+	}
+	if l.runKinds == nil {
+		l.runKinds = map[*Box]uint8{}
+	}
+	l.runKinds[b] = k
+	return k
+}
+
+// textKinds is kindsUnder for a text box: which way each of its marked
+// characters faces, asked as its run will be (uprightRun).
+func (l *layouter) textKinds(b *Box) uint8 {
+	facing, vertical := l.facingOf(b)
+	switch {
+	case !vertical || facing == orientationSideways:
+		return kindSideways
+	case facing == orientationUpright:
+		return kindUpright
+	}
+	var k uint8
+	bounds := segment.Boundaries(nil, b.Text)
+	for i, start := 0, 0; start < len(b.Text); i++ {
+		end := len(b.Text)
+		if i < len(bounds) {
+			end = bounds[i]
+		}
+		if unit := b.Text[start:end]; takesEmphasisMark(unit) {
+			if paragraph.UprightInMixed(unit) {
+				k |= kindUpright
+			} else {
+				k |= kindSideways
+			}
+		}
+		start = end
+	}
+	return k
+}
+
+// leadsByRun reports whether a run of b's text in face measures its leading
+// for itself rather than taking its box's (runLeading): where the fallback
+// stack set it in a face the box did not declare, under "line-height:
+// normal". See leadingInFace.
+func (l *layouter) leadsByRun(b *Box, face, boxFace *shape.Face) bool {
+	return face != nil && face != boxFace && usesNormalLineHeight(b)
+}
+
+// runLeading is how far one run of b's text, in face, reaches over and under
+// the baseline it is laid out on, marks included.
+//
+// The order is the point. A run the fallback stack set in another face reaches
+// that face's extents (leadingInFace), moved across the line where its central
+// baseline is aligned with the box's (centralShift); the marks are then asked
+// what they need beyond the element's text, measured from the box's baseline,
+// against extents that are where the run is. Asked before the move, the marks'
+// leading was measured against extents the run does not have, and a run whose
+// face reaches less far under the baseline than the element's took leading on
+// the wrong side.
+func (l *layouter) runLeading(b *Box, face *shape.Face) (above, below style.Unit) {
+	above, below = l.textLeadingInFaceAt(b, face, b.FontSize)
+	// On a vertical line that run is aligned by its central baseline and not
+	// its alphabetic one, so its extents sit that much further down the
+	// frame. Zero on a horizontal line. See centralShift.
+	_, moved := l.centralShift(b, face, b.FontSize, false)
+	above, below = above.Sub(moved), below.Add(moved)
+	return l.withEmphasis(b, b.FontSize, above, below)
 }
 
 // takesEmphasisMark reports whether a typographic character unit gets a mark:
@@ -596,9 +763,17 @@ func unitSpans(v DrawText) []unitSpan {
 
 // marks is a run's marks, each placed: one per unit that takes a mark,
 // centred on it along the line and set on the marks' line beside it.
-func (e *runEmphasis) marks(text DrawText, colour style.RGBA, turn runTurn) []DrawText {
+//
+// spans are the run's units along the line from its pen, and at is the pen on
+// the box's alphabetic baseline — the run's own pen before centralShift moved
+// it across the line, which is where every mark of the box is measured from.
+// upright is whether the run stands upright on a vertical line, which decides
+// what it reaches (reach).
+func (e *runEmphasis) marks(spans []unitSpan, at Point, upright bool, colour style.RGBA,
+	turn runTurn) []DrawText {
+	over, under := e.reach(upright)
 	var out []DrawText
-	for _, s := range unitSpans(text) {
+	for _, s := range spans {
 		if !s.have || !takesEmphasisMark(s.text) {
 			continue
 		}
@@ -608,19 +783,19 @@ func (e *runEmphasis) marks(text DrawText, colour style.RGBA, turn runTurn) []Dr
 			// Centred across the band the marks' line takes, which is the
 			// middle of the upright mark's own extent: see uprightExtent,
 			// which measures above towards the line's over side.
-			mid := style.Unit(0).Sub(e.ascent.Add(e.band().Div(2)))
+			mid := style.Unit(0).Sub(over.Add(e.band().Div(2)))
 			if !e.over {
-				mid = e.descent.Add(e.band().Div(2))
+				mid = under.Add(e.band().Div(2))
 			}
 			x, y = centre.Sub(e.along.Div(2)), mid.Sub(e.below.Sub(e.above).Div(2))
 		} else {
-			y = style.Unit(0).Sub(e.ascent.Add(e.markDescent))
+			y = style.Unit(0).Sub(over.Add(e.markDescent))
 			if !e.over {
-				y = e.descent.Add(e.markAscent)
+				y = under.Add(e.markAscent)
 			}
 			x = centre.Sub(e.width.Div(2))
 		}
-		p := placeRun(Rect{X: x, Y: y}, text.At, turn)
+		p := placeRun(Rect{X: x, Y: y}, at, turn)
 		out = append(out, e.drawn(Point{X: p.X, Y: p.Y}, colour, turn))
 	}
 	return out

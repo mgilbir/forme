@@ -1403,13 +1403,8 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 	// cannot set, and §10.8.1 measures against the font the run is *in*. See
 	// leadingInFace.
 	above, below := a.above, a.below
-	if a.run.Face != nil && a.run.Face != a.boxFace && usesNormalLineHeight(b) {
-		above, below = l.leadingInFace(b, a.run.Face)
-		// On a vertical line that run is aligned by its central baseline and
-		// not its alphabetic one, so its extents sit that much further down
-		// the frame. Zero on a horizontal line. See centralShift.
-		_, moved := l.centralShift(b, a.run.Face, a.size, false)
-		above, below = above.Sub(moved), below.Add(moved)
+	if l.leadsByRun(b, a.run.Face, a.boxFace) {
+		above, below = l.runLeading(b, a.run.Face)
 	}
 	// A run whose small capitals were made out of the capitals is set smaller
 	// than the box's own size — that is the whole of what makes it a small
@@ -1544,10 +1539,7 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 			item.HyphenFace = face
 			item.HyphenAbove, item.HyphenBelow = above, below
 			if usesNormalLineHeight(b) {
-				item.HyphenAbove, item.HyphenBelow = l.leadingInFace(b, face)
-				_, moved := l.centralShift(b, face, a.size, false)
-				item.HyphenAbove = item.HyphenAbove.Sub(moved)
-				item.HyphenBelow = item.HyphenBelow.Add(moved)
+				item.HyphenAbove, item.HyphenBelow = l.runLeading(b, face)
 			}
 		}
 	}
