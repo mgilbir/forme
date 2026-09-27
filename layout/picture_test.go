@@ -2164,12 +2164,19 @@ func filteredFills(v FilterGroup) (coloured, bool) {
 		return coloured{}, false
 	}
 	sh := groupShade{marks: marks, alpha: 1}
+	// A colour matrix or a drop shadow the engine left for the backend is not
+	// rendered here: the group is one opaque mark keyed by what it holds and
+	// by its chain, which calls two documents different unless they filtered
+	// the same thing the same way.
+	other := false
 	for _, f := range v.Filters {
 		switch f.Kind {
 		case FilterBlur:
 			sh.sigma = f.StdDev.Px()
 		case FilterOpacity:
 			sh.alpha *= f.Amount
+		default:
+			other = true
 		}
 	}
 	flat := true
@@ -2198,7 +2205,7 @@ func filteredFills(v FilterGroup) (coloured, bool) {
 			}
 		}
 	}
-	if !flat {
+	if !flat || other {
 		var b strings.Builder
 		fmt.Fprintf(&b, "filter %+v clip %v:", v.Filters, v.Clip)
 		for _, m := range marks {

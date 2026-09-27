@@ -362,3 +362,41 @@ func skipSpace(vals []css.ComponentValue) []css.ComponentValue {
 	}
 	return vals
 }
+
+// ParseNumberPercentage reads a <number> or a <percentage>, or a calc() of
+// either, as a number, a percentage being a hundredth. A calc() that adds a
+// number to a percentage does not type-check, and neither does one that makes
+// an infinity or a NaN.
+func ParseNumberPercentage(vals []css.ComponentValue) (float64, bool) {
+	vals = skipSpace(vals)
+	if len(vals) == 0 || len(skipSpace(vals[1:])) != 0 {
+		return 0, false
+	}
+	var t calcTerm
+	switch v := vals[0]; {
+	case v.IsFunction() && ascii.EqualFold(v.Token.Value, "calc"):
+		var rest []css.ComponentValue
+		var ok bool
+		t, rest, ok = calcSum(v.Values, LengthContext{})
+		if !ok || len(skipSpace(rest)) != 0 {
+			return 0, false
+		}
+	case v.IsToken() && v.Token.Kind == css.Number:
+		t = calcTerm{number: v.Token.Number, isNumber: true}
+	case v.IsToken() && v.Token.Kind == css.Percentage:
+		t = calcTerm{pct: v.Token.Number}
+	default:
+		return 0, false
+	}
+	out := t.pct / 100
+	switch {
+	case t.isNumber:
+		out = t.number
+	case t.isLength || t.isAngle:
+		return 0, false
+	}
+	if math.IsNaN(out) || math.IsInf(out, 0) {
+		return 0, false
+	}
+	return out, true
+}

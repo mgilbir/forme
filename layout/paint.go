@@ -438,7 +438,7 @@ func PaintReporting(root *Fragment, rec *Recorder) []Op {
 	p.findInlineLevels(root)
 	p.canvasBackground(root)
 	if filtersItsPaint(root.Box) {
-		p.filtering(root.Box, root.filterClip, root.filterRound, func() { p.stackingContext(root) })
+		p.filtering(root.Box, p.dimOf(root), root.filterClip, root.filterRound, func() { p.stackingContext(root) })
 	} else {
 		p.stackingContext(root)
 	}
@@ -788,6 +788,7 @@ func (p *painter) emit(ops ...Op) {
 		return
 	}
 	p.ops = append(p.ops, ops...)
+	p.painted += int64(len(ops))
 }
 
 type painter struct {
@@ -833,6 +834,10 @@ type painter struct {
 	// filters is every filtered box's chain, from the root fragment. See
 	// filter.go.
 	filters map[*Box][]FilterFunction
+	// painted counts the marks emit has appended, and filterPasses the
+	// operations a filter has passed over to fold a colour matrix into them or
+	// cast a shadow of them, which the first pays for. See filterPass.
+	painted, filterPasses int64
 	// lengths is what a length the painter reads resolves against, from the
 	// root fragment, and shadows memoizes shadowsOf. See textshadow.go.
 	lengths style.LengthContext
@@ -999,7 +1004,7 @@ func (p *painter) stackLevel(s stackLevel) {
 	}
 	if filtersItsPaint(s.frag.Box) {
 		f := s.frag
-		p.filtering(f.Box, f.filterClip, f.filterRound, func() { p.stackingContext(f) })
+		p.filtering(f.Box, p.dimOf(f), f.filterClip, f.filterRound, func() { p.stackingContext(f) })
 		return
 	}
 	p.stackingContext(s.frag)

@@ -166,6 +166,10 @@ type numeric struct {
 	// integer asks for an <integer>, which a <number> written with a fraction
 	// or an exponent is not.
 	integer bool
+	// readsCalc says the reader of this slot evaluates a calc() of any type
+	// the slot takes — a number or an angle as well as a length — so that one
+	// is valid rather than valid CSS this engine does not compute.
+	readsCalc bool
 	// min is the lowest value a literal may have, when hasMin says there is
 	// one. A math function is not held to it: its range is enforced by clamping
 	// at computed-value time, never by making the declaration invalid.
@@ -187,7 +191,6 @@ var (
 	lengthPctSlot = numeric{length: true, percent: true}
 	numberSlot    = numeric{number: true}
 	integerSlot   = numeric{number: true, integer: true}
-	angleSlot     = numeric{angle: true}
 )
 
 // num is a term for a numeric slot.
@@ -322,10 +325,10 @@ func mathTerm(v css.ComponentValue, n numeric) verdict {
 	if !ok || !n.takes(kind) {
 		return invalid
 	}
-	// calc() is evaluated where a length is read, and nowhere else: a number,
-	// an integer or an angle given by one is valid CSS this engine does not
-	// compute.
-	if evaluated && (n.length || n.percent) && kind != kindNumber {
+	// calc() is evaluated where a length is read, and where a slot says its
+	// reader evaluates it; anywhere else, a number, an integer or an angle
+	// given by one is valid CSS this engine does not compute.
+	if evaluated && (n.readsCalc || (n.length || n.percent) && kind != kindNumber) {
 		return valid
 	}
 	return unevaluated(name + "()")
@@ -350,7 +353,7 @@ func (n numeric) takes(k mathKind) bool {
 
 // mathOf type-checks a math function by CSS Values 4 §10.9, and reports whether
 // calc.go evaluates it — only calc() and parentheses, over numbers,
-// percentages and the lengths pxPerUnit resolves.
+// percentages, angles and the lengths pxPerUnit resolves.
 //
 // The arithmetic is Values 3's, as calc.go's is: a product needs a number on
 // one side, and a quotient a number on the right. An expression that does not
@@ -586,7 +589,7 @@ func mathValue(vals []css.ComponentValue) (mathKind, bool, bool) {
 			return kindNone, false, false
 		}
 		_, _, supported := pxPerUnit(t.Unit, LengthContext{})
-		return k, k == kindLength && supported, true
+		return k, (k == kindLength && supported) || k == kindAngle, true
 	case css.Ident:
 		switch ascii.Lower(t.Value) {
 		case "e", "pi", "infinity", "-infinity", "nan":

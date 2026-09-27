@@ -986,7 +986,10 @@ func filterValue(it []css.ComponentValue) verdict {
 	if len(it) == 0 {
 		return invalid
 	}
-	amount := num(numeric{number: true, percent: true}.nonNeg())
+	// Each is read by layout's filterChain, which evaluates a calc() of a
+	// number, a percentage and an angle (style.ParseNumberPercentage and
+	// style.ParseAngle).
+	amount := num(numeric{number: true, percent: true, readsCalc: true}.nonNeg())
 	out := valid
 	for _, v := range it {
 		if v.IsToken() && v.Token.Kind == css.URL {
@@ -1005,7 +1008,7 @@ func filterValue(it []css.ComponentValue) verdict {
 		case "brightness", "contrast", "grayscale", "invert", "opacity", "saturate", "sepia":
 			got = optionalOne(args, amount)
 		case "hue-rotate":
-			got = optionalOne(args, num(angleSlot))
+			got = optionalOne(args, num(numeric{angle: true, readsCalc: true}))
 		case "drop-shadow":
 			got = dropShadowArgs(args)
 		default:

@@ -44,7 +44,7 @@ for _, op := range out.Ops {
     case layout.FillGradient:     // op.Gradient, op.Clip, op.Tile — a CSS gradient, tiled
     case layout.FillPath:         // op.Path, op.Color — a shape with curves in it, even-odd
     case layout.ClipPath:         // op.Path, op.Ops — what op.Ops draw, clipped to the shape
-    case layout.FilterGroup:      // op.Filters, op.Ops — what op.Ops draw, blurred or faded as one
+    case layout.FilterGroup:      // op.Filters, op.Ops — what op.Ops draw, filtered as one: blurred, faded, recoloured, shadowed
     case layout.Link:             // op.Rects, op.Href — a hyperlink's areas; draws nothing
     }
 }

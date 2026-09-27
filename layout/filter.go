@@ -26,17 +26,18 @@ import (
 //
 // # What is applied
 //
-// blur() and opacity(), which are what the CSS Working Group's suite uses and
-// the two a vector backend can say exactly what to do with. Both are linear and
-// they commute, and two blurs are one — a Gaussian of deviation a after one of
-// deviation b is one of deviation √(a² + b²) — so any chain of them is one blur
-// followed by one opacity, and that is what the operation carries.
+// Every filter function, in the order written, the first taking the element
+// as drawn and each the one before's result (§5). blur() and opacity() are
+// linear and commute, and two blurs are one — a Gaussian of deviation a after
+// one of deviation b is one of deviation √(a² + b²) — so a run of them is one
+// blur followed by one opacity, and a group carries them. The seven colour
+// functions are each a colour matrix, and drop-shadow() a shadow of the group:
+// see filtercolour.go for when each is folded into the marks exactly and when
+// it is left in the group for the backend.
 //
-// The other eight functions — brightness(), contrast(), grayscale(),
-// hue-rotate(), invert(), saturate(), sepia() and drop-shadow() — and a url()
-// reference to an SVG filter are reported where they are declared, and the
-// element is drawn without them. The element is still a stacking context, which
-// §5 makes it whatever the filter is.
+// A url() reference to an SVG filter is reported where it is declared, and the
+// element is drawn with the rest of its chain. The element is still a stacking
+// context, which §5 makes it whatever the filter is.
 //
 // # What else a filter does, and what is not done
 //
@@ -63,6 +64,22 @@ const (
 	FilterBlur FilterKind = iota + 1
 	// FilterOpacity is opacity(): the group's alpha multiplied by Amount.
 	FilterOpacity
+	// FilterColorMatrix is one of the seven colour functions (brightness(),
+	// contrast(), grayscale(), hue-rotate(), invert(), saturate(), sepia()):
+	// each pixel's non-premultiplied, gamma-encoded sRGB colour and alpha, as
+	// fractions, times Matrix, and the result clamped to [0, 1] (Filter
+	// Effects 1 §9.1). The engine emits only matrices whose last row keeps the
+	// alpha as it was, so a colour matrix never changes where a group has ink.
+	// It is left in a group only where folding it into the colours of what the
+	// group holds would not be exact, or would cost more than the document's
+	// allowance for it; see filtercolour.go and filterPass.
+	FilterColorMatrix
+	// FilterDropShadow is drop-shadow(): the group's alpha blurred by StdDev,
+	// moved by Offset, flooded with Color and composited under the group
+	// (Filter Effects 1 §13.1.10). It is left in a group only over what the
+	// engine cannot make a shadow of as marks, a picture, or past the
+	// allowance filterPass keeps; see filtercolour.go.
+	FilterDropShadow
 )
 
 // FilterFunction is one step of a filter chain.
@@ -74,18 +91,29 @@ type FilterFunction struct {
 	StdDev style.Unit
 	// Amount is an opacity's multiplier, in [0, 1).
 	Amount float64
+	// Matrix is a colour matrix's 4 rows of 5, row by row: r', g', b' and a'
+	// from r, g, b, a and 1.
+	Matrix [20]float64
+	// Offset and Color are a drop shadow's; its StdDev is StdDev above, and
+	// zero is a sharp shadow.
+	Offset Point
+	Color  style.RGBA
 }
 
 // FilterGroup paints its operations as one group, filters the group, and
 // composites the result onto the page.
 //
-// Filters are applied in order, the first to the group as painted. The engine
-// emits at most one blur, first, and at most one opacity after it; a chain that
+// Filters are applied in order, the first to the group as painted. A run of
+// blurs and opacities is at most one blur and then one opacity; a chain that
 // filters nothing is not a group at all. A PDF backend draws it as a
 // transparency group: an opacity is the group's constant alpha, and PDF has no
 // Gaussian blur, so a blur is rasterised by the backend — the group drawn at a
 // resolution of its choosing and convolved with this deviation — or refused and
-// reported. Extent says how far the blurred group reaches.
+// reported. A colour matrix and a drop shadow are in a group only where the
+// engine did not apply them to the marks (see filtercolour.go), and a backend
+// rasterises such a group as it does a blur — the group drawn, then each
+// sample's colour mapped or its alpha shadowed — or refuses it and reports.
+// Extent says how far the filtered group reaches.
 //
 // Clip is applied after the filters, and is set only where something cuts the
 // group; the operations inside carry only the clips inside the filtered box.
@@ -117,20 +145,23 @@ func (FilterGroup) isOp() {}
 // (0.00196) that any device rounds to nothing.
 const blurReach = 3
 
-// stdDev is the group's blur, or zero.
-func (g FilterGroup) stdDev() style.Unit {
-	var s style.Unit
-	for _, f := range g.Filters {
-		if f.Kind == FilterBlur {
-			s = style.Max(s, f.StdDev)
+// spreads reports whether a chain moves ink past where it was drawn: a blur
+// or a drop shadow.
+func spreads(chain []FilterFunction) bool {
+	for _, f := range chain {
+		if f.Kind == FilterBlur || f.Kind == FilterDropShadow {
+			return true
 		}
 	}
-	return s
+	return false
 }
 
 // Extent is where the filtered group may put ink: what its operations mark,
-// grown by three standard deviations of its blur, and cut by its clip. Past
-// that a blur's ink is under half an 8-bit step.
+// taken through the chain in order — grown by three standard deviations of a
+// blur, and joined by itself moved by a drop shadow's offset and grown by three
+// of its deviations — and cut by its clip. Past three deviations a blur's ink
+// is under half an 8-bit step. An opacity and a colour matrix leave it where it
+// is.
 func (g FilterGroup) Extent() Rect {
 	out := g.ink
 	if !g.inkKnown {
@@ -139,14 +170,33 @@ func (g FilterGroup) Extent() Rect {
 	if out.Empty() {
 		return Rect{}
 	}
-	if s := g.stdDev(); s > 0 {
+	grow := func(r Rect, s style.Unit) Rect {
+		if s <= 0 {
+			return r
+		}
 		d := s.Mul(blurReach)
-		out = out.Outset(Edges{Top: d, Right: d, Bottom: d, Left: d})
+		return r.Outset(Edges{Top: d, Right: d, Bottom: d, Left: d})
+	}
+	for _, f := range g.Filters {
+		switch f.Kind {
+		case FilterBlur:
+			out = grow(out, f.StdDev)
+		case FilterDropShadow:
+			shadow := grow(Rect{X: out.X.Add(f.Offset.X), Y: out.Y.Add(f.Offset.Y), W: out.W, H: out.H}, f.StdDev)
+			out = unionRect(out, shadow)
+		}
 	}
 	if g.Clip.Active {
 		out = out.Intersect(g.Clip.Rect)
 	}
 	return out
+}
+
+// unionRect is the smallest rectangle holding two.
+func unionRect(a, b Rect) Rect {
+	x0, y0 := style.Min(a.X, b.X), style.Min(a.Y, b.Y)
+	x1, y1 := style.Max(a.Right(), b.Right()), style.Max(a.Bottom(), b.Bottom())
+	return Rect{X: x0, Y: y0, W: x1.Sub(x0), H: y1.Sub(y0)}
 }
 
 // opsInk is the smallest rectangle holding everything a list of operations
@@ -180,16 +230,19 @@ func filtersItsPaint(b *Box) bool {
 	return raw != "" && !ascii.EqualFold(raw, "none")
 }
 
-// maxFilterFunctions bounds the functions one filter may list. The chain is
-// reduced to two before anything is drawn, so this bounds the reading of it
-// and what a report about it can say; a filter past it is not applied, and
-// says so.
+// maxFilterFunctions bounds the functions one filter may list. Each is a group
+// or a pass over what the group holds, so this bounds the work a filter asks
+// of the painter and what a report about it can say; a filter past it is not
+// applied, and says so.
 //
 // A variable so that a test can lower it.
 var maxFilterFunctions = 256
 
-// filterChain reads a box's filter as the chain the operation carries: one blur
-// and one opacity at most, with what it could not apply listed.
+// filterChain reads a box's filter as the chain the painter applies, in order:
+// runs of blurs and opacities each made one blur and one opacity, the seven
+// colour functions as colour matrices, and drop shadows with their lengths and
+// colour resolved. A function that changes nothing is left out, and what could
+// not be applied is listed.
 func (l *layouter) filterChain(b *Box) (chain []FilterFunction, dropped []string, tooMany bool) {
 	vals, _ := css.ParseComponentValues(b.Style.Get("filter"))
 	var fns []css.ComponentValue
@@ -202,7 +255,27 @@ func (l *layouter) filterChain(b *Box) (chain []FilterFunction, dropped []string
 	if len(fns) > maxFilterFunctions {
 		return nil, nil, true
 	}
+	// The run of blurs and opacities being gathered.
 	variance, alpha := 0.0, 1.0
+	flush := func() {
+		if variance > 0 {
+			s, _ := style.FromPx(math.Sqrt(variance))
+			if s > 0 {
+				chain = append(chain, FilterFunction{Kind: FilterBlur, StdDev: s})
+			}
+		}
+		if alpha < 1 {
+			chain = append(chain, FilterFunction{Kind: FilterOpacity, Amount: alpha})
+		}
+		variance, alpha = 0, 1
+	}
+	matrix := func(m [20]float64) {
+		if m == identityMatrix {
+			return
+		}
+		flush()
+		chain = append(chain, FilterFunction{Kind: FilterColorMatrix, Matrix: m})
+	}
 	for _, v := range fns {
 		if v.IsToken() {
 			// A url(), the only thing that is not a function. The cascade has
@@ -212,59 +285,142 @@ func (l *layouter) filterChain(b *Box) (chain []FilterFunction, dropped []string
 		}
 		name := ascii.Lower(v.Token.Value)
 		args := splitValueParts(v.Values)
+		// §6.1: an omitted amount is 1, except for an angle, which is 0.
+		amount := func(clamp bool) (float64, bool) {
+			if len(args) == 0 {
+				return 1, true
+			}
+			a, ok := filterAmount(args[0])
+			if !ok {
+				return 0, false
+			}
+			// "Values of amount over 100% are allowed but UAs must clamp
+			// the values to 1", for the four whose amount is a proportion.
+			if clamp {
+				a = math.Min(a, 1)
+			}
+			return a, true
+		}
 		switch name {
 		case "blur":
 			if len(args) == 0 {
 				continue
 			}
 			length, ok := l.lengthOfValues(b, args[0])
-			if !ok || length.Kind != style.LengthAbsolute || length.Value < 0 {
+			if !ok || length.Kind != style.LengthAbsolute {
 				dropped = append(dropped, "blur()")
 				continue
 			}
-			s := length.Value.Px()
+			// A negative length can only be a calc(), whose range CSS Values
+			// 4 enforces by clamping.
+			s := math.Max(0, length.Value.Px())
 			variance += s * s
-		case "opacity":
-			if len(args) == 0 {
-				continue
-			}
-			a, ok := filterAmount(args[0])
+		case "opacity", "grayscale", "sepia", "invert", "brightness", "contrast", "saturate":
+			clamp := name == "opacity" || name == "grayscale" || name == "sepia" || name == "invert"
+			a, ok := amount(clamp)
 			if !ok {
-				dropped = append(dropped, "opacity()")
+				dropped = append(dropped, name+"()")
 				continue
 			}
-			// "Values of amount over 100% are allowed but UAs must clamp the
-			// values to 1."
-			alpha *= math.Min(a, 1)
+			switch name {
+			case "opacity":
+				alpha *= a
+			case "grayscale":
+				matrix(grayscaleMatrix(a))
+			case "sepia":
+				matrix(sepiaMatrix(a))
+			case "invert":
+				matrix(invertMatrix(a))
+			case "brightness":
+				matrix(brightnessMatrix(a))
+			case "contrast":
+				matrix(contrastMatrix(a))
+			case "saturate":
+				matrix(saturateMatrix(a))
+			}
+		case "hue-rotate":
+			deg := 0.0
+			if len(args) > 0 {
+				var ok bool
+				if deg, ok = filterAngle(args[0]); !ok {
+					dropped = append(dropped, "hue-rotate()")
+					continue
+				}
+			}
+			matrix(hueRotateMatrix(deg))
+		case "drop-shadow":
+			f, ok := l.dropShadow(b, args)
+			if !ok {
+				dropped = append(dropped, "drop-shadow()")
+				continue
+			}
+			if f.Color.A <= 0 {
+				// A transparent shadow: flooded with nothing, it adds nothing
+				// under the group, and changes nothing.
+				continue
+			}
+			flush()
+			chain = append(chain, f)
 		default:
 			dropped = append(dropped, name+"()")
 		}
 	}
-	if variance > 0 {
-		s, _ := style.FromPx(math.Sqrt(variance))
-		if s > 0 {
-			chain = append(chain, FilterFunction{Kind: FilterBlur, StdDev: s})
-		}
-	}
-	if alpha < 1 {
-		chain = append(chain, FilterFunction{Kind: FilterOpacity, Amount: alpha})
-	}
+	flush()
 	return chain, dropped, false
 }
 
-// filterAmount reads a <number> or a <percentage> as a number.
+// filterAngle reads hue-rotate()'s argument: an <angle>, a calc() of one, or
+// <zero>, in degrees.
+func filterAngle(part []css.ComponentValue) (float64, bool) {
+	if len(part) == 1 && part[0].IsToken() && part[0].Token.Kind == css.Number {
+		return 0, part[0].Token.Number == 0
+	}
+	return style.ParseAngle(part)
+}
+
+// dropShadow reads drop-shadow()'s arguments, "<color>? && <length>{2,3}": the
+// offset, and the third length as the deviation itself (§6.1: "the optional
+// 3rd <length> value being the standard deviation instead of blur radius").
+// A colour left out is the box's colour.
+func (l *layouter) dropShadow(b *Box, args [][]css.ComponentValue) (FilterFunction, bool) {
+	f := FilterFunction{Kind: FilterDropShadow}
+	colour, haveColour := style.RGBA{}, false
+	var lengths []style.Unit
+	for _, a := range args {
+		if c, ok := l.gradientColour(b, a); ok && !haveColour {
+			colour, haveColour = c, true
+			continue
+		}
+		length, ok := l.lengthOfValues(b, a)
+		if !ok || length.Kind != style.LengthAbsolute {
+			return FilterFunction{}, false
+		}
+		lengths = append(lengths, length.Value)
+	}
+	if len(lengths) < 2 || len(lengths) > 3 {
+		return FilterFunction{}, false
+	}
+	if !haveColour {
+		c, ok := parseColorValue(b.Style.Get("color"))
+		if !ok {
+			c = style.RGBA{A: 1}
+		}
+		colour = c
+	}
+	f.Offset = Point{X: lengths[0], Y: lengths[1]}
+	if len(lengths) == 3 {
+		f.StdDev = style.Max(0, lengths[2])
+	}
+	f.Color = colour
+	return f, true
+}
+
+// filterAmount reads a <number> or a <percentage>, or a calc() of either, as a
+// number. The cascade refuses a negative one written out; one a calc() comes to
+// is clamped to nothing, as CSS Values 4 enforces a math function's range.
 func filterAmount(part []css.ComponentValue) (float64, bool) {
-	if len(part) != 1 || !part[0].IsToken() {
-		return 0, false
-	}
-	t := part[0].Token
-	switch t.Kind {
-	case css.Number:
-		return t.Number, t.Number >= 0
-	case css.Percentage:
-		return t.Number / 100, t.Number >= 0
-	}
-	return 0, false
+	v, ok := style.ParseNumberPercentage(part)
+	return math.Max(0, v), ok
 }
 
 // resolveFilters reads every filter in the document into the chains the painter
@@ -371,7 +527,16 @@ func (l *layouter) resolveFilters(root *Fragment) {
 // an area and not ink, a filter does nothing to it, and gatherLinks reads the
 // top of the list. They are cut by the same clip, since nothing inside the
 // group was.
-func (p *painter) filtering(b *Box, clip Clip, round *roundClip, paint func()) {
+//
+// d is what the box's own marks were dimmed by: an opacity around the box, or
+// its own, is folded into each mark as it is painted (see opacity.go), so the
+// marks the filter is given carry it already. A colour matrix is indifferent
+// to that — it reads no alpha — and a shadow of dimmed marks is where the
+// shadow of the group would be, dimmed. Where the shadow lies over the marks,
+// or over itself, the two are not the same, which is the question opacity asks
+// of every group, so the shadow's marks are handed to the group that dimmed
+// them and are checked with the rest.
+func (p *painter) filtering(b *Box, d dim, clip Clip, round *roundClip, paint func()) {
 	at := len(p.ops)
 	if clip.blocks() {
 		return
@@ -393,27 +558,199 @@ func (p *painter) filtering(b *Box, clip Clip, round *roundClip, paint func()) {
 			p.ops = clipOps(p.ops, at, clip)
 		}
 	}
-	if len(marks) > 0 {
-		if len(chain) == 0 {
-			// A filter that filters nothing — blur(0), opacity(1), or only
-			// functions this engine does not apply, which were reported: what
-			// is inside is what the page shows, cut as it would have been.
+	if len(marks) > 0 && !transparentChain(chain) {
+		// What the filter makes of the marks: the marks themselves where it
+		// filters nothing — blur(0), opacity(1), or only what this engine
+		// does not apply, which was reported — and otherwise its groups and
+		// the marks it recoloured and cast shadows of. It is cut afterwards,
+		// as the page shows it.
+		//
+		// The groups it made are charged as emit charges a mark, and the
+		// shadows' marks before they are made; the marks themselves were
+		// charged when they were painted.
+		out, groups, cast := p.applyFilters(chain, marks)
+		if groups > 0 && !p.rec.chargeMark(int64(groups)*costOp, "the marks past that point") {
+			out, cast = nil, nil
+		}
+		if d.dimmed() && len(cast) > 0 {
+			_, shadows := dimOps(cast, 0, 1)
+			g := p.groups[d.owners.box]
+			g.marks = append(g.marks, shadows...)
+		}
+		if len(out) == 1 {
+			if g, ok := out[0].(FilterGroup); ok {
+				if clip.Active && !clip.admits(g.Extent()) {
+					g.Clip = clip
+				}
+				if !clip.hides(g.Extent()) {
+					p.ops = append(p.ops, g)
+				}
+				out = nil
+			}
+		}
+		if len(out) > 0 {
 			from := len(p.ops)
-			p.ops = append(p.ops, marks...)
+			p.ops = append(p.ops, out...)
 			if clip.Active {
 				p.ops = clipOps(p.ops, from, clip)
-			}
-		} else if !transparentChain(chain) {
-			g := newFilterGroup(chain, marks)
-			if clip.Active && !clip.admits(g.Extent()) {
-				g.Clip = clip
-			}
-			if !clip.hides(g.Extent()) {
-				p.emit(g)
 			}
 		}
 	}
 	p.rounding(at, round)
+}
+
+// applyFilters is a chain applied to marks, in order: a colour matrix folded
+// into their colours and a drop shadow cast as marks where that is exact (see
+// filtercolour.go), and everything else — and those, where it is not, or where
+// filterPass will not pay for them — a group around what came before. groups is
+// how many groups it made, and cast is the shadows it cast as marks.
+func (p *painter) applyFilters(chain []FilterFunction, ops []Op) (out []Op, groups int, cast []Op) {
+	// own is set while ops is one group this made, to which the next
+	// function is added rather than a group wrapped round it: a group applies
+	// its chain in order, which is what nesting would.
+	own := false
+	wrap := func(f FilterFunction) {
+		if own {
+			g := ops[0].(FilterGroup)
+			g.Filters = appendFilter(g.Filters, f)
+			ops[0] = g
+			return
+		}
+		ops = []Op{newFilterGroup([]FilterFunction{f}, ops)}
+		own = true
+		groups++
+	}
+	for _, f := range chain {
+		switch f.Kind {
+		case FilterColorMatrix:
+			if _, ok := p.filterPass(ops); ok {
+				if folded, ok := foldMatrix(ops, f.Matrix); ok {
+					ops = folded
+					continue
+				}
+			}
+			wrap(f)
+		case FilterDropShadow:
+			if !shadowable(ops) {
+				wrap(f)
+				continue
+			}
+			n, ok := p.filterPass(ops)
+			if !ok {
+				wrap(f)
+				continue
+			}
+			// The shadow is as many operations again as what it is a
+			// shadow of, at most, and the group that blurs or fades it, and
+			// they are charged before they are made. Refused, the shadow is
+			// not drawn, and the budget says so.
+			if !p.rec.chargeMark((n+1)*costOp, "the marks past that point") {
+				continue
+			}
+			shadow := shadowOps(ops, f)
+			cast = append(cast, shadow...)
+			ops = append(shadow, ops...)
+			own = false
+		default:
+			wrap(f)
+		}
+	}
+	return ops, groups, cast
+}
+
+// filterRewriteFloor and filterRewritesPerMark are the allowance filterPass
+// pays from: a floor, and so many operations for each mark the document has
+// painted. A variable so that a test can lower it.
+var filterRewriteFloor int64 = 4096
+
+const filterRewritesPerMark = 8
+
+// filterPass asks to pass over ops once for a filter — to fold a colour matrix
+// into their colours or to cast a shadow of them — and says how many
+// operations that is, and whether it may be done.
+//
+// Each such pass reads every operation the filtered box holds, its
+// descendants' included, and a filtered box inside a filtered box is read
+// again by every function of every filter around it: boxes nested n deep, each
+// filtered by k functions, would be read k·n²/2 times. The parser bounds n and
+// maxFilterFunctions bounds k, and what they leave is still tens of thousands
+// of passes over each mark. So the passes are paid from an allowance that
+// grows with what the document paints, filterRewritesPerMark operations for
+// each mark beyond filterRewriteFloor, which keeps the whole of it linear in
+// the marks.
+// Past it, a matrix or a shadow is left in its group for the backend to apply
+// — what it is over a picture, and exactly the filter still — and the
+// refusal is reported, once, as what was not done.
+//
+// Counting stops at what is left, so a refused pass costs no more than the
+// allowance it was refused by, and every pass after it next to nothing.
+func (p *painter) filterPass(ops []Op) (int64, bool) {
+	left := satAdd(filterRewriteFloor, satMul(p.painted, filterRewritesPerMark)) - p.filterPasses
+	n, within := countOpsUpTo(ops, max(left, 0))
+	p.filterPasses = satAdd(p.filterPasses, n)
+	if !within {
+		p.rec.refuse("the filters folded into the marks past that point, which were left in their groups")
+		return n, false
+	}
+	return n, true
+}
+
+// countOpsUpTo is how many operations a list holds, those inside groups
+// included, and whether that is at most limit. It stops counting past the
+// limit.
+func countOpsUpTo(ops []Op, limit int64) (int64, bool) {
+	var n int64
+	var count func(ops []Op) bool
+	count = func(ops []Op) bool {
+		for _, op := range ops {
+			if n++; n > limit {
+				return false
+			}
+			switch v := op.(type) {
+			case ClipPath:
+				if !count(v.Ops) {
+					return false
+				}
+			case FilterGroup:
+				if !count(v.Ops) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	ok := count(ops)
+	return n, ok
+}
+
+// appendFilter adds a function to the end of a group's chain, merging a blur
+// or an opacity into the run of them it ends: blurs by their variances,
+// opacities by their product, the blur ahead of the opacity it commutes with.
+func appendFilter(chain []FilterFunction, f FilterFunction) []FilterFunction {
+	out := append([]FilterFunction(nil), chain...)
+	n := len(out)
+	switch f.Kind {
+	case FilterOpacity:
+		if n > 0 && out[n-1].Kind == FilterOpacity {
+			out[n-1].Amount *= f.Amount
+			return out
+		}
+	case FilterBlur:
+		i := n
+		for i > 0 && out[i-1].Kind == FilterOpacity {
+			i--
+		}
+		if i > 0 && out[i-1].Kind == FilterBlur {
+			a, b := out[i-1].StdDev.Px(), f.StdDev.Px()
+			out[i-1].StdDev, _ = style.FromPx(math.Sqrt(a*a + b*b))
+			return out
+		}
+		out = append(out, FilterFunction{})
+		copy(out[i+1:], out[i:])
+		out[i] = f
+		return out
+	}
+	return append(out, f)
 }
 
 // transparentChain reports whether a chain leaves nothing of what it filters:
@@ -435,11 +772,7 @@ func transparentChain(chain []FilterFunction) bool {
 // past. Where that could show — the chain blurs and something the level holds
 // is clipped — it is reported.
 func (p *painter) filteredLevel(l *inlineLevel) {
-	blurs := false
-	for _, f := range p.filters[l.box] {
-		blurs = blurs || f.Kind == FilterBlur
-	}
-	if blurs {
+	if spreads(p.filters[l.box]) {
 		for _, pt := range l.parts {
 			c, r := pt.frag.clipSelf, pt.frag.roundSelf
 			if pt.lines {
@@ -449,8 +782,8 @@ func (p *painter) filteredLevel(l *inlineLevel) {
 				p.reportOnce(l.box, "filtered-inline-clipped", Finding{
 					Rule:   RuleUnsupportedValue,
 					Source: AtHTML(offsetOf(l.box)),
-					Message: "an inline box with a blur inside a box that clips was cut " +
-						"before it was blurred rather than after",
+					Message: "an inline box with a blur or a drop shadow inside a box that " +
+						"clips was cut before it was filtered rather than after",
 					Path:     PathOf(l.box.Element),
 					Property: "filter",
 				})
@@ -458,7 +791,7 @@ func (p *painter) filteredLevel(l *inlineLevel) {
 			}
 		}
 	}
-	p.filtering(l.box, Clip{}, nil, func() { p.paintLevel(l) })
+	p.filtering(l.box, p.inlineDims[l.box].dim, Clip{}, nil, func() { p.paintLevel(l) })
 }
 
 // withOpacity is a chain with an alpha folded into its opacity, which is where

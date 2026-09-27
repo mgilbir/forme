@@ -88,8 +88,9 @@ func TestAFilterThatFiltersNothingIsNoGroup(t *testing.T) {
 	}
 }
 
-// TestAFilterFunctionNotAppliedIsReported: the eight other functions and url()
-// are reported by name, and the ones that are applied still are.
+// TestAFilterFunctionNotAppliedIsReported: a url() is reported by name, and the
+// functions beside it, every one of which is applied (filtercolour.go), are
+// not.
 func TestAFilterFunctionNotAppliedIsReported(t *testing.T) {
 	ops, findings := filterFindings(t, `<div id="d">x</div>`,
 		`#d { height: 20px; background: red; filter: blur(2px) grayscale(1) url(#f) }`)
@@ -102,8 +103,8 @@ func TestAFilterFunctionNotAppliedIsReported(t *testing.T) {
 			said = f.Message
 		}
 	}
-	if !strings.Contains(said, "grayscale()") || !strings.Contains(said, "url()") {
-		t.Errorf("the report is %q, want it to name grayscale() and url()", said)
+	if strings.Contains(said, "grayscale()") || !strings.Contains(said, "url()") {
+		t.Errorf("the report is %q, want it to name url() and not grayscale()", said)
 	}
 	_, findings = filterFindings(t, `<div id="d">x</div>`, `#d { filter: blur(2px) opacity(0.5) }`)
 	if hasRule(findings, RuleUnsupportedValue) || hasRule(findings, RuleUnsupportedProperty) {
@@ -185,7 +186,7 @@ func TestAFilteredInlineBoxIsAGroup(t *testing.T) {
 		`#o { overflow: hidden; height: 50px } #s { filter: blur(1px) }`)
 	found := false
 	for _, f := range findings {
-		found = found || strings.Contains(f.Message, "cut before it was blurred")
+		found = found || strings.Contains(f.Message, "cut before it was filtered")
 	}
 	if !found {
 		t.Errorf("a blurred inline box inside a clip was not reported: %v", findings)
