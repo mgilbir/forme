@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/mgilbir/forme/bidi"
+	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -216,6 +217,18 @@ func (l *layouter) mathStretchTarget(b *Box, m mathFont, op *mathOp, s mathStret
 // italic correction (§3.2.4.3's last paragraph), with the construction to draw.
 func (l *layouter) mathOpContent(b *Box, d mathOpDrawn, text string) mathContent {
 	m := l.mathFontFor(b)
+	if shadow := ascii.TrimCSSSpace(b.Style.Get("text-shadow")); len(l.decorationsFor(b)) > 0 ||
+		shadow != "" && !ascii.EqualFold(shadow, "none") {
+		// The lines and shadows a run of text is drawn with are the run's,
+		// and a construction is not a run: they are not drawn under it.
+		l.rec.ReportDetail(Finding{
+			Rule:     RuleUnsupportedValue,
+			Source:   sourceOf(boxElement(b)),
+			Message:  "a stretched or enlarged operator is drawn as its font's glyphs, without the text-decoration or text-shadow its text would have had",
+			Path:     PathOf(b.Element),
+			Property: "text-decoration",
+		})
+	}
 	c := mathContent{
 		width:   m.units(d.st.Width),
 		ascent:  m.units(d.st.Ascent).Sub(d.delta),

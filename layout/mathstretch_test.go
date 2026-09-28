@@ -783,3 +783,21 @@ func TestAnInlineOperatorsSizeIsItsText(t *testing.T) {
 		t.Errorf("the arrow's size is %d, want its text's 600", size.max)
 	}
 }
+
+// TestAConstructionsLostDecorationIsReported: the underline and the shadow of
+// a stretched operator's text are the text run's, and a construction has none;
+// that is said, and an operator drawn as its text says nothing.
+func TestAConstructionsLostDecorationIsReported(t *testing.T) {
+	face := mathStretchFace(t, nil)
+	for doc, reported := range map[string]bool{
+		`<math><mo style="text-shadow: 1px 1px red">(</mo><mspace height="1.5em" depth="0.5em"></mspace></math>`:                true,
+		`<math><mrow style="text-decoration: underline"><mo>(</mo></mrow><mspace height="1.5em" depth="0.5em"></mspace></math>`: true,
+		`<math><mo style="text-shadow: none">(</mo><mspace height="1.5em" depth="0.5em"></mspace></math>`:                       false,
+		`<math><mo style="text-shadow: 1px 1px red">(</mo><mn>1</mn></math>`:                                                    false,
+	} {
+		_, _, findings := mathComposed(t, face, doc)
+		if got := mathFinding(findings, RuleUnsupportedValue, "without the text-decoration or text-shadow"); got != reported {
+			t.Errorf("%s: reported %v, want %v: %v", doc, got, reported, findings)
+		}
+	}
+}
