@@ -218,6 +218,20 @@ func (l *layouter) mathWrap(b *Box, frag *Fragment, c mathContent, containing st
 	frag.BorderRect.W = width.Add(padding.Horizontal()).Add(border.Horizontal())
 	frag.BorderRect.H = ascent.Add(descent).Add(padding.Vertical()).Add(border.Vertical())
 	l.mathPlace(b, frag, c, width, ascent)
+	if dx := width.Sub(c.width); dx > 0 && mathRTL(b) {
+		// §3.1.2: a content box wider than the math content box has the
+		// latter at its inline-start edge, which in a right-to-left formula is
+		// the right. mathPlace put the children there; a token's own line,
+		// or the blocks of a token holding HTML, are moved to it here.
+		for i := range frag.Lines {
+			frag.Lines[i].move(dx, 0)
+		}
+		if isMathToken(b) {
+			for _, k := range frag.Children {
+				translate(k, dx, 0)
+			}
+		}
+	}
 	frag.mathBaseline, frag.hasMathBaseline = ascent, true
 	if b.Position == PositionRelative {
 		frag.Offset = l.relativeOffset(b, containing, 0, false)

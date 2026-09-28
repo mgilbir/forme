@@ -752,3 +752,27 @@ func TestAFloatedOrPositionedFormulaIsStillAFormula(t *testing.T) {
 		}
 	}
 }
+
+// TestARightToLeftTokenStartsAtItsRight: §3.1.2 puts the math content box at
+// the inline-start edge of a wider content box, and in a right-to-left
+// formula that is the right: the "1" in a token 100px wide ends at its right
+// edge, and so does the block of a token holding HTML.
+func TestARightToLeftTokenStartsAtItsRight(t *testing.T) {
+	root, _ := mathLayout(t, `<math dir="rtl"><mn id="n" style="width: 100px">1</mn>`+
+		`<mtext id="h" style="width: 100px"><div id="d" style="width: 10px">x</div></mtext></math>`)
+	if n := find(t, root, "n"); n.Lines[0].Rect.X != 6400-512 {
+		t.Errorf("the 1 is at %d in its box, want %d", n.Lines[0].Rect.X, 6400-512)
+	}
+	if x, _ := at(find(t, root, "d"), find(t, root, "h")); x != 6400-640 {
+		t.Errorf("the block in the token is at %d in it, want %d", x, 6400-640)
+	}
+	root, _ = mathLayout(t, `<math><mn id="n" style="width: 100px">1</mn></math>`)
+	if n := find(t, root, "n"); n.Lines[0].Rect.X != 0 {
+		t.Errorf("a left-to-right 1 is at %d in its box, want 0", n.Lines[0].Rect.X)
+	}
+	// A row's children are placed by the row, and moved once.
+	root, _ = mathLayout(t, `<math dir="rtl"><mrow id="r" style="width: 100px"><mn id="a">1</mn></mrow></math>`)
+	if x, _ := at(find(t, root, "a"), find(t, root, "r")); x != 6400-512 {
+		t.Errorf("the 1 in the rtl row is at %d, want %d", x, 6400-512)
+	}
+}
