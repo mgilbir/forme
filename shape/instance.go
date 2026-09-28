@@ -501,6 +501,11 @@ func fixed1616At(b []byte, off int) float64 {
 // an ordinary value a caller may have asked for. It is not the same as an axis
 // nobody mentioned — that one is normalized from its own default and also comes
 // out zero, which is why nothing downstream may treat zero as "unset".
+//
+// Every coordinate it returns is a whole number of 2.14 units, as HarfBuzz
+// holds one (f2Dot14Location): it is the one reading of a location for every
+// table of the face — gvar, HVAR, VVAR, MVAR, GPOS's devices, COLR, a CFF2
+// charstring's blends and VARC.
 func normalizeLocation(axes []varAxis, avar []byte, want map[string]float64) ([]float64, error) {
 	known := make(map[string]bool, len(axes))
 	for _, a := range axes {
@@ -519,17 +524,79 @@ func normalizeLocation(axes []varAxis, avar []byte, want map[string]float64) ([]
 		return nil, err
 	}
 	coords := make([]float64, len(axes))
-	for i, a := range axes {
-		v, ok := want[a.tag]
-		if !ok {
-			v = a.def
-		}
-		coords[i] = normalizeAxis(a, v)
-		if segments != nil {
-			coords[i] = piecewiseMap(segments[i], coords[i])
-		}
+	for i, c := range f2Dot14Location(axes, segments, want) {
+		coords[i] = float64(c) / 16384
 	}
 	return coords, nil
+}
+
+// f2Dot14Location is hb_ot_var_normalize_coords: each axis's user coordinate
+// — its own default where the location does not name it — normalized in
+// single precision and rounded to 16.16, mapped by avar's segment maps and
+// rounded to 16.16 again, and then rounded to the 2.14 every variation table
+// states its regions in; every rounding takes a half up, towards +infinity.
+// The result is in 2.14 units.
+//
+// # Why quantized, and why in exactly this order
+//
+// A location between two 2.14 values is not one any table of the font is
+// written against, and it is not one HarfBuzz ever reaches. Noto Sans asked
+// for weight 850 normalizes to 0.894995, which HarfBuzz holds to 14664/16384;
+// read unrounded, the face advanced 75 glyphs and drew the outlines of 704
+// simple glyphs a unit away from where HarfBuzz draws them.
+//
+// The order of the roundings matters as well as their precision. Weight 700
+// of the same face is drawn by HarfBuzz at 9995/16384. fontTools' instancer
+// maps the unrounded coordinate through avar in double precision and rounds
+// once, and lands at 9994: HarfBuzz's first rounding to 16.16 moves the
+// coordinate before avar sees it, and its last rounds a half of a 2.14 unit
+// up. What a reader draws and what this package shapes with is HarfBuzz's,
+// so the location is HarfBuzz's to the bit, and not a rounding error from it.
+//
+// segments is parseAvar's: nil where the font has no avar, and otherwise one
+// map for each axis.
+func f2Dot14Location(axes []varAxis, segments [][]avarSegment, want map[string]float64) []int {
+	coords := make([]int, len(axes))
+	for i, a := range axes {
+		// fvar's 16.16 read into a float, as F16DOT16::to_float reads it.
+		// AxisRecord::get_coordinates also widens an axis's range to take in
+		// its default, which never applies here: parseFvar refuses such an
+		// axis, and every location is normalized for a font it accepted.
+		lo, def, hi := float32(a.min), float32(a.def), float32(a.max)
+		v := def
+		if w, ok := want[a.tag]; ok {
+			v = float32(w)
+		}
+		v = min(max(v, lo), hi)
+		var n float32
+		switch {
+		case v == def:
+		case v < def:
+			n = float32(float32(v-def) / float32(def-lo))
+		default:
+			n = float32(float32(v-def) / float32(hi-def))
+		}
+		coords[i] = roundf(float32(n * 65536))
+	}
+	for i := range segments {
+		mapped := avarMapFloat(segments[i], float32(float32(coords[i])/65536))
+		coords[i] = roundf(float32(mapped * 65536))
+	}
+	for i := range coords {
+		// 16.16 to 2.14. The shift is arithmetic, so a negative half rounds
+		// up too, as it does in HarfBuzz.
+		coords[i] = (coords[i] + 2) >> 2
+	}
+	return coords
+}
+
+// roundf is roundf as HarfBuzz defines it for itself (hb-algs.hh), which is
+// not C's: floorf(v + .5f), so that a half rounds towards +infinity and not
+// away from zero — and the addition is a float's, so a value a hair under a
+// half can round up. -2.5 is -2 here and -3 in C. A float32 widens to a
+// float64 exactly, so the floor of the widened sum is the floor of the float.
+func roundf(v float32) int {
+	return int(math.Floor(float64(float32(v + 0.5))))
 }
 
 func axisTags(axes []varAxis) string {
@@ -540,32 +607,10 @@ func axisTags(axes []varAxis) string {
 	return strings.Join(tags, ", ")
 }
 
-func normalizeAxis(a varAxis, v float64) float64 {
-	switch {
-	case v > a.max:
-		v = a.max
-	case v < a.min:
-		v = a.min
-	}
-	switch {
-	case v == a.def:
-		return 0
-	case v < a.def:
-		if a.def == a.min {
-			return 0
-		}
-		return (v - a.def) / (a.def - a.min)
-	default:
-		if a.max == a.def {
-			return 0
-		}
-		return (v - a.def) / (a.max - a.def)
-	}
-}
-
 // avarSegment is one point of an axis's mapping: a normalized coordinate, and
-// the normalized coordinate it stands for.
-type avarSegment struct{ from, to float64 }
+// the normalized coordinate it stands for, each an F2DOT14 read into a float
+// as HarfBuzz reads it (exactly: fourteen fractional bits fit a float).
+type avarSegment struct{ from, to float32 }
 
 // parseAvar reads the axis variations table, which bends the normalized scale so
 // that the middle of an axis need not be the middle of what it draws — the point
@@ -602,53 +647,89 @@ func parseAvar(t []byte, axisCount int) ([][]avarSegment, error) {
 		if at+4*n > len(t) {
 			return nil, errors.New("fonts: avar's segment maps are cut short")
 		}
-		seg := make([]avarSegment, n)
-		for j := range seg {
-			seg[j] = avarSegment{from: f2Dot14At(t, at), to: f2Dot14At(t, at+2)}
-			at += 4
-		}
-		out[i] = seg
+		out[i] = readSegmentMap(t, at, n)
+		at += 4 * n
 	}
 	return out, nil
 }
 
-// piecewiseMap applies one axis's segment map: an exact match takes its value, a
-// coordinate between two takes the line between them, and one outside the map
-// keeps its distance from the nearest end.
-func piecewiseMap(seg []avarSegment, v float64) float64 {
-	if len(seg) == 0 {
-		return v
+// readSegmentMap reads n AxisValueMaps from t at off, which the caller has
+// checked lie inside it.
+func readSegmentMap(t []byte, off, n int) []avarSegment {
+	seg := make([]avarSegment, n)
+	for j := range seg {
+		seg[j] = avarSegment{from: f2dot14f(t, off+4*j), to: f2dot14f(t, off+4*j+2)}
 	}
-	lo, hi := seg[0], seg[0]
-	var below, above *avarSegment
-	for i := range seg {
-		s := seg[i]
-		if s.from == v {
-			return s.to
+	return seg
+}
+
+// f2dot14f is F2DOT14::to_float.
+func f2dot14f(b []byte, at int) float32 {
+	return float32(float32(signed16(font.Be16(b, at))) * float32(1.0/16384))
+}
+
+// avarMapFloat applies one axis's segment map as SegmentMaps::map_float does,
+// in single precision: an exact match takes its value, a coordinate between
+// two takes the line between them, and one outside the map keeps its distance
+// from the nearest end. The cases the specification leaves open — fewer than
+// two maps, several maps from one coordinate, a redundant -1 or +1 at an end —
+// are answered as HarfBuzz answers them, which is as CoreText does.
+func avarMapFloat(m []avarSegment, value float32) float32 {
+	if len(m) < 2 {
+		if len(m) == 0 {
+			return value
 		}
-		if s.from < lo.from {
-			lo = s
-		}
-		if s.from > hi.from {
-			hi = s
-		}
-		if s.from < v && (below == nil || s.from > below.from) {
-			below = &seg[i]
-		}
-		if s.from > v && (above == nil || s.from < above.from) {
-			above = &seg[i]
+		return float32(float32(value-m[0].from) + m[0].to)
+	}
+	start, end := 0, len(m)
+	if m[start].from == -1 && m[start].to == -1 && m[start+1].from == -1 {
+		start++
+	}
+	if m[end-1].from == 1 && m[end-1].to == 1 && m[end-2].from == 1 {
+		end--
+	}
+	i := start
+	for ; i < end; i++ {
+		if value == m[i].from {
+			break
 		}
 	}
-	if v < lo.from {
-		return v + lo.to - lo.from
+	if i < end {
+		j := i
+		for ; j+1 < end; j++ {
+			if value != m[j+1].from {
+				break
+			}
+		}
+		switch {
+		case i == j:
+			return m[i].to
+		case i+2 == j:
+			return m[i+1].to
+		case value < 0:
+			return m[j].to
+		case value > 0:
+			return m[i].to
+		}
+		if float32(math.Abs(float64(m[i].to))) < float32(math.Abs(float64(m[j].to))) {
+			return m[i].to
+		}
+		return m[j].to
 	}
-	if v > hi.from {
-		return v + hi.to - hi.from
+	for i = start; i < end; i++ {
+		if value < m[i].from {
+			break
+		}
 	}
-	if below == nil || above == nil {
-		return v
+	if i == start {
+		return float32(float32(value-m[start].from) + m[start].to)
 	}
-	return below.to + float64((above.to-below.to)*(v-below.from)/(above.from-below.from))
+	if i == end {
+		return float32(float32(value-m[end-1].from) + m[end-1].to)
+	}
+	before, after := m[i-1], m[i]
+	denom := float32(after.from - before.from)
+	return float32(before.to + float32(float32(float32(after.to-before.to)*float32(value-before.from))/denom))
 }
 
 // parseHmtx reads the advance and left side bearing of every glyph. The table

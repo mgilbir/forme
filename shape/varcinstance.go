@@ -2,7 +2,6 @@ package shape
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/mgilbir/forme/font"
 )
@@ -31,58 +30,25 @@ import (
 
 // hbNormalizedCoords is hb_ot_var_normalize_coords for a location in user
 // coordinates: every axis of fvar, its own default where the location does
-// not name it, and none where HarfBuzz reads no fvar.
+// not name it, and none where HarfBuzz reads no fvar. The arithmetic is
+// f2Dot14Location's, which every other reading of a location shares.
+//
+// It is asked only for a font LoadInstance has already read fvar and avar
+// from, so an fvar or avar parseFvar or parseAvar refuses never reaches it;
+// where one would, it answers nil, the default.
 func hbNormalizedCoords(fvar, avar []byte, want map[string]float64) []int {
-	count := hbFvarAxisCount(fvar)
-	if count == 0 {
+	if hbFvarAxisCount(fvar) == 0 {
 		return nil
 	}
-	at := font.Be16(fvar, 4)
-	size := font.Be16(fvar, 10)
-	fixed := func(off int) float32 { return float32(float32(int32(font.Be32(fvar, off))) * float32(1.0/65536)) }
-	coords := make([]int, count)
-	for i := range coords {
-		rec := at + size*i
-		lo, def, hi := fixed(rec+4), fixed(rec+8), fixed(rec+12)
-		v := def
-		if w, ok := want[string(fvar[rec:rec+4])]; ok {
-			v = float32(w)
-		}
-		v = min(max(v, lo), hi)
-		var n float32
-		switch {
-		case v == def:
-		case v < def:
-			n = float32(v-def) / float32(def-lo)
-		default:
-			n = float32(v-def) / float32(hi-def)
-		}
-		coords[i] = int(math.Floor(float64(float32(float32(n*65536) + 0.5))))
+	axes, err := parseFvar(fvar)
+	if err != nil {
+		return nil
 	}
-	if len(avar) >= 8 && font.Be16(avar, 0) == 1 {
-		n := min(font.Be16(avar, 6), count)
-		p := 8
-		for i := 0; i < n; i++ {
-			if p+2 > len(avar) {
-				break
-			}
-			segs := font.Be16(avar, p)
-			if p+2+4*segs > len(avar) {
-				break
-			}
-			m := make([][2]float32, segs)
-			for k := range m {
-				m[k] = [2]float32{f2dot14f(avar, p+2+4*k), f2dot14f(avar, p+4+4*k)}
-			}
-			mapped := avarMapFloat(m, float32(float32(coords[i])/65536))
-			coords[i] = int(math.Floor(float64(float32(float32(mapped*65536) + 0.5))))
-			p += 2 + 4*segs
-		}
+	segments, err := parseAvar(avar, len(axes))
+	if err != nil {
+		return nil
 	}
-	for i := range coords {
-		coords[i] = (coords[i] + 2) >> 2
-	}
-	return coords
+	return f2Dot14Location(axes, segments, want)
 }
 
 // hbFvarAxisCount is how many axes HarfBuzz reads from fvar: its count where
@@ -99,69 +65,6 @@ func hbFvarAxisCount(fvar []byte) int {
 		return 0
 	}
 	return count
-}
-
-func f2dot14f(b []byte, at int) float32 {
-	return float32(float32(signed16(font.Be16(b, at))) * float32(1.0/16384))
-}
-
-// avarMapFloat is SegmentMaps::map_float, CoreText's cases included.
-func avarMapFloat(m [][2]float32, value float32) float32 {
-	if len(m) < 2 {
-		if len(m) == 0 {
-			return value
-		}
-		return float32(float32(value-m[0][0]) + m[0][1])
-	}
-	start, end := 0, len(m)
-	if m[start][0] == -1 && m[start][1] == -1 && m[start+1][0] == -1 {
-		start++
-	}
-	if m[end-1][0] == 1 && m[end-1][1] == 1 && m[end-2][0] == 1 {
-		end--
-	}
-	i := start
-	for ; i < end; i++ {
-		if value == m[i][0] {
-			break
-		}
-	}
-	if i < end {
-		j := i
-		for ; j+1 < end; j++ {
-			if value != m[j+1][0] {
-				break
-			}
-		}
-		switch {
-		case i == j:
-			return m[i][1]
-		case i+2 == j:
-			return m[i+1][1]
-		case value < 0:
-			return m[j][1]
-		case value > 0:
-			return m[i][1]
-		}
-		if float32(math.Abs(float64(m[i][1]))) < float32(math.Abs(float64(m[j][1]))) {
-			return m[i][1]
-		}
-		return m[j][1]
-	}
-	for i = start; i < end; i++ {
-		if value < m[i][0] {
-			break
-		}
-	}
-	if i == start {
-		return float32(float32(value-m[start][0]) + m[start][1])
-	}
-	if i == end {
-		return float32(float32(value-m[end-1][0]) + m[end-1][1])
-	}
-	before, after := m[i-1], m[i]
-	denom := float32(after[0] - before[0])
-	return float32(before[1] + float32(float32(float32(after[1]-before[1])*float32(value-before[0]))/denom))
 }
 
 // flattenVARC writes each glyph the VARC table composes out as a glyf simple

@@ -701,12 +701,11 @@ func fontToolsFactors(region []varRegion, coords []float64, order []int) ([]floa
 }
 
 // cff2Location is the normalized location a CFF2 font is cut at, and its
-// axes' tags in fvar's order: each axis normalized and mapped through avar as
-// for any variable font (normalizeLocation), and then held to the fourteen
-// fractional bits the format stores a coordinate in, as fontTools' instancer
-// holds it (floatToFixedToFloat, which rounds half up) and as HarfBuzz keeps
-// one. A location between two F2Dot14 values is not one any table of the font
-// is written against.
+// axes' tags in fvar's order: each axis normalized and mapped through avar,
+// and held to the fourteen fractional bits the format stores a coordinate in,
+// as for any variable font (normalizeLocation, which reaches it as HarfBuzz
+// does). A location between two F2Dot14 values is not one any table of the
+// font is written against.
 func cff2Location(fvar, avar []byte, want map[string]float64) ([]float64, []string, error) {
 	axes, err := parseFvar(fvar)
 	if err != nil {
@@ -719,7 +718,6 @@ func cff2Location(fvar, avar []byte, want map[string]float64) ([]float64, []stri
 	tags := make([]string, len(axes))
 	for i, a := range axes {
 		tags[i] = a.tag
-		coords[i] = float64(otRound(coords[i]*16384)) / 16384
 	}
 	return coords, tags, nil
 }

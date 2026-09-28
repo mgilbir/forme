@@ -14,11 +14,11 @@ font-sha256 f37a8431a0c5d5ed2f81a767417546aca576a81fb7eff9c924d46aecf828f2ca
 strip-hvar no
 location wdth=90 wght=250
 axes wght wdth
-normalized -0.6484375 -0.2933284502227919
+normalized -0.6484375 -0.2933349609375
 glyphs 673
-noise 5
-noise-sampled 2
-noise-worst 1
+noise 0
+noise-sampled 0
+noise-worst 0
 s 0 593 104 104 0 481 714 104,0 104,714 481,714 481,0 151,40 434,40 434,674 151,674
 e 1 0 0
 e 2 260 0
