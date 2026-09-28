@@ -225,3 +225,40 @@ func TestDisplayTakesMath(t *testing.T) {
 		}
 	}
 }
+
+// TestAHintThisEngineCannotEvaluateIsReported: an attribute whose value is
+// valid and names what this engine does not evaluate — a width of 13lh, a
+// mathsize of 2rlh — is dropped as its declaration would be, and says so; the
+// property is then what the cascade gives without it. A hint it does
+// evaluate says nothing.
+func TestAHintThisEngineCannotEvaluateIsReported(t *testing.T) {
+	get, styled := mathStyles(t, `<math><mspace id="w" width="13lh" height="10px"></mspace>`+
+		`<mrow id="s" mathsize="2rlh"></mrow><mspace id="ok" width="3px"></mspace></math>`, nil)
+	for _, want := range []string{`"width: 13lh" uses the unit lh`, `"font-size: 2rlh" uses the unit rlh`} {
+		found := false
+		for _, f := range styled.Findings {
+			// Unsupported and naming its property, as a dropped
+			// declaration's finding does: that is what layout reports as
+			// unsupported-property rather than as a selector.
+			if strings.Contains(f.Message, want) && strings.Contains(f.Message, "attribute") &&
+				f.Unsupported && strings.HasPrefix(want, `"`+f.Property+`:`) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no finding says %s: %v", want, styled.Findings)
+		}
+	}
+	if len(styled.Findings) != 2 {
+		t.Errorf("%d findings, want the two: %v", len(styled.Findings), styled.Findings)
+	}
+	if got := get("w", "width"); got != "auto" {
+		t.Errorf("the 13lh space's width is %q, want auto: the hint dropped", got)
+	}
+	if got := get("s", "font-size"); got != "16px" {
+		t.Errorf("the 2rlh row's font-size is %q, want the inherited 16px", got)
+	}
+	if got := get("ok", "width"); got != "3px" {
+		t.Errorf("the 3px space's width is %q", got)
+	}
+}

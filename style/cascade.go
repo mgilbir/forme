@@ -2102,7 +2102,34 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 	// ever does. They belong to the element and not to its pseudo-elements,
 	// which have no attributes of their own.
 	if pseudo == "" {
-		for property, value := range presentationalHints(n) {
+		hints := presentationalHints(n)
+		names := make([]string, 0, len(hints))
+		for property := range hints {
+			names = append(names, property)
+		}
+		sort.Strings(names)
+		for _, property := range names {
+			value := hints[property]
+			// A hint is the declaration its attribute implies, and one whose
+			// value this engine does not evaluate — mspace width="13lh",
+			// mathsize="2rlh" — is dropped and said to be, as the declaration
+			// written in a stylesheet is (see valuegate.go). Kept, it stood in
+			// the cascade as a value no length is ever resolved from: the space
+			// was no width at all, and nothing said why.
+			//
+			// Only a valid value is asked about. Every hint is built to its
+			// property's grammar, so an invalid one would be a hint written
+			// wrong, and a shorthand, which has no grammar of its own here,
+			// would read as invalid.
+			if v := judgeValue(property, value); v.ok && v.unsupported != "" {
+				s.report(Finding{
+					Offset: n.Offset, InMarkup: true,
+					Message: "an attribute read as its declaration: " +
+						unevaluatedReason(property, value, v.unsupported),
+					Unsupported: true, Property: property,
+				})
+				continue
+			}
 			cands = append(cands, candidate{
 				property: property, value: value,
 				text:   s.interner().value(serialize(value)),
