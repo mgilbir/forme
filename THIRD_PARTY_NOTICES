@@ -2039,6 +2039,20 @@ listed here because every font the repository keeps is, and for where it came
 from; no third party's work is in it.
 
 ============================================================================
+Font built for the mirrored form ('rtlm') oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/MirroredForms.ttf
+Source:  testdata/harfbuzz/mirroredform_fixture.py, in this repository, which
+         builds it with fontTools
+Licence: the licence in LICENSE; it is not anyone else's work
+
+A small face made from nothing by the script named above, stating an 'rtlm'
+feature in each way what it makes of a glyph depends on. It is listed here
+because every font the repository keeps is, and for where it came from; no
+third party's work is in it.
+
+============================================================================
 Fonts built for the variable vertical metrics and vertical kerning oracle
 ============================================================================
 

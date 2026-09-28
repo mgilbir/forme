@@ -100,6 +100,8 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `pointmatch_fixture.py`, `fonts/PointMatch*.ttf` | the faces that oracle needs and no foundry made |
 | `mathtable.py`, `mathtable.expected.txt` | what each face's MATH table states — see below |
 | `mathtable_fixture.py`, `fonts/MathTable.ttf` | the face that oracle needs and no foundry made |
+| `mirroredform.py`, `mirroredform.expected.txt` | what each face's 'rtlm' makes of every glyph it maps — see below |
+| `mirroredform_fixture.py`, `fonts/MirroredForms.ttf` | the face that oracle needs and no foundry made |
 | `ignorables_fixture.py`, `fonts/Ignorables.ttf`, `ignorables.txt`, `ignorables.expected.txt` | a corpus of the characters nothing is drawn for, shaped by `shape.py` in the face it needs — see below |
 
 Each corpus is weighted towards the places shaping decides something rather than
@@ -371,6 +373,25 @@ written; `shape/math_test.go` asks every glyph of every face and requires "not
 stated" of every glyph the file does not name.
 
 `make hbmath` regenerates it.
+
+## A glyph's mirrored form
+
+MathML Core draws a right-to-left operator or radical with the font's 'rtlm'
+form of its glyph where the font has one, before it asks for a mirror
+character (§5.3.2) — the other order from a line of text's.
+`shape/mirroredform.go` answers what 'rtlm' makes of one glyph, and
+`mirroredform.py` asks HarfBuzz the same of every character each face maps:
+the character shaped alone, left to right, as it is and with 'rtlm' on for the
+run. The faces are `fonts/MirroredForms.ttf`, built by
+`mirroredform_fixture.py` with the feature stated in each way the answer
+depends on (both single-substitution formats, a second lookup over the first's
+output, a lookup that takes a glyph apart, forms under one script only), the
+suite's `radical-rtlm.woff`, and Noto Sans Math, which states 182 forms, and
+STIX Two Math, which states none. `shape/mirroredform_test.go` asks every
+character of every face and requires "no form" of every one the file does not
+name.
+
+`make hbmirroredform` regenerates it.
 
 ## The characters nothing is drawn for
 

@@ -486,6 +486,12 @@ func useFace(face *Face) {
 		_, _ = face.Advance(r)
 		_, _ = face.GlyphIDForTest(r)
 		_ = face.StandsIn(r)
+		_, _ = face.MirroredForm(r)
+	}
+	// The characters a font's 'rtlm' is for: a bracket with a mirror, and
+	// operators with none.
+	for _, r := range []rune{'(', 0x221A, 0x2211, 0x222B} {
+		_, _ = face.MirroredForm(r)
 	}
 
 	clone := face.Clone()
