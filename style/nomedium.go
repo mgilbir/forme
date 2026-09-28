@@ -111,12 +111,11 @@ var noEffectOnAPage = map[string]bool{
 	"transition-duration": true, "transition-timing-function": true,
 	"transition-delay": true, "transition-behavior": true,
 
-	// And the hint that is defined as having no rendering effect at all.
-	// css-will-change says so in as many words: "this property has no direct
-	// effect on the element it is specified on beyond the browser's
-	// optimizations". An engine that ignores it renders the page the stylesheet
-	// describes, which is the whole of what this table is about.
-	"will-change": true,
+	// will-change was here, on its specification's word that "this property
+	// has no direct effect on the element it is specified on beyond the
+	// browser's optimizations". The same section gives it two: naming a
+	// property whose values make a stacking context or a containing block
+	// makes the box one. So it is read by layout now; see layout/willchange.go.
 }
 
 // hasNothingToApplyTo reports whether a property could not change this medium's

@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -36,10 +38,16 @@ import (
 // rather than a "border" primitive, because a backend that had to understand
 // border-collapse would be a second layout engine.
 //
-// There are five: FillRect, DrawText, DrawImage and TileImage, which put ink on
-// the page, and Link, which puts none and says where a hyperlink is. A backend
-// that switches over them must have a case for each, and one that only draws
-// may skip Link.
+// There are twelve: FillRect, DrawText, DrawTextShadow, DrawEmphasisMark,
+// DrawGlyphs, DrawImage, TileImage, FillGradient and FillPath, which put ink
+// on the page;
+// ClipPath and FilterGroup, which hold operations and clip what they put there
+// to a shape or filter it as a group; and Link, which puts none and says where
+// a hyperlink is. A backend that switches over them must have a case for each,
+// and one that only draws may skip Link. The set grows only by addition — an
+// operation's meaning, once stated, is not changed — so a backend that meets a
+// kind it has no case for has met something new, and should say so rather than
+// draw around it.
 type Op interface{ isOp() }
 
 // FillRect paints a rectangle in a solid colour.
@@ -124,13 +132,16 @@ type DrawText struct {
 	// Layout measures the run by what shaping reports for it with
 	// shape.Features.Vertical, per glyph — Glyph.YAdvance, and VOriginX and
 	// VOriginY across — where the face states vertical metrics (its vmtx: see
-	// shape.Face.StatesVerticalMetrics). A backend that shapes the run the same
-	// way and steps its pen by YAdvance draws the glyphs where layout placed
-	// them. Where the face states none the pen moves one em a character and
-	// the run is one em across, because CSS Writing Modes §4.4 says to
-	// synthesize the vertical metrics a face does not state and the em box is
-	// the synthesis; shaping's own synthesis for such a face, the height of its
-	// line, is HarfBuzz's and not CSS's, and a backend has to use the em.
+	// shape.Face.StatesVerticalMetrics). Where the face states none the pen
+	// moves one em a character and the run is one em across, because CSS
+	// Writing Modes §4.4 says to synthesize the vertical metrics a face does
+	// not state and the em box is the synthesis; shaping's own synthesis for
+	// such a face, the height of its line, is HarfBuzz's and not CSS's.
+	//
+	// ShapedGlyphs gives a backend both: an upright run comes back shaped with
+	// Features.Vertical, and with the em as its advances where the face states
+	// no vertical metrics. A backend that draws its glyphs and steps its pen
+	// down by -YAdvance draws them where layout placed them.
 	Upright bool
 	Face    *shape.Face
 	Size    style.Unit
@@ -174,6 +185,21 @@ type DrawText struct {
 	// is placed accordingly — so a backend that ignored it would draw the glyphs
 	// bunched at the left of a gap the right size.
 	CharSpacing style.Unit
+
+	// WidthScale squeezes the run across the direction its glyphs advance in:
+	// every glyph is drawn this many times its width, and every advance and
+	// offset along the run is scaled with it, about At — a PDF backend's Tz of
+	// a hundred times this. Zero is the run as the face draws it, which is
+	// every run but one.
+	//
+	// The one is a text-combine-upright composition (CSS Writing Modes §9.1)
+	// too wide for the em it has to fit: a horizontal run, neither Sideways
+	// nor Upright, standing in a vertical line, which §9.1.3 lets a UA
+	// compress "by scaling the text geometrically" where the face has no
+	// width variant that makes it fit. When set it is between nought and one.
+	// A backend that ignored it would draw the composition wider than its
+	// square, across the lines on either side. See layout/combine.go.
+	WidthScale float64
 
 	// Features is what the document turned off: a font's own rules that a CSS
 	// property or a CSS Text rule has overruled.
@@ -407,11 +433,16 @@ func PaintReporting(root *Fragment, rec *Recorder) []Op {
 		// told what it cut.
 		rec = NewRecorder(nil)
 	}
-	p := &painter{colors: map[string]style.RGBA{}, rec: rec}
+	p := &painter{colors: map[string]style.RGBA{}, rec: rec, filters: root.filters,
+		lengths: root.paintLengths}
 	p.dimming(root, 1, nil)
 	p.findInlineLevels(root)
 	p.canvasBackground(root)
-	p.stackingContext(root)
+	if filtersItsPaint(root.Box) {
+		p.filtering(root.Box, p.dimOf(root), root.filterClip, root.filterRound, func() { p.stackingContext(root) })
+	} else {
+		p.stackingContext(root)
+	}
 	p.settleGroups()
 	for _, b := range p.order {
 		p.groups[b].report(rec)
@@ -703,23 +734,46 @@ func (p *painter) backgroundImages(layers []bgPaint, who *Box) {
 		if l.Clip.Empty() || l.Tile.Empty() {
 			continue
 		}
-		if l.Solid != nil {
-			p.tiling(l, []bgBand{{Rect: Rect{W: l.Tile.W, H: l.Tile.H}, Color: *l.Solid}}, who)
+		if !l.Radii.IsZero() {
+			at := len(p.ops)
+			p.backgroundLayer(l, who)
+			var curve *roundClip
+			p.rounding(at, curve.with(l.Area, l.Radii))
 			continue
 		}
-		if len(l.Bands) > 0 {
-			p.tiling(l, l.Bands, who)
-			continue
-		}
-		if l.Image == nil {
-			continue
-		}
-		p.emit(TileImage{
+		p.backgroundLayer(l, who)
+	}
+}
+
+// backgroundLayer emits one resolved layer.
+func (p *painter) backgroundLayer(l bgPaint, who *Box) {
+	if l.Solid != nil {
+		p.tiling(l, []bgBand{{Rect: Rect{W: l.Tile.W, H: l.Tile.H}, Color: *l.Solid}}, who)
+		return
+	}
+	if len(l.Bands) > 0 {
+		p.tiling(l, l.Bands, who)
+		return
+	}
+	if l.Gradient != nil {
+		// One operation however many tiles, as a picture is: the count
+		// was checked against maxBackgroundTiles when the tiling was
+		// resolved, and nothing here multiplies it.
+		p.emit(FillGradient{
 			Clip: l.Clip, Tile: l.Tile,
 			StepX: l.StepX, StepY: l.StepY,
-			Image: l.Image, Key: l.Key,
+			Gradient: *l.Gradient,
 		})
+		return
 	}
+	if l.Image == nil {
+		return
+	}
+	p.emit(TileImage{
+		Clip: l.Clip, Tile: l.Tile,
+		StepX: l.StepX, StepY: l.StepY,
+		Image: l.Image, Key: l.Key,
+	})
 }
 
 // emit appends operations a fragment paints for itself, charged to the
@@ -735,6 +789,7 @@ func (p *painter) emit(ops ...Op) {
 		return
 	}
 	p.ops = append(p.ops, ops...)
+	p.painted += int64(len(ops))
 }
 
 type painter struct {
@@ -775,6 +830,19 @@ type painter struct {
 	lineLevels  map[*Fragment][]*inlineLevel
 	// orderPrefixes memoizes orderPrefix, per box.
 	orderPrefixes map[*Box][]orderStep
+	// reported is what reportOnce has said, per box.
+	reported map[any]bool
+	// filters is every filtered box's chain, from the root fragment. See
+	// filter.go.
+	filters map[*Box][]FilterFunction
+	// painted counts the marks emit has appended, and filterPasses the
+	// operations a filter has passed over to fold a colour matrix into them or
+	// cast a shadow of them, which the first pays for. See filterPass.
+	painted, filterPasses int64
+	// lengths is what a length the painter reads resolves against, from the
+	// root fragment, and shadows memoizes shadowsOf. See textshadow.go.
+	lengths style.LengthContext
+	shadows map[shadowKey][]textShadow
 	// joinRefused says the work budget refused the joining of an inline box's
 	// outline pieces once, so every outline after it is drawn a ring per
 	// piece rather than some joined and some not. See joinedOutline.
@@ -924,11 +992,20 @@ func (p *painter) stackingContext(f *Fragment) {
 // into the enclosing context by gather.
 func (p *painter) stackLevel(s stackLevel) {
 	if s.level != nil {
+		if filtersItsPaint(s.level.box) {
+			p.filteredLevel(s.level)
+			return
+		}
 		p.paintLevel(s.level)
 		return
 	}
 	if !sealsItsDescendants(s.frag.Box) {
 		p.unit(s.frag)
+		return
+	}
+	if filtersItsPaint(s.frag.Box) {
+		f := s.frag
+		p.filtering(f.Box, p.dimOf(f), f.filterClip, f.filterRound, func() { p.stackingContext(f) })
 		return
 	}
 	p.stackingContext(s.frag)
@@ -954,9 +1031,23 @@ func (p *painter) stackLevel(s stackLevel) {
 // "Not auto" is the *used* value, which is auto wherever z-index does not
 // apply — see usedZIndex. A static block with "opacity: 0.5; z-index: -1" is
 // sealed by its opacity and not by the number.
+//
+// And a box that formsAStackingContext for any other reason is one, positioned
+// or not: a "position: relative" box with an opacity, or whose will-change
+// names transform, seals its "z-index: -1" child in.
 func sealsItsDescendants(b *Box) bool {
 	_, auto := usedZIndex(b)
-	return !auto || b.Position == PositionFixed || groupsItsPaint(b)
+	return !auto || b.Position == PositionFixed || formsAStackingContext(b)
+}
+
+// formsAStackingContext reports whether a box is a stacking context for a
+// reason other than its position and its z-index — the three this engine
+// implements: an opacity below one (CSS Color 4 §3.3), a filter (Filter
+// Effects 1 §5), and a will-change naming a property some value of which would
+// make one (css-will-change 1 §3; see willChangeRules for which, and on which
+// boxes).
+func formsAStackingContext(b *Box) bool {
+	return groupsItsPaint(b) || filtersItsPaint(b) || willChangeStacks(b)
 }
 
 // # Who stacks where
@@ -1007,11 +1098,18 @@ func usedZIndex(b *Box) (z int, auto bool) {
 // §E.2 steps 3, 7 and 8 rather than in the layer its display would put it in:
 // every positioned box and every stacking context.
 //
-// A stacking context that is not positioned is one of two things this engine
-// implements: a box with an opacity below one, which CSS Color 4 paints
-// at the stacking order a positioned element with "z-index: 0" would have, and
-// a flex or grid item with a z-index. The first stacks at zero whatever its z-index says, because z-index
-// does not apply to it; the second stacks at its number.
+// A stacking context that is not positioned is one of two things: a box that
+// formsAStackingContext, or a flex or grid item with a z-index. The first
+// stacks at zero whatever its z-index says, because z-index does not apply to
+// it, and the second at its number (and an item that formsAStackingContext
+// with a z-index of auto, at zero). Zero is where the specifications that say
+// place one: CSS Color 4 paints a translucent box "as if it were a positioned
+// element with z-index:0", CSS Transforms 1 §2 a transformed one "at the same
+// stacking order that would be used if it were a positioned element with
+// z-index: 0", and Filter Effects and CSS Masking make theirs "the same way
+// that CSS opacity does". Compositing, Containment, View Transitions and
+// css-will-change say only that the box is a stacking context, and it is
+// painted where every other stacking context that is not positioned is.
 //
 // It is asked of a box, and a non-atomic inline box is one too: what such a
 // box paints is gathered into an inline level and sorted as one entry. A block
@@ -1019,7 +1117,7 @@ func usedZIndex(b *Box) (z int, auto bool) {
 // part of the inline's level, which is how it comes to be painted where the
 // inline is. See inlinestacking.go.
 func stacksAsLevel(b *Box) bool {
-	if b.Position.positioned() || groupsItsPaint(b) {
+	if b.Position.positioned() || formsAStackingContext(b) {
 		return true
 	}
 	_, auto := usedZIndex(b)
@@ -1091,7 +1189,7 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 		// own.
 		lv.tables = append(lv.tables, f)
 	}
-	if len(f.Lines) > 0 || f.Marker != nil || f.Box.Replaced != nil {
+	if len(f.Lines) > 0 || f.Marker != nil || f.Box.Replaced != nil || len(f.mathMarks) > 0 || len(f.mathGlyphs) > 0 {
 		lv.content = append(lv.content, contentItem{frag: f})
 	}
 	if collect {
@@ -1316,6 +1414,15 @@ func (p *painter) clipping(c Clip, paint func()) {
 	p.ops = clipOps(p.ops, at, c)
 }
 
+// clippingRound is clipping, and then the curve of every rounded box in a
+// chain as well. The rectangle is cut first, so what the curves have left to do
+// is the corners; see roundOps.
+func (p *painter) clippingRound(c Clip, round *roundClip, paint func()) {
+	at := len(p.ops)
+	p.clipping(c, paint)
+	p.rounding(at, round)
+}
+
 // clipOps narrows every operation from index at onwards, dropping the ones that
 // no longer mark anything.
 func clipOps(ops []Op, at int, c Clip) []Op {
@@ -1344,6 +1451,15 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 			}
 			kept = append(kept, v)
 
+		case FillGradient:
+			// The same statement narrowed, as for a tiling of a picture: the
+			// gradient is laid out against its tiles, which do not move.
+			v.Clip = v.Clip.Intersect(c.Rect)
+			if v.Clip.Empty() {
+				continue
+			}
+			kept = append(kept, v)
+
 		case DrawImage:
 			if c.Rect.Intersect(v.Rect).Empty() {
 				continue
@@ -1355,6 +1471,71 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 				// different marks when they put the same ink on the page.
 				v.Clip = Clip{}
 			}
+			kept = append(kept, v)
+
+		case FillPath:
+			// A shape cannot be cut by arithmetic, so the clip travels with it
+			// as a picture's does, and only when it cuts.
+			b := v.Path.Bounds()
+			if c.hides(b) {
+				continue
+			}
+			if !c.admits(b) {
+				v.Clip = v.Clip.meet(c)
+			}
+			kept = append(kept, v)
+
+		case DrawTextShadow:
+			// A run's shadow is cut as the run is, by the same two
+			// questions, asked of where its blur reaches; the clip applies
+			// to the blurred shadow.
+			grow := func(r Rect) Rect {
+				d := v.StdDev.Mul(blurReach)
+				return r.Outset(Edges{Top: d, Right: d, Bottom: d, Left: d})
+			}
+			if c.hides(shadowInk(v)) {
+				continue
+			}
+			if !c.admits(grow(textInk(v.Run))) {
+				v.Run.Clip = v.Run.Clip.meet(c)
+			}
+			kept = append(kept, v)
+
+		case DrawEmphasisMark:
+			// A mark is glyphs, and is cut as a run of text is, by the same
+			// two questions: see the DrawText case below.
+			if ink := textInk(v.Mark); !ink.Empty() {
+				if c.hides(textInkReserved(v.Mark)) {
+					continue
+				}
+				if !c.admits(ink) {
+					v.Mark.Clip = v.Mark.Clip.meet(c)
+				}
+			}
+			kept = append(kept, v)
+
+		case FilterGroup:
+			// A filter is applied before the clip, so the clip goes on the
+			// group and not into what it holds: a blur cut by a rectangle is
+			// not the blur of what the rectangle leaves.
+			ext := v.Extent()
+			if c.hides(ext) {
+				continue
+			}
+			if !c.admits(ext) {
+				v.Clip = v.Clip.meet(c)
+			}
+			kept = append(kept, v)
+
+		case ClipPath:
+			// Clipping commutes: what is inside a curve and inside a
+			// rectangle is the same whichever cuts first, so the rectangle
+			// goes to what the group holds.
+			inner := clipOps(append([]Op(nil), v.Ops...), 0, c)
+			if len(inner) == 0 {
+				continue
+			}
+			v.Ops = inner
 			kept = append(kept, v)
 
 		case Link:
@@ -1371,6 +1552,19 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 				continue
 			}
 			v.Rects = rects
+			kept = append(kept, v)
+
+		case DrawGlyphs:
+			// Glyphs named by index are cut as a run of text is, by the same
+			// two questions; their ink is known exactly, so both are asked of
+			// it (see glyphsInk).
+			ink := glyphsInk(v)
+			if c.hides(ink) {
+				continue
+			}
+			if !c.admits(ink) {
+				v.Clip = v.Clip.meet(c)
+			}
 			kept = append(kept, v)
 
 		case DrawText:
@@ -1435,7 +1629,14 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 // It is deliberately not the rectangle for the question of whether to keep a run
 // at all; textInkReserved is, and says why.
 func textInk(v DrawText) Rect {
-	above, below := v.Size, v.Size.Mul(0.3)
+	above, below := textInkAcross(v)
+	return textInkAt(v, above, below)
+}
+
+// textInkAcross is how far textInk's rectangle reaches above and below the
+// run's baseline.
+func textInkAcross(v DrawText) (above, below style.Unit) {
+	above, below = v.Size, v.Size.Mul(0.3)
 	if v.Face != nil {
 		if a, b, ok := v.Face.InkExtent(v.Text, v.Size.Px()); ok {
 			above, _ = style.FromPx(a)
@@ -1446,7 +1647,7 @@ func textInk(v DrawText) Rect {
 			below = v.Size.Mul(-float64(d.Descent) / upem)
 		}
 	}
-	return textInkAt(v, above, below)
+	return above, below
 }
 
 // textInkReserved is every pixel the run could reach: the box inline layout set
@@ -1484,6 +1685,11 @@ func textInkAt(v DrawText, above, below style.Unit) Rect {
 	var width style.Unit
 	if v.Face != nil {
 		w, _ := style.FromPx(v.Face.Measure(v.Text, v.Size.Px()))
+		if v.WidthScale > 0 {
+			// Squeezed across, as the backend is told to draw it. See
+			// DrawText.WidthScale.
+			w = w.Mul(v.WidthScale)
+		}
 		// The characters letter-spacing goes after, and not every rune: a run
 		// of zero-width formatting characters is not a run of typographic
 		// character units, and counting them makes a word's ink reach a
@@ -1529,9 +1735,9 @@ func uprightExtent(v DrawText) (along, above, below style.Unit) {
 	if !v.Face.StatesVerticalMetrics() {
 		return v.Size.Mul(float64(uprightUnits(v.Text))), half, half
 	}
-	off := v.Features
-	off.Vertical = true
-	glyphs, _ := v.Face.ShapeGlyphsInContext(v.Text, v.PreContext, v.PostContext, off)
+	// The glyphs a backend draws: see ShapedGlyphs, which is what makes the
+	// run's extent and its drawing one answer.
+	glyphs, _ := shapedUpright(v)
 	if len(glyphs) == 0 {
 		return 0, half, half
 	}
@@ -1585,13 +1791,13 @@ func (p *painter) decorationsIn(f *Fragment) {
 		}
 		if !f.bgSuppressed {
 			for _, band := range f.bgBands {
-				p.clipping(f.clipSelf.with(band), func() { p.paintBackground(f) })
+				p.clippingRound(f.clipSelf.with(band), f.roundSelf, func() { p.paintBackground(f) })
 			}
 		}
-		p.clipping(f.clipSelf, func() { p.borders(f) })
+		p.clippingRound(f.clipSelf, f.roundSelf, func() { p.borders(f) })
 		return
 	}
-	p.clipping(f.clipSelf, func() { p.paintDecorations(f) })
+	p.clippingRound(f.clipSelf, f.roundSelf, func() { p.paintDecorations(f) })
 }
 
 func (p *painter) paintDecorations(f *Fragment) {
@@ -1623,10 +1829,18 @@ func (p *painter) paintDecorations(f *Fragment) {
 // border-box means, and is why a dashed border shows the background through its
 // gaps rather than the page. It stops at the border box and never reaches the
 // margin, which is the space that is meant to show through.
+//
+// With rounded corners the colour is the rounded shape of that box and each
+// image is clipped to the curve of its own painting area: CSS Backgrounds 3
+// §4.3. With square ones they are what they always were.
 func (p *painter) paintBackground(f *Fragment) {
 	if bg, ok := p.color(f.Box, "background-color"); ok && bg.A > 0 {
 		if rect := f.bgColorRect; !rect.Empty() {
-			p.emit(FillRect{Rect: rect, Color: bg})
+			if f.bgColorRadii.IsZero() {
+				p.emit(FillRect{Rect: rect, Color: bg})
+			} else {
+				p.emit(FillPath{Path: roundedRect(rect, f.bgColorRadii), Color: bg})
+			}
 		}
 	}
 	p.backgroundImages(f.background, f.Box)
@@ -1652,7 +1866,7 @@ func (p *painter) content(f *Fragment) {
 	if f.clipContent.blocks() {
 		return
 	}
-	p.grouped(f, func() { p.clipping(f.clipContent, func() { p.paintContent(f) }) })
+	p.grouped(f, func() { p.clippingRound(f.clipContent, f.roundContent, func() { p.paintContent(f) }) })
 	p.lines(f)
 }
 
@@ -1672,7 +1886,11 @@ func (p *painter) paintContent(f *Fragment) {
 			// does when the picture is larger than the box it was put in.
 			fit, _ := objectFitOf(f.Box.Style.Get("object-fit"))
 			rect, clip := fitContent(box, naturalSizeOf(r), fit, objectPositionOf(f.Box))
-			p.clipping(clip, func() {
+			// CSS Backgrounds 3 §4.3: "replaced element content to the curved
+			// content edge", when the box's corners are rounded.
+			var curve *roundClip
+			curve = curve.with(box, f.contentRadii())
+			p.clippingRound(clip, curve, func() {
 				// Content that is one colour is a fill, not a picture stretched
 				// over the box. The two paint the same pixels and only one of
 				// them says on the page what the document said in its source —
@@ -1690,6 +1908,9 @@ func (p *painter) paintContent(f *Fragment) {
 			})
 		}
 	}
+	// A formula's rules and glyphs: content, as a replaced element's is. See
+	// mathpaint.go.
+	p.mathMarks(f)
 	if m := f.Marker; m != nil && m.Image != nil && m.Image.Image != nil && !hidden {
 		// §12.6.2: the image *replaces* the marker the type would have made, so
 		// the text below is not drawn as well. It is still on the Marker, which
@@ -1735,19 +1956,40 @@ func (p *painter) paintContent(f *Fragment) {
 // clip is the content clip of the block whose line the fragment is on: an
 // inline box clips nothing of its own, and what cuts it is what cuts the words
 // beside it. See resolveClips.
-func (p *painter) inlineDecorations(f *Fragment, clip Clip) {
+func (p *painter) inlineDecorations(f *Fragment, clip Clip, round *roundClip) {
 	if f.Box == nil {
 		return
 	}
 	at := len(p.ops)
-	p.grouped(f, func() { p.clipping(clip, func() { p.decorationsIn(f) }) })
-	for i := at; i < len(p.ops); i++ {
-		r, ok := p.ops[i].(FillRect)
-		if !ok {
-			continue
+	p.grouped(f, func() { p.clippingRound(clip, round, func() { p.decorationsIn(f) }) })
+	markOverhang(p.ops[at:])
+}
+
+// markOverhang marks every fill among ops as an overhang, including those a
+// rounded corner put inside a ClipPath.
+func markOverhang(ops []Op) {
+	for i, op := range ops {
+		switch r := op.(type) {
+		case FillRect:
+			r.Overhang = true
+			ops[i] = r
+		case FillGradient:
+			r.Overhang = true
+			ops[i] = r
+		case FillPath:
+			r.Overhang = true
+			ops[i] = r
+		case ClipPath:
+			inner := append([]Op(nil), r.Ops...)
+			markOverhang(inner)
+			r.Ops = inner
+			ops[i] = r
+		case FilterGroup:
+			inner := append([]Op(nil), r.Ops...)
+			markOverhang(inner)
+			r.Ops = inner
+			ops[i] = r
 		}
-		r.Overhang = true
-		p.ops[i] = r
 	}
 }
 
@@ -1769,6 +2011,12 @@ func (p *painter) borders(f *Fragment) {
 		// losing candidate on the page after the winner — and would draw it at
 		// its full width over a line that is meant to be shared, which is the
 		// separated model showing through.
+		return
+	}
+	if !f.radii.IsZero() {
+		// Rounded corners: the border is drawn between two curves, and a
+		// rectangle is no longer a shape it is made of. See radius.go.
+		p.roundedBorders(f)
 		return
 	}
 	r := f.BorderRect
@@ -1851,7 +2099,7 @@ func (p *painter) outlineWalk(f *Fragment) {
 	if f.Box == nil {
 		return
 	}
-	p.grouped(f, func() { p.clipping(f.clipSelf, func() { p.outline(f) }) })
+	p.grouped(f, func() { p.clippingRound(f.clipSelf, f.roundSelf, func() { p.outline(f) }) })
 	p.lineOutlines(f, nil)
 	for _, c := range f.Children {
 		if c == nil || c.Box == nil || opensAContext(c) {
@@ -1903,7 +2151,9 @@ func (p *painter) outlinePieces(f *Fragment, boxes []*Fragment, want *inlineLeve
 	}
 	for _, b := range order {
 		ps := pieces[b]
-		p.grouped(ps[0], func() { p.clipping(f.clipContent, func() { p.joinedOutline(ps) }) })
+		p.grouped(ps[0], func() {
+			p.clippingRound(f.clipContent, f.roundContent, func() { p.joinedOutline(ps) })
+		})
 	}
 }
 
@@ -1919,6 +2169,11 @@ func (p *painter) outline(f *Fragment) { p.joinedOutline([]*Fragment{f}) }
 // the simpler one: an outline has a single width, so the two horizontal bands
 // run the full width of the ring and the vertical ones fill what is between
 // them.
+//
+// The ring's inner edge is the border box moved out by outline-offset, and a
+// box with rounded corners has an outline with rounded corners: the band of
+// the outline's width outside the offset edge and its outset-adjusted radii,
+// drawn as a rounded border of that width is. See outlineshape.go.
 //
 // # One outline for a box broken across lines
 //
@@ -1937,11 +2192,13 @@ func (p *painter) outline(f *Fragment) { p.joinedOutline([]*Fragment{f}) }
 // outer rectangles less the union of the pieces themselves, and that is what
 // is drawn: piece j's bands, less every earlier piece's outer rectangle (the
 // earlier piece painted that part already, or it is inside the earlier
-// piece) and every later piece's border box (it is inside that piece). Each
+// piece) and every later piece's inner edge (it is inside that piece). Each
 // point of the union is painted by exactly one piece, the first whose outer
 // rectangle holds it, so a translucent outline is not darker where two meet.
 // Pieces whose rings do not meet are cut by nothing, and draw exactly the
-// rings they drew before.
+// rings they drew before. Rounded pieces whose rings do not meet are each a
+// rounded ring; where rounded pieces meet, the union is drawn square, and that
+// is reported.
 //
 // The cut is exact for a solid outline, which is a set of rectangles. For the
 // other styles each remaining part of a band is drawn as a band of its own,
@@ -1958,13 +2215,14 @@ func (p *painter) joinedOutline(pieces []*Fragment) {
 	if w <= 0 || first.Box == nil || isHidden(first.Box) {
 		return
 	}
-	colour, ok := p.color(first.Box, "outline-color")
+	colour, ok := p.outlineColour(first.Box)
 	if !ok || colour.A == 0 {
 		// "invert", or a colour that did not parse. The finding was raised in
 		// layout, where there was a recorder to raise it with.
 		return
 	}
-	kind := parseBorderStyle(first.Box.Style.Get("outline-style"))
+	kind := outlineStyle(first.Box)
+	offset := first.outlineOffset
 
 	// paintEdge is the border's, and a border's fills are not Overhang because
 	// layout accounted for every one of them. These are marked afterwards rather
@@ -1972,32 +2230,36 @@ func (p *painter) joinedOutline(pieces []*Fragment) {
 	// flag would be a property of the caller pretending to be a property of the
 	// edge, and every border call site would have to pass false.
 	at := len(p.ops)
-	defer func() {
-		for i := at; i < len(p.ops); i++ {
-			if r, ok := p.ops[i].(FillRect); ok {
-				r.Overhang = true
-				p.ops[i] = r
-			}
-		}
-	}()
+	defer func() { markOverhang(p.ops[at:]) }()
 
 	n := len(pieces)
-	if n == 1 {
-		r := first.BorderRect
-		o := Rect{X: r.X.Sub(w), Y: r.Y.Sub(w), W: r.W.Add(w).Add(w), H: r.H.Add(w).Add(w)}
-		for _, band := range ringBands(o, r, w) {
-			p.paintEdge(band.band, kind, colour, band.side, w)
-		}
-		return
-	}
 	inner := make([]Rect, n)
 	outer := make([]Rect, n)
+	innerR := make([]Radii, n)
+	outerR := make([]Radii, n)
+	round := false
 	var tallest style.Unit
 	for i, f := range pieces {
-		r := f.BorderRect
-		inner[i] = r
-		outer[i] = Rect{X: r.X.Sub(w), Y: r.Y.Sub(w), W: r.W.Add(w).Add(w), H: r.H.Add(w).Add(w)}
+		inner[i], innerR[i], outer[i], outerR[i] = outlineEdges(f.BorderRect, f.radii, offset, w)
+		round = round || !outerR[i].IsZero()
 		tallest = style.Max(tallest, outer[i].H)
+	}
+	sides := [4]ringSide{}
+	for i := range sides {
+		sides[i] = ringSide{kind: kind, colour: colour, paints: kind != borderNone && kind != borderHidden}
+	}
+	ringOf := func(i int) {
+		if outerR[i].IsZero() {
+			for _, band := range ringBands(outer[i], inner[i], w) {
+				p.paintEdge(band.band, kind, colour, band.side, w)
+			}
+			return
+		}
+		p.roundedRing(outer[i], outerR[i], Edges{Top: w, Right: w, Bottom: w, Left: w}, sides)
+	}
+	if n == 1 {
+		ringOf(0)
+		return
 	}
 	// The pieces by the top of their outer rectangle, so that the ones that
 	// can meet piece j — whose tops lie within the tallest ring above j's
@@ -2008,10 +2270,52 @@ func (p *painter) joinedOutline(pieces []*Fragment) {
 		byTop[i] = i
 	}
 	sort.SliceStable(byTop, func(a, b int) bool { return outer[byTop[a]].Y < outer[byTop[b]].Y })
+	window := func(j int) int {
+		return sort.Search(n, func(k int) bool { return outer[byTop[k]].Y > outer[j].Y.Sub(tallest) })
+	}
+
+	if round {
+		// Rounded pieces whose rings do not meet are each their own ring, which
+		// is the minimum CSS UI 4 asks for and follows each piece's corners.
+		// Where two meet, the shape that encloses both is not one this engine
+		// joins with curves in it: the pieces are drawn as the square union
+		// below, and that is reported.
+		//
+		// Each comparison is charged as the join's are, below, and past the
+		// budget the pieces are drawn a ring each, which is what the budget's
+		// finding says happens.
+		meet := false
+		for j := 0; j < n && !meet && !p.joinRefused; j++ {
+			for k := window(j); k < n && outer[byTop[k]].Y < outer[j].Bottom(); k++ {
+				if !p.rec.charge(costMarkCompared,
+					"the joining of outlines broken across lines past that point, drawn a ring per piece") {
+					p.joinRefused = true
+					break
+				}
+				if i := byTop[k]; i != j && !outer[i].Intersect(outer[j]).Empty() {
+					meet = true
+					break
+				}
+			}
+		}
+		if !meet || p.joinRefused {
+			for i := range pieces {
+				ringOf(i)
+			}
+			return
+		}
+		p.reportOnce(first.Box, "square-outline", Finding{
+			Rule:     RuleUnsupportedValue,
+			Source:   AtHTML(offsetOf(first.Box)),
+			Message:  "the outline of a box with rounded corners, broken across lines whose outlines meet, was drawn with square corners",
+			Path:     PathOf(first.Box.Element),
+			Property: "outline-style",
+		})
+	}
 
 	for j := range pieces {
 		o, r := outer[j], inner[j]
-		from := sort.Search(n, func(k int) bool { return outer[byTop[k]].Y > o.Y.Sub(tallest) })
+		from := window(j)
 		for _, band := range ringBands(o, r, w) {
 			parts := []Rect{band.band}
 			for k := from; k < n && outer[byTop[k]].Y < o.Bottom() && !p.joinRefused; k++ {
@@ -2124,7 +2428,7 @@ func (p *painter) lines(f *Fragment) {
 			if box == nil || p.innerLevelOf(box.Box) != nil {
 				continue
 			}
-			p.inlineDecorations(box, f.clipContent)
+			p.inlineDecorations(box, f.clipContent, f.roundContent)
 		}
 		for ri := range line.Runs {
 			if p.innerLevelOf(line.Runs[ri].Box) != nil {
@@ -2150,7 +2454,7 @@ func (p *painter) levelMarks(f *Fragment, marks []lineMark, l *inlineLevel) {
 		line := &f.Lines[m.line]
 		if m.box >= 0 {
 			if box := line.Boxes[m.box]; !l.owns(box.Box) {
-				p.inlineDecorations(box, f.clipContent)
+				p.inlineDecorations(box, f.clipContent, f.roundContent)
 			}
 			continue
 		}
@@ -2240,13 +2544,16 @@ func (p *painter) lineRun(f *Fragment, content Rect, around dim, line *LineFragm
 	// is the block's opacity and every translucent inline box it is inside,
 	// and the next run on the line may be inside none.
 	p.as(p.inlineDim(run.Box, around), func() {
-		p.clipping(f.clipContent, func() { p.paintRun(run, at, colour, turnOfLine(*line)) })
+		p.clippingRound(f.clipContent, f.roundContent, func() { p.paintRun(run, at, colour, turnOfLine(*line)) })
 	})
 }
 
 // paintRun paints one run of text at its pen position, with the lines ruled
 // across it.
 func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTurn) {
+	// The run's shadows, which go under everything else it paints: CSS Text
+	// Decoration 3 §5.1. See textshadow.go.
+	shadows := p.shadowsOf(run.Box)
 	if _, isControl := controlOf(run.Text); isControl {
 		// CSS Text 3 requires a control character to be visible, and no
 		// face has a glyph for one — so the mark is synthesized here
@@ -2257,7 +2564,15 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 		// the page beside the box, and would put the control character
 		// itself into the text extracted from the page, where it is
 		// exactly the thing a reader does not want back.
-		p.emit(controlBox(at, run.Width, run.Size, colour, turn)...)
+		box := controlBox(at, run.Width, run.Size, colour, turn)
+		if len(shadows) > 0 {
+			var rects []Rect
+			for _, op := range box {
+				rects = append(rects, op.(FillRect).Rect)
+			}
+			p.paintShadows(shadows, nil, nil, rects, nil, nil)
+		}
+		p.emit(box...)
 		return
 	}
 	// The two lines that sit clear of the letters are drawn first, so the
@@ -2266,9 +2581,12 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 	// the order every renderer uses, and it only matters where a
 	// decoration's colour differs from the text's — which is precisely the
 	// case §16.3.1 exists to describe.
-	p.decorate(run, at, turn, false)
-	p.emit(DrawText{
-		At:            at,
+	under := p.decorationMarks(run, at, turn, false)
+	over := p.decorationMarks(run, at, turn, true)
+	text := DrawText{
+		// The glyphs' own origin, which on a vertical line is not always the
+		// baseline the decorations were measured from. See TextRun.drawShift.
+		At:            runPoint(at, run.drawShift, turn),
 		Sideways:      turn.sideways,
 		Anticlockwise: turn.anticlockwise,
 		Upright:       run.Upright,
@@ -2284,11 +2602,68 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 		Size:          run.Size,
 		Color:         colour,
 		CharSpacing:   run.LetterSpacing,
-	})
-	p.decorate(run, at, turn, true)
+	}
+	if run.combined {
+		// A text-combine-upright composition is drawn across the page in its
+		// square, and not along the line; its decorations above are along the
+		// line, across the square, as the one glyph §9.1.2 says it is.
+		if v, ok := combinedText(run, at, turn, colour); ok {
+			text = v
+		}
+	}
+	// The emphasis marks, which CSS Text Decoration 3 §5.1 paints over the
+	// text and under the line-through. See emphasis.go.
+	marks := p.emphasisMarks(run, text, at, turn)
+	if len(shadows) > 0 {
+		p.paintShadows(shadows, rectsOf(under), &text, nil, marks, rectsOf(over))
+	}
+	p.decorate(under)
+	p.emit(text)
+	for _, m := range marks {
+		// One of a transparent colour is not drawn and is still shadowed, as
+		// a decoration line is: the shadow is of its shape.
+		if m.Color.A > 0 {
+			p.emit(DrawEmphasisMark{Mark: m})
+		}
+	}
+	p.decorate(over)
 }
 
-// decorate paints the lines ruled across one run.
+// emphasisMarks is a run's emphasis marks in text-emphasis-color, which is the
+// text's colour where it says "currentcolor".
+//
+// at is the run's pen on its box's baseline, which the marks are measured
+// from; text's own pen may be across the line from it (TextRun.drawShift).
+// Along the line the two are one point, so text's units are where they are
+// from either.
+func (p *painter) emphasisMarks(run TextRun, text DrawText, at Point, turn runTurn) []DrawText {
+	if run.emphasis == nil || run.Width <= 0 {
+		return nil
+	}
+	colour, ok := p.color(run.Box, "text-emphasis-color")
+	if !ok {
+		colour = text.Color
+	}
+	if run.combined {
+		// A text-combine-upright composition is one character to its marks as
+		// to everything else but its own drawing — §9.1.2's single glyph
+		// representing U+FFFC — and it stands on the line in an em square hung
+		// from the central baseline, as an upright character does. So it takes
+		// one mark, centred on its em along the line and set beyond it as an
+		// upright run's. text is drawn across the page and says nothing of
+		// that.
+		spans := []unitSpan{{text: combinedUnit, lo: 0, hi: run.Size, have: true}}
+		return run.emphasis.marks(spans, at, true, colour, turn)
+	}
+	return run.emphasis.marks(unitSpans(text), at, run.Upright, colour, turn)
+}
+
+// combinedUnit is the character a text-combine-upright composition is for
+// every purpose but its drawing: CSS Writing Modes §9.1.2's U+FFFC.
+const combinedUnit = "\uFFFC"
+
+// decorationMarks is the lines ruled across one run, where they go and in what
+// colour; decorate paints them, and a text shadow shadows them.
 //
 // over selects the pass: the line-through, which goes on top of the letters, or
 // the underline and overline, which go under them.
@@ -2306,16 +2681,17 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 // overlining div are ruled by one straight line. at.Y is the run's own baseline
 // and carries the run's own shift, which is undone here and the declaring box's
 // put in its place.
-func (p *painter) decorate(run TextRun, at Point, turn runTurn, over bool) {
+func (p *painter) decorationMarks(run TextRun, at Point, turn runTurn, over bool) []FillRect {
 	if len(run.Decorations) == 0 || run.Width <= 0 {
-		return
+		return nil
 	}
+	var out []FillRect
 	for _, d := range run.Decorations {
 		if (d.Kind == decorationLineThrough) != over {
 			continue
 		}
 		colour, ok := p.color(heldBox(d.By), "text-decoration-color")
-		if !ok || colour.A == 0 {
+		if !ok {
 			continue
 		}
 		// The band in the run's own axes, from an origin at the start of its
@@ -2337,10 +2713,32 @@ func (p *painter) decorate(run TextRun, at Point, turn runTurn, over bool) {
 		if band.Empty() {
 			continue
 		}
-		p.emit(FillRect{
+		out = append(out, FillRect{
 			Rect: placeRun(band, at, turn), Color: colour, Overhang: true,
 		})
 	}
+	return out
+}
+
+// decorate paints decoration lines. One of a transparent colour is not painted,
+// though it is still shadowed: a shadow is of the line's shape and not of its
+// ink, as a transparent run's shadow is.
+func (p *painter) decorate(marks []FillRect) {
+	for _, m := range marks {
+		if m.Color.A == 0 {
+			continue
+		}
+		p.emit(m)
+	}
+}
+
+// rectsOf is where a set of fills are.
+func rectsOf(fs []FillRect) []Rect {
+	out := make([]Rect, len(fs))
+	for i, f := range fs {
+		out[i] = f.Rect
+	}
+	return out
 }
 
 // placeRun puts a rectangle measured in a run's own axes onto the page.
@@ -2370,6 +2768,16 @@ func turnOfLine(l LineFragment) runTurn {
 
 func turnOfRun(v DrawText) runTurn {
 	return runTurn{sideways: v.Sideways, anticlockwise: v.Anticlockwise}
+}
+
+// runPoint is placeRun for a point: the one across a run's baseline from at,
+// down by across in the run's own axes.
+func runPoint(at Point, across style.Unit, turn runTurn) Point {
+	if across == 0 {
+		return at
+	}
+	r := placeRun(Rect{Y: across}, at, turn)
+	return Point{X: r.X, Y: r.Y}
 }
 
 func placeRun(r Rect, at Point, turn runTurn) Rect {
@@ -2487,9 +2895,24 @@ func ShapedText(v DrawText) string {
 // run after it is drawn in the wrong place too. A backend calling ShapeGlyphs
 // directly gets that wrong silently, which is why the pairing is stated here
 // rather than left as something every backend has to remember.
+//
+// An upright run (DrawText.Upright) is shaped as layout measured it: with
+// shape.Features.Vertical and the run's own features, its text and its context,
+// so each glyph comes back with YAdvance, VOriginX and VOriginY and an XAdvance
+// of zero, and the pen steps down by -YAdvance. Where the face states no
+// vertical metrics the advances are the em CSS Writing Modes §4.4 has layout
+// synthesize rather than shaping's own synthesis: each character that takes
+// an advance upright (paragraph.UprightUnits) gives one em to the first of its
+// glyphs, and every other glyph advances nothing. Either way the advances sum
+// to the extent layout gave the run. It shaped an upright run as a horizontal
+// one before, so a backend that followed it drew the run at the face's
+// horizontal advances, down a column layout had measured by the vertical ones.
 func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 	if v.Face == nil {
 		return nil, 0
+	}
+	if v.Upright {
+		return shapedUpright(v)
 	}
 	if !v.ContextKerns {
 		// The neighbour is set in another face, so its characters decide this
@@ -2502,6 +2925,59 @@ func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 	return v.Face.ShapeGlyphsMerged(ShapedText(v), v.PreContext, v.PostContext,
 		v.MergePre, v.MergePost, true,
 		v.Features)
+}
+
+// shapedUpright is ShapedGlyphs for an upright run.
+//
+// The text is the run's own and not ShapedText's. An upright run is not cut by
+// direction — every character of it is set in the order it is written, as CSS
+// Writing Modes §5.1 has them treated as strong left-to-right — and layout
+// measured the text as it is (see paragraph's uprightKey); an override in
+// front of it would be one more character than the run layout measured.
+func shapedUpright(v DrawText) ([]shape.Glyph, int) {
+	off := v.Features
+	off.Vertical = true
+	glyphs, missing := v.Face.ShapeGlyphsInContext(v.Text, v.PreContext, v.PostContext, off)
+	if !v.Face.StatesVerticalMetrics() {
+		emPerUnit(glyphs, v.Text)
+	}
+	return glyphs, missing
+}
+
+// emPerUnit sets the advances of an upright run in a face with no vertical
+// metrics: one em, in the thousandths a glyph is measured in, for each
+// character UprightUnits counts, given to the first glyph of the ones that
+// character's cluster is drawn with, and nothing to any other glyph.
+//
+// A character's glyph is the one whose cluster is the last at or before it:
+// where a character was drawn into the glyph of the one before it — shaping
+// merged the two — its em goes to that glyph, so the total is kept whatever
+// the face did. The glyphs are taken in order of their cluster, which is the
+// order they come in already for an upright run, and "first" is the earliest
+// of those with one cluster.
+func emPerUnit(glyphs []shape.Glyph, text string) {
+	if len(glyphs) == 0 {
+		return
+	}
+	order := make([]int, len(glyphs))
+	for i := range order {
+		order[i] = i
+		glyphs[i].YAdvance = 0
+	}
+	slices.SortStableFunc(order, func(a, b int) int { return glyphs[a].Cluster - glyphs[b].Cluster })
+	// k is the last glyph whose cluster is at or before the character, and
+	// first the earliest glyph with k's cluster. Both only move forward, so
+	// the walk is linear in the glyphs and the characters together.
+	k, first := 0, 0
+	for _, start := range paragraph.AppendUprightUnitStarts(nil, text) {
+		for k+1 < len(order) && glyphs[order[k+1]].Cluster <= start {
+			k++
+			if glyphs[order[k]].Cluster != glyphs[order[k-1]].Cluster {
+				first = k
+			}
+		}
+		glyphs[order[first]].YAdvance -= 1000
+	}
 }
 
 // maxLayerMarks bounds the rectangles one background layer is drawn as.

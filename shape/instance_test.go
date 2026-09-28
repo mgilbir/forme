@@ -246,9 +246,13 @@ func TestLoadInstanceRefuses(t *testing.T) {
 			func() []byte { f := good; f.axes = nil; f.tuples = nil; return f.build(t) }(), nil,
 			"no fvar table"},
 
-		{"a CFF2 font, whose outlines vary by another mechanism",
-			func() []byte { f := good; f.extra = map[string][]byte{"CFF2": {0, 2, 0, 0}}; return f.build(t) }(), bold,
-			"CFF2"},
+		{"a CFF2 font whose CFF2 table cannot be read",
+			func() []byte {
+				f := good
+				f.extra = map[string][]byte{"glyf": nil, "CFF2": {0, 2, 0, 0}}
+				return f.build(t)
+			}(), bold,
+			"outlines are CFF2, and its CFF2 table cannot be read"},
 
 		{"a font with no glyf outlines to move",
 			func() []byte { f := good; f.extra = map[string][]byte{"glyf": nil}; return f.build(t) }(), bold,
@@ -316,14 +320,23 @@ func TestLoadInstanceRefuses(t *testing.T) {
 			}(), bold,
 			"it names point 99 and the glyph has 8"},
 
-		{"a composite placed by matching points rather than at an offset",
+		// A composite placed by matching points is instanced (pointmatch.go),
+		// and one whose match an instance cannot keep is placed at an offset
+		// instead — which is right only where its points start the glyph
+		// drawn, since the match counts from there. Glyph 3 matches its
+		// rectangle's right phantom point; glyph 4 has it after a rectangle.
+		{"a composite whose match an instance cannot keep, inside another after other points",
 			func() []byte {
 				f := good
-				f.glyphs = [][]byte{nil, rectGlyph(),
-					fonttest.CompositeGlyph([]fonttest.CompositeComponent{{Glyph: 1, DX: 2, DY: 3, MatchPoints: true}})}
+				f.glyphs = append(f.glyphs,
+					fonttest.CompositeGlyph([]fonttest.CompositeComponent{{Glyph: 1}, {Glyph: 1, DX: 0, DY: 5, MatchPoints: true}}),
+					fonttest.CompositeGlyph([]fonttest.CompositeComponent{{Glyph: 1}, {Glyph: 3}}))
+				f.advances = append(f.advances, 600, 700)
+				f.tuples = append(f.tuples, nil, nil)
 				return f.build(t)
 			}(), bold,
-			"matching points, which cannot be instanced"},
+			"glyph 3 places a component by matching points in a way an instance cannot keep, " +
+				"and glyph 4 has it as a component after other points"},
 		{"a composite naming a component the font does not have",
 			func() []byte {
 				f := good
@@ -913,7 +926,12 @@ func TestInstanceIsAStaticFont(t *testing.T) {
 		avar: [][][2]float64{{{-1, -1}, {0, 0}, {1, 1}}, {{-1, -1}, {0, 0}, {1, 1}}},
 		hvar: oneRegionHVAR(50),
 		extra: map[string][]byte{
-			"MVAR": dummy, "STAT": dummy, "VVAR": dummy, "cvar": dummy,
+			// MVAR is read now — its deltas are applied before it is dropped,
+			// and one that cannot be read refuses the instance, as HVAR's does
+			// — so it is a table that says nothing rather than eight bytes of
+			// nothing: version 1.0, eight-byte records, none of them, no store.
+			"MVAR": {0, 1, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0},
+			"STAT": dummy, "VVAR": dummy, "cvar": dummy,
 			"cvt ": dummy, "fpgm": dummy, "prep": dummy,
 		},
 	}.build(t)
@@ -1280,4 +1298,27 @@ func varyingVariableFont(t *testing.T, records []fonttest.FeatureVariation) []by
 		},
 		Extra: map[string][]byte{"GSUB": gsub, "fvar": fonttest.FVAR(wghtWdth, nil)},
 	})
+}
+
+// TestACFF2FontSaysItIsCFF2: Load refuses a font whose CFF2 outlines cannot be
+// read, and says that is why — not that it has no outlines, which would send
+// its reader looking for a table that is there. A font with no outline table
+// at all still says so. (A CFF2 font that can be read loads: see cff2_test.go.)
+func TestACFF2FontSaysItIsCFF2(t *testing.T) {
+	good := varFont{
+		axes:     wghtWdth,
+		glyphs:   [][]byte{nil, rectGlyph()},
+		advances: []int{0, 500},
+	}
+	cff2 := good
+	cff2.extra = map[string][]byte{"glyf": nil, "CFF2": {0, 2, 0, 0}}
+	if _, err := Load(cff2.build(t)); err == nil || !strings.Contains(err.Error(), "CFF2") ||
+		strings.Contains(err.Error(), "neither") {
+		t.Errorf("a CFF2 font loaded as %v", err)
+	}
+	none := good
+	none.extra = map[string][]byte{"glyf": nil}
+	if _, err := Load(none.build(t)); err == nil || !strings.Contains(err.Error(), "neither glyf nor CFF") {
+		t.Errorf("a font with no outlines loaded as %v", err)
+	}
 }

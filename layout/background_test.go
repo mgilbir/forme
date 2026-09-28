@@ -749,7 +749,8 @@ func TestBackgroundImageFailuresAreReported(t *testing.T) {
 		{"background-image: url(missing.png)", RuleResourceBlocked, "background image"},
 		{"background-image: url(http://example.com/x.png)", RuleResourceBlocked, "resolves no URLs"},
 		{"background-image: url(../escape.png)", RuleResourceBlocked, "leaves the directory"},
-		{"background-image: linear-gradient(red, blue)", RuleUnsupportedValue, "not one this engine can paint"},
+		{"background-image: radial-gradient(circle 50%, red, blue)", RuleUnsupportedValue, "not one this engine can paint"},
+		{"background-image: image-set(url(wide.png) 1x)", RuleUnsupportedValue, "not one this engine can paint"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.css, func(t *testing.T) {

@@ -168,11 +168,17 @@ func TestTheFontShorthandTakesCSSFonts4(t *testing.T) {
 				findings)
 		}
 	}
-	// The width is valid and this engine has no property for it: the rest is
-	// applied and the width is claimed as missing.
-	_, findings := winner(t, `#p { font: condensed 12px serif }`, "font-size")
-	if found, unsupported := says(findings, "the font width condensed"); !found || !unsupported {
-		t.Errorf("the font width was not reported as unsupported: %v", findings)
+	// The width sets font-width, which is a property now, and so is not
+	// claimed as missing; and the shorthand resets it where it says nothing.
+	width, findings := winner(t, `#p { font: condensed 12px serif }`, "font-width")
+	if width != "condensed" {
+		t.Errorf("font: condensed 12px serif gave font-width %q, want condensed", width)
+	}
+	if found, _ := says(findings, "font width"); found {
+		t.Errorf("the font width was reported: %v", findings)
+	}
+	if got, _ := winner(t, `#p { font-stretch: 75% } #p { font: 12px serif }`, "font-width"); got != "normal" {
+		t.Errorf("font: 12px serif left font-width %q, want it reset to normal", got)
 	}
 	// Five slots filled before the size is one too many.
 	got, _ := winner(t, `#p { font: 20px monospace } #p { font: normal normal normal normal normal 12px serif }`,
@@ -263,7 +269,9 @@ func TestSupportsIsAnsweredAboutTheValue(t *testing.T) {
 		{`(width: min(1px, 2px))`, false},
 		{`(color: oklch(0.5 0.1 20))`, false},
 		{`(word-wrap: break-word)`, true},
-		{`(font: condensed 12px serif)`, false},
+		{`(font: condensed 12px serif)`, true},
+		{`(font-stretch: 50%)`, true},
+		{`(font-stretch: -50%)`, false},
 		{`(width: var(--w))`, false},
 	} {
 		colour, _ := styledBy(t, `@supports `+tc.condition+` { #target { color: red } }`)

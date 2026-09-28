@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/paragraph"
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -12,9 +14,12 @@ import (
 // # What is laid out
 //
 // All four vertical modes — "vertical-rl", "vertical-lr", "sideways-rl" and
-// "sideways-lr" — and only for a box refusesToTurn accepts. A box it will not
-// turn is reported, per box, and laid out horizontally, which is the page that
-// was already there.
+// "sideways-lr" — and only for a box refusesToTurn accepts: a block, or an
+// inline-block on a horizontal line (an orthogonal flow, CSS Writing Modes
+// §7.3). A turned box's lines may hold inline-blocks of their own, in its
+// mode or turned back to horizontal-tb (turnsBack). A box it will not turn is
+// reported, per box, and laid out horizontally, which is the page that was
+// already there.
 //
 // # Why a rotation and not an axis abstraction
 //
@@ -43,8 +48,24 @@ import (
 // stops being one thing: an upright ideograph on a vertical line is no rotation
 // of a horizontal line, so a run that needs one is set upright rather than
 // turned — which is a second fact in the display list and not a second
-// rotation — and a *box* whose text needs both at once is refused, because one
-// box is one turn.
+// rotation.
+//
+// # Two orientations on one line
+//
+// The turn is of the page, and a *run* on it may stand upright or lie along the
+// line: the two are not two turns but one turn and a fact about each run's
+// glyphs. So a line of Japanese with a Latin word in it, under the initial
+// "text-orientation: mixed", is laid out as one horizontal line whose runs are
+// cut wherever UAX #50 changes its answer (paragraph.SplitAtOrientation). Each
+// run is measured the way it is set — an upright one by its vertical advances,
+// a sideways one by its horizontal ones — and the line is filled with the sum,
+// which is the length of the column it becomes.
+//
+// Where across the line each run sits is the other half, and it is CSS Writing
+// Modes §4.2's: in a vertical typographic mode under mixed or upright the
+// dominant baseline is the *central* one, not the alphabetic one the
+// horizontal engine lays every line out on. See centralShift, which is the
+// whole of the difference and why it is small.
 //
 // # Why the report is per box
 //
@@ -203,11 +224,21 @@ func untuneEdges(e Edges, mode writingMode) Edges {
 // Strictly above: the box that starts a turn keeps its own edges physical,
 // because they are in its parent's frame and its parent is not turned. It is
 // what it *holds* that is laid out sideways.
+//
+// A horizontal inline-block on a turned line is where the frame stops: it is
+// laid out across the page with its own edges physical, like the box a turn
+// starts at, and so is everything inside it. See turnsBack.
 func (l *layouter) insideTurn(b *Box) (writingMode, bool) {
 	if b == nil {
 		return horizontalTB, false
 	}
+	if _, back := l.turnedBack[b]; back {
+		return horizontalTB, false
+	}
 	for at := b.Parent; at != nil; at = at.Parent {
+		if _, back := l.turnedBack[at]; back {
+			return horizontalTB, false
+		}
 		if mode, turned := l.turnedMode[at]; turned {
 			return mode, true
 		}
@@ -304,6 +335,14 @@ func turnFragment(f *Fragment, mode writingMode, in Size) {
 	f.Margin = turnEdges(f.Margin, mode)
 	f.Border = turnEdges(f.Border, mode)
 	f.Padding = turnEdges(f.Padding, mode)
+	if f.turnedBack {
+		// A horizontal inline-block on the line: its rectangle and its edges
+		// were stated in the frame, and have now been turned onto the page;
+		// what it holds was laid out on the page already, in coordinates from
+		// its own content box, which the turn has just put where it belongs.
+		// See turnsBack.
+		return
+	}
 	// contentH is a block-axis extent, which is a width on the page. It is read
 	// only by the overflow arithmetic, which asks it of the box it belongs to
 	// and never compares it across a turn, so it keeps its name and changes its
@@ -357,17 +396,28 @@ func (l *layouter) turns(b *Box, containing style.Unit) writingMode {
 	if mode == horizontalTB {
 		// A box that turns *back*, inside a vertical ancestor. There is nothing
 		// to report — horizontal-tb is the mode this engine lays out — and
-		// nothing to do either: the ancestor it sits in was refused, because
-		// refusesToTurn will not turn a box holding one of these, so the whole
-		// subtree is already being laid out horizontally.
+		// nothing to do either. Either the ancestor it sits in was refused,
+		// because refusesToTurn will not turn a box holding one of these, and
+		// the whole subtree is being laid out horizontally; or it is an
+		// inline-block the ancestor's turn stands on its line untuned (see
+		// turnsBack), which is laid out across the page by being laid out
+		// here, and placed by the turn.
 		return horizontalTB
 	}
-	facing, why := l.refusesToTurn(b, mode, containing)
+	l.pendingBack = l.pendingBack[:0]
+	why := l.refusesToTurn(b, mode, containing)
 	if why == "" {
-		l.turnedUpright[b] = facing == orientationUpright
 		l.turnedMode[b] = mode
+		// And the horizontal inline-blocks its lines hold, which the walk found
+		// and which stand on them untuned. Only now, because only now is it
+		// known that there is a turn for them to stand in.
+		for _, back := range l.pendingBack {
+			l.turnedBack[back] = mode
+		}
+		l.pendingBack = l.pendingBack[:0]
 		return mode
 	}
+	l.pendingBack = l.pendingBack[:0]
 	l.reportWritingMode(b, mode, why)
 	return horizontalTB
 }
@@ -395,20 +445,28 @@ func (l *layouter) reportWritingMode(b *Box, mode writingMode, why string) {
 // refused here is laid out exactly as it was before this file existed and is
 // reported, which is the honest answer; a box turned that should not have been
 // is a page that is quietly wrong.
-func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit) (textOrientation, string) {
-	if b.Outer != OuterBlock || (b.Inner != InnerFlow && b.Inner != InnerFlowRoot) {
-		// A table, an inline-block, a table part. Each has sizing rules of its
-		// own that resolve the two axes together, and turning the result would
-		// mean turning arithmetic this has not been through.
+func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit) string {
+	if !isInlineBlock(b) && (b.Outer != OuterBlock || (b.Inner != InnerFlow && b.Inner != InnerFlowRoot)) {
+		// A table, a flex or grid container, a table part. Each has sizing
+		// rules of its own that resolve the two axes together, and turning the
+		// result would mean turning arithmetic this has not been through.
 		//
 		// A flow root is not one of those. It is ordinary block layout that
 		// seals its own formatting context, which is the one thing a turned box
 		// needs from the box it is — and it is what a float is, so refusing it
 		// would refuse every floated vertical box in the suite.
-		return orientationMixed, "it is not an ordinary block box"
+		//
+		// Nor is an inline-block, which is a flow root that sits on a line: a
+		// vertical one in a horizontal paragraph is CSS Writing Modes §7.3's
+		// orthogonal flow, sized in its own writing mode and placed in its
+		// parent's. Its width, being its block size, is how far its lines stack
+		// — the answer an automatic width of a turned box already gets — and
+		// the line it sits on takes it as that wide. See atomicItem for where
+		// its baseline is.
+		return "it is not an ordinary block box"
 	}
 	if b.Position != PositionStatic || b.Replaced != nil {
-		return orientationMixed, "it is positioned or replaced"
+		return "it is positioned or replaced"
 	}
 	if _, declared := l.explicitWidth(b, containing); !declared && l.widthAskedOfTheContent(b) {
 		// Shrink-to-fit measures the *horizontal* widths of the content, which
@@ -422,54 +480,16 @@ func (l *layouter) refusesToTurn(b *Box, mode writingMode, containing style.Unit
 		// above it: a float wrapped round a vertical div came out as wide as
 		// that div's text laid end to end, which is the length of its lines and
 		// not the room its lines stack in.
-		return orientationMixed, "its width would be measured along the wrong axis, " +
+		return "its width would be measured along the wrong axis, " +
 			"by shrinking a box around its content"
 	}
-	// Which of the two orientations the text actually needs, where the property
-	// leaves it to the text. "mixed" is the initial value and the only one that
-	// can ask for both on one line — and a page with both is the one thing a
-	// quarter turn cannot draw. Where the text needs only one, it is the one
-	// this engine sets.
-	//
-	// It matters because of what "text-transform: full-width" does. The suite's
-	// text-transform-fullwidth-002 writes "Text sample" in a vertical box with
-	// no orientation at all and asks for it upright, which is what mixed says
-	// once the transform has turned every letter into a fullwidth form — and
-	// the box tree carries the transformed text, so this is asked of what will
-	// be drawn rather than of what was written.
-	facing := orientationOf(b)
-	if mode.sideways() {
-		// §5.1: text-orientation has no effect in a horizontal typographic
-		// mode, and both sideways modes are one. Every character lies along the
-		// line, so the mixture that a quarter turn cannot draw cannot arise —
-		// which is the whole reason the sideways modes exist, and is why this
-		// is a skip and not a second answer to the same question.
-		facing = orientationSideways
-	} else if facing == orientationMixed {
-		upright, rotated := l.subtreeOrientationMix(b)
-		switch {
-		case upright && rotated:
-			return orientationMixed, "its text needs characters standing upright and " +
-				"characters lying along the line at once"
-		case upright:
-			facing = orientationUpright
-		default:
-			facing = orientationSideways
-		}
-	}
-	return facing, l.subtreeRefusesToTurn(b, mode, b)
-}
-
-// subtreeOrientationMix asks paragraph.OrientationMix of everything a box holds.
-func (l *layouter) subtreeOrientationMix(b *Box) (upright, rotated bool) {
-	if b.IsText() {
-		return orientationMix(b.Text)
-	}
-	for _, c := range b.Children {
-		u, r := l.subtreeOrientationMix(c)
-		upright, rotated = upright || u, rotated || r
-	}
-	return upright, rotated
+	// Which way the text faces is not a question here any more. It was: one
+	// box was one orientation, and a box whose text under "mixed" needed
+	// characters standing and characters lying at once was refused. The
+	// orientation is decided per run now, where the runs are cut — see
+	// uprightRun — so the mixture is a line this engine sets and not a box it
+	// declines.
+	return l.subtreeRefusesToTurn(b, mode, b)
 }
 
 // The properties whose meaning is a side of the page rather than a side of the
@@ -519,8 +539,25 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) str
 		if b.Replaced != nil || b.Control != nil || b.ListItem || b.MarkerImage != nil {
 			return "it holds a replaced element, a form control or a list marker"
 		}
-		switch b.Inner {
-		case InnerFlow, InnerText:
+		if isInlineBlock(b) && writingModeOf(b) == horizontalTB {
+			// A horizontal inline-block on the turned line. What it holds is
+			// laid out across the page, in its own frame, and is none of this
+			// walk's business: it is not turned. What it must not do is ask
+			// for something its own frame cannot give. See turnsBack.
+			if why := l.refusesToTurnBack(b); why != "" {
+				return why
+			}
+			l.pendingBack = append(l.pendingBack, b)
+			return ""
+		}
+		switch {
+		case b.Inner == InnerFlow, b.Inner == InnerText:
+		case isInlineBlock(b):
+			// An inline-block on a turned line, in the same writing mode: it is
+			// block layout in the horizontal frame like the rest, sized to fit
+			// its content along the line, and the turn takes it with the line
+			// it is on. Its own sizes are read in the frame (see
+			// refusesPhysicalGeometry) as every box's are.
 		default:
 			return "it holds a table or another box with sizing rules of its own"
 		}
@@ -538,21 +575,14 @@ func (l *layouter) subtreeRefusesToTurn(root *Box, mode writingMode, b *Box) str
 			}
 		}
 	}
-	if orientation := trimmedLower(b.Style.Get("text-orientation")); !mode.sideways() &&
-		orientation != "" && orientationOf(b) != orientationOf(root) {
-		// The subtree has to agree with the box the turn started at, because the
-		// turn is one decision for the whole of it: one run set upright inside a
-		// box whose lines are turned is a second typesetting mode on the same
-		// line, and this file has one.
-		//
-		// "mixed" and "sideways" are the same answer here and are not told
-		// apart. They differ only over the characters UAX #50 calls upright, and
-		// the clause above has already refused a box that has one.
-		return "\"text-orientation: " + orientation + "\" inside it is not the orientation the box is set in"
-	}
+	// A text-orientation inside the box is not refused, whatever it is: each
+	// text box's own is read where its runs are cut (uprightRun), so an
+	// upright span on a mixed line is a run that stands up and nothing more.
 	if combine := trimmedLower(b.Style.Get("text-combine-upright")); !mode.sideways() &&
-		combine != "" && combine != "none" {
-		return "\"text-combine-upright: " + combine + "\" asks for a run set across the line, which this engine does not do"
+		combine != "" && combine != "none" && combine != "all" {
+		// "all" is laid out: see layout/combine.go. "digits" is not, and the
+		// box is refused for it as every value was before.
+		return "\"text-combine-upright: " + combine + "\" asks for runs of digits set across the line, which this engine does not do"
 	}
 	for _, c := range b.Children {
 		if why := l.subtreeRefusesToTurn(root, mode, c); why != "" {
@@ -601,27 +631,149 @@ func (l *layouter) refusesPhysicalGeometry(b *Box) string {
 
 func trimmedLower(s string) string { return ascii.Lower(ascii.TrimCSSSpace(s)) }
 
-// uprightText reports whether the text of a box is set upright, standing the
-// way it does in the code charts, rather than turned with the page.
+// facingOf is which way the text of a box faces on a vertical line, and false
+// where the box is not on one.
 //
-// It is asked of the box the text is *in* and answered by the box the turn
-// started at, which is somewhere above it — so the walk goes up until it meets a
-// box that was turned. A box with no turned ancestor is on a horizontal page and
-// its text is set the way it always was.
+// It is asked of the box the text is *in*, and whether that box is on a
+// vertical line is answered by the box the turn started at, which is somewhere
+// above it — so the walk goes up until it meets a box that was turned. A box
+// with no turned ancestor is on a horizontal page and its text is set the way it
+// always was.
 //
-// Reading the style instead would be the obvious thing and would be wrong. A box
+// Reading the style alone would be the obvious thing and would be wrong. A box
 // may declare "text-orientation: upright" and not be turned at all, because the
 // turn was refused for a reason that has nothing to do with orientation — an
 // automatic width, a floated child — and the text of such a box is laid out
 // across the page like any other. Measuring it a character to the em would make
 // a horizontal line out of numbers that only mean anything on a vertical one.
-func (l *layouter) uprightText(b *Box) bool {
+//
+// Once the box is known to be on a vertical line, the orientation is its own:
+// text-orientation is inherited, so the text box carries whatever the nearest
+// element declared, and a span asking for "upright" inside a mixed paragraph
+// is answered for that span alone. In a sideways mode every character lies
+// along the line whatever was declared — §5.1's property has no effect in a
+// horizontal typographic mode.
+func (l *layouter) facingOf(b *Box) (textOrientation, bool) {
+	mode, turned := l.turnedModeOf(b)
+	switch {
+	case !turned:
+		return orientationMixed, false
+	case mode.sideways():
+		return orientationSideways, true
+	}
+	return orientationOf(b), true
+}
+
+// turnedModeOf is the writing mode a box is laid out in, when that is one of
+// the turned ones: the mode of the nearest box, this one or above it, that the
+// turn started at. It is insideTurn with the box itself counted, which is the
+// question about the box's own text rather than about its edges.
+//
+// The text of a horizontal inline-block on a turned line is on no turned line:
+// the walk stops there. See turnsBack.
+func (l *layouter) turnedModeOf(b *Box) (writingMode, bool) {
 	for at := b; at != nil; at = at.Parent {
-		if upright, turned := l.turnedUpright[at]; turned {
-			return upright
+		if _, back := l.turnedBack[at]; back {
+			return horizontalTB, false
+		}
+		if mode, turned := l.turnedMode[at]; turned {
+			return mode, true
 		}
 	}
+	return horizontalTB, false
+}
+
+// uprightRun reports whether a run of a box's text is set upright, standing
+// the way it does in the code charts, rather than turned with the page.
+//
+// Under "mixed" it is the text's own answer, and the run has to be one that
+// has a single answer: paragraph.SplitAtOrientation is what cuts the text so
+// that it does. See itemsFor.
+func (l *layouter) uprightRun(b *Box, text string) bool {
+	switch facing, vertical := l.facingOf(b); {
+	case !vertical:
+		return false
+	case facing == orientationUpright:
+		return true
+	case facing == orientationMixed:
+		return paragraph.UprightInMixed(text)
+	}
 	return false
+}
+
+// splitsByOrientation reports whether a box's text has to be cut where its
+// orientation changes: only under "mixed" on a vertical line, which is the one
+// value that leaves the answer to each character.
+func (l *layouter) splitsByOrientation(b *Box) bool {
+	facing, vertical := l.facingOf(b)
+	return vertical && facing == orientationMixed
+}
+
+// centralShift is where a run sits across a vertical line, as two distances
+// below the baseline the horizontal engine laid it out on: where its glyphs
+// are drawn from (draw), and how far its extents above and below that
+// baseline move (extents).
+//
+// CSS Writing Modes §4.2 makes the central baseline the dominant one in a
+// vertical typographic mode under "mixed" or "upright", and §4.4 aligns the
+// glyphs of different fonts in one box by matching their dominant baselines.
+// The horizontal engine lays every line out on the alphabetic baseline, and
+// the reason that is still right for almost everything is that the two agree
+// wherever a box has one font: the central baseline is assumed halfway between
+// the ascent and the descent, so a box's content area — its ascent above the
+// alphabetic baseline and its descent below — is exactly the box centred on
+// its central baseline. Every line box, every inline box and every strut comes
+// out the same measured either way.
+//
+// They disagree in two places, and this is both of them:
+//
+//   - An upright glyph is hung from its vertical origin, which puts the middle
+//     of its em box — its own central baseline — on the line. The line it goes
+//     on is the box's central baseline, which is (ascent − descent)/2 of the
+//     box's font above the alphabetic one. So an upright run is drawn from
+//     there, and a run drawn from the alphabetic baseline stood that far
+//     towards the line's under side, off the middle of its own column.
+//   - A run the fallback stack set in another face is aligned by *its* central
+//     baseline, not its alphabetic one: its alphabetic baseline is its own
+//     (ascent − descent)/2 below the box's central baseline. That moves its
+//     glyphs, if it lies along the line, and its extents in either case — the
+//     same content area centred on the other baseline.
+//
+// Both are distances down the horizontal frame, positive towards the line's
+// under side, which the turn puts on the left in every vertical mode. A run
+// that is not on a vertical line, or is in a sideways mode or under "sideways"
+// (§4.2: the alphabetic baseline is then the dominant one), gets zero for
+// both, which is the page that was there.
+//
+// The size is the run's, for both fonts. A face the box did not declare is
+// what moves a run's extents; a run of the box's own face at another size —
+// a synthesised small capital — is the box's font and keeps its baseline, as
+// it does across the page.
+func (l *layouter) centralShift(b *Box, face *shape.Face, size style.Unit, upright bool) (draw, extents style.Unit) {
+	facing, vertical := l.facingOf(b)
+	if !vertical || facing == orientationSideways {
+		return 0, 0
+	}
+	own, ok := l.fontFor(b)
+	if !ok {
+		return 0, 0
+	}
+	ascent, descent, ok := lineExtentsAt(own, size)
+	if !ok {
+		return 0, 0
+	}
+	// The box's central baseline, measured down from its alphabetic one: it is
+	// above it wherever the ascent is the larger, which is every face.
+	central := descent.Sub(ascent).Div(2)
+	if face != nil && face != own {
+		if a, d, ok := lineExtentsAt(face, size); ok {
+			extents = central.Add(a.Sub(d).Div(2))
+		}
+	}
+	if upright {
+		return central, extents
+	}
+	return extents, extents
 }
 
 // textOrientation is which way the characters of a vertical line face.
@@ -631,11 +783,12 @@ const (
 	// orientationMixed is the initial value: a character is turned with the
 	// page where UAX #50 calls it rotatable and stands upright where it does
 	// not. It is the only one of the three that can ask for both on one line,
-	// which is why it is the only one the upright-character check applies to.
+	// which is why it is the only one whose text is cut where the answer
+	// changes. See paragraph.SplitAtOrientation.
 	orientationMixed textOrientation = iota
 	// orientationSideways turns every character with the page, upright ones
 	// included. That is exactly what this file's quarter turn does, so a box
-	// asking for it needs no check at all.
+	// asking for it has one orientation and nothing to cut.
 	orientationSideways
 	// orientationUpright stands every character the way it does in the code
 	// charts and moves the pen one em to the next. It is not a rotation of
@@ -677,12 +830,25 @@ func orientationOf(b *Box) textOrientation {
 // that would have been right into a page that says so, and the other way round
 // is a page that is quietly wrong.
 func (l *layouter) widthAskedOfTheContent(b *Box) bool {
-	if shrinksToFit(b) {
+	if shrinksToFit(b) && !isInlineBlock(b) {
+		// An inline-block shrinks to fit too, and it is not asked here: a
+		// turned box with an automatic width is as wide as its lines stack,
+		// which is §7.3's answer for an orthogonal flow whose block size is
+		// auto — "the used block size of the child is calculated to fit its
+		// content" — and nothing measures the box before it is laid out. What
+		// is still asked is whether anything *above* it is measured, which is
+		// the walk below.
 		return true
 	}
 	for at := b.Parent; at != nil; at = at.Parent {
 		if _, declared := l.explicitWidth(at, 0); declared {
 			return false
+		}
+		if at.Outer == OuterInline && at.Inner == InnerFlow {
+			// An inline box between the box and its block container. It has
+			// no width of its own to shrink — its content is on the lines of
+			// the block above it — so the question is that block's.
+			continue
 		}
 		if shrinksToFit(at) {
 			return true
@@ -694,9 +860,96 @@ func (l *layouter) widthAskedOfTheContent(b *Box) bool {
 	return false
 }
 
+// isInlineBlock reports whether a box is an inline-block: a block container
+// laid out on its parent's line as one atomic inline. (A replaced element on a
+// line is not one; every caller has refused it by then.)
+func isInlineBlock(b *Box) bool {
+	return b.Outer == OuterInline && b.Inner == InnerFlowRoot
+}
+
 // shrinksToFit reports whether a box's own width is CSS 2.1 §10.3.5's
 // shrink-to-fit: the narrower of what its content needs and what it is offered.
 func shrinksToFit(b *Box) bool {
 	return b.Float != FloatNone || b.Position.outOfFlow() ||
 		b.Outer == OuterInline || b.Inner == InnerTableCell
+}
+
+// drawShiftOf is centralShift's draw for the run an item becomes.
+func (l *layouter) drawShiftOf(item inlineItem) style.Unit {
+	b := heldBox(item.Box)
+	if b == nil || item.Face == nil {
+		return 0
+	}
+	draw, _ := l.centralShift(b, item.Face, item.Size, item.Upright)
+	return draw
+}
+
+// A horizontal inline-block on a turned line.
+//
+// CSS Writing Modes §7.3 again, the other way round: an inline-block in
+// horizontal-tb inside a vertical paragraph is an orthogonal flow, sized in its
+// own writing mode — its lines run across the page — and placed in its
+// parent's, as one atomic inline on a line that runs down it.
+//
+// The turn cannot draw it by turning it: its text would come out lying on its
+// side, which is exactly what the author turned it back to avoid. So it is not
+// turned. It is laid out across the page first, in a frame of its own whose
+// edges are the physical ones (insideTurn stops at it), and then stated in the
+// turned frame as the rectangle it will be once turned — its width along the
+// line is its physical height, its height across the line its physical width,
+// and its edges are the physical ones permuted backwards (untuneEdges). The
+// turn then moves that rectangle onto the page and permutes the edges back,
+// and leaves the inside alone (turnFragment): it is measured from the box's own
+// content edge, which is where the turn has just put it.
+//
+// §7.3.1 gives it the available width an orthogonal flow falls back on, the
+// initial containing block's, since the containing block's physical width is
+// its block size and is not known while its lines are being filled; its height
+// is its content's. Across the line it is centred on the central baseline —
+// §4.3 synthesizes an atomic inline's central baseline "halfway between the
+// under and over margin edges" and §4.2 makes the central the dominant one —
+// or sits on its under margin edge where "text-orientation: sideways" makes
+// the alphabetic baseline dominant.
+
+// refusesToTurnBack is why a horizontal inline-block on a turned line cannot
+// stand there, or the empty string if it can.
+//
+// Two things its own frame cannot give. A percentage width or height is a
+// fraction of the containing block's physical width or height, which on a
+// vertical line is a block size nothing knows yet. And a box inside it that
+// changes the writing mode again would be a turn inside a box that is itself
+// placed by a turn, which is two frames this file has one of.
+func (l *layouter) refusesToTurnBack(b *Box) string {
+	for _, p := range [...]string{"width", "height", "min-width", "min-height", "max-width", "max-height"} {
+		if strings.ContainsRune(b.Style.Get(p), '%') {
+			return "a percentage \"" + p + "\" is declared on a horizontal inline-block inside it, " +
+				"and the size it is a percentage of is not known on a vertical line"
+		}
+	}
+	var changes func(*Box) bool
+	changes = func(at *Box) bool {
+		if at != b && !at.Anonymous() && !at.IsText() && writingModeOf(at) != horizontalTB {
+			return true
+		}
+		for _, c := range at.Children {
+			if changes(c) {
+				return true
+			}
+		}
+		return false
+	}
+	if changes(b) {
+		return "it holds a horizontal inline-block that changes the writing mode again"
+	}
+	return ""
+}
+
+// standBack states the fragment of a horizontal inline-block, laid out across
+// the page, in the turned frame of the line it stands on: see turnsBack, above.
+func standBack(f *Fragment, mode writingMode) {
+	f.BorderRect.W, f.BorderRect.H = f.BorderRect.H, f.BorderRect.W
+	f.Margin = untuneEdges(f.Margin, mode)
+	f.Border = untuneEdges(f.Border, mode)
+	f.Padding = untuneEdges(f.Padding, mode)
+	f.turnedBack = true
 }

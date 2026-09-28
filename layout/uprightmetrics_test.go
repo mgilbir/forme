@@ -111,3 +111,89 @@ func TestAnUprightRunIsWhereItsShapedGlyphsAre(t *testing.T) {
 			got.Px(), runs[1].At.Y.Px())
 	}
 }
+
+// uprightRunsOf lays text followed by "<span>D</span>" out upright at 20px in
+// the face and returns the runs it draws: the first is the run of text, and
+// the second starts where layout ended it.
+func uprightRunsOf(t *testing.T, face *shape.Face, text string) []DrawText {
+	t.Helper()
+	set := namedFaceSet{family: "V", face: face, standard: StandardFonts()}
+	built := Build(Input{HTML: `<div id="d">` + text + `<span>D</span></div>`,
+		CSS: []Stylesheet{{Source: noDefaults + `body { margin: 0 }
+			#d { font-family: V; font-size: 20px; line-height: 20px;
+			     writing-mode: vertical-rl; text-orientation: upright;
+			     width: 60px; height: 400px }`}}})
+	w, _ := style.FromPx(400)
+	h, _ := style.FromPx(1000)
+	var out []DrawText
+	for _, op := range Paint(Layout(built.Root, Size{W: w, H: h}, set, NewRecorder(nil))) {
+		if v, ok := op.(DrawText); ok && strings.TrimSpace(v.Text) != "" {
+			out = append(out, v)
+		}
+	}
+	if len(out) != 2 || !out[0].Upright || out[0].Text != text {
+		t.Fatalf("%q drew %+v, want two upright runs, the first of it", text, out)
+	}
+	return out
+}
+
+// TestShapedGlyphsAdvanceAnUprightRunAsLayoutMeasuredIt is the contract
+// ShapedGlyphs states for an upright run, asked the way a backend asks it: from
+// the DrawText alone. Its glyphs, stepped by -YAdvance, end where layout
+// started the next run — in a face with vertical metrics, whose advances are
+// its vmtx's, and in one with none, whose advances are the em per character
+// that CSS Writing Modes §4.4 has layout synthesize. The runs hold a combining
+// mark and a zero width joiner, which take no advance of their own.
+//
+// Before, ShapedGlyphs shaped the run as a horizontal one: every YAdvance was
+// zero, and the face's horizontal advances — "A" is 350 units wide in the face
+// with vmtx, and advances 900 down — were all a backend had.
+func TestShapedGlyphsAdvanceAnUprightRunAsLayoutMeasuredIt(t *testing.T) {
+	for _, name := range []string{"VerticalComposites.ttf", "VerticalFallbacks.ttf"} {
+		face := uprightFace(t, name)
+		for _, text := range []string{"AAAA", "AÁA‍A"} {
+			runs := uprightRunsOf(t, face, text)
+			glyphs, _ := ShapedGlyphs(runs[0])
+			if len(glyphs) == 0 {
+				t.Fatalf("%s, %q: no glyphs", name, text)
+			}
+			var pen float64
+			for _, g := range glyphs {
+				if g.XAdvance != 0 {
+					t.Errorf("%s, %q: glyph %d advances %g across the column", name, text, g.GID, g.XAdvance)
+				}
+				pen -= g.YAdvance
+			}
+			end, _ := style.FromPx(pen * runs[0].Size.Px() / 1000)
+			if got := runs[0].At.Y.Add(end); got != runs[1].At.Y {
+				t.Errorf("%s, %q: the glyphs ShapedGlyphs gives end at %gpx, and layout "+
+					"starts the next run at %gpx", name, text, got.Px(), runs[1].At.Y.Px())
+			}
+		}
+	}
+}
+
+// TestEmPerUnitKeepsTheTotal is the distribution on its own, over glyphs
+// arranged as a face may arrange them: a character drawn into the glyph of the
+// one before it, a character drawn as two glyphs, a mark, and the glyphs out
+// of their clusters' order.
+func TestEmPerUnitKeepsTheTotal(t *testing.T) {
+	// "ab́cd": units start at 0 (a), 1 (b with its mark), 4 (c), 5 (d).
+	text := "ab́cd"
+	glyphs := []shape.Glyph{
+		{GID: 1, Cluster: 0, YAdvance: -7}, // a
+		{GID: 2, Cluster: 1, YAdvance: -7}, // b, first of two glyphs
+		{GID: 3, Cluster: 1, YAdvance: -7}, // b, second
+		{GID: 4, Cluster: 2, YAdvance: -7}, // the mark
+		{GID: 5, Cluster: 4, YAdvance: -7}, // c and d, drawn as one
+	}
+	// Out of order, which a caller cannot rule out: the answer is by cluster.
+	glyphs[0], glyphs[4] = glyphs[4], glyphs[0]
+	emPerUnit(glyphs, text)
+	want := map[int]float64{1: -1000, 2: -1000, 3: 0, 4: 0, 5: -2000}
+	for _, g := range glyphs {
+		if g.YAdvance != want[g.GID] {
+			t.Errorf("glyph %d advances %g, want %g", g.GID, g.YAdvance, want[g.GID])
+		}
+	}
+}

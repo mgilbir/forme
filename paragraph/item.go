@@ -323,6 +323,23 @@ type Item struct {
 	// Width, which is what makes the trimmed advance reach the display list and
 	// the line's measure together.
 	TrimEnd style.Unit
+	// TrimStart is TrimEnd's other end: how much narrower §8.2's half-width
+	// form of this item is, for an item that is a single full-width opening
+	// punctuation at a place a line could begin, and TrimStartOn is which line
+	// starts take it. Zero for everything else, including a character the face
+	// states no half-width form for.
+	//
+	// A candidate rather than a decision, like TrimEnd: whether the item begins
+	// a line is known only to the fill, which takes it by narrowing its own
+	// copy's Width and setting StartTrimmed — the flag is what tells the stage
+	// that draws the run to draw the half-width form, because unlike a closing
+	// bracket's the blank is in front of the ink, and taking it away moves the
+	// ink as well as the pen.
+	TrimStart   style.Unit
+	TrimStartOn OpeningTrim
+	// StartTrimmed says the fill set this item at the start of a line in its
+	// half-width form: Width is already the narrower one.
+	StartTrimmed bool
 	// PreContext and PostContext are the text either side of this run, where the
 	// boundary between it and its neighbour does not break shaping.
 	//
@@ -392,6 +409,23 @@ type Item struct {
 	// characters, one em each. A line filled with one and drawn with another
 	// would be filled to a width the page does not have.
 	Upright bool
+	// Combine says the run is a text-combine-upright composition (CSS Writing
+	// Modes §9.1): its text set across a vertical line, squeezed into one em,
+	// and standing in the line as one upright character. It takes one em
+	// along the line whatever its text measures — §9.1.2's "the effective size
+	// of the composition is assumed to be 1em square" — and it is one unit for
+	// every other purpose, letter-spacing and justification included: "the
+	// resulting composition is treated as a single glyph representing the
+	// Object Replacement Character U+FFFC". It is never cut: a line may begin
+	// before it and after it and not inside it, so an item carrying it has no
+	// last-resort break (BreakWord), and the layout rules that cut a character
+	// off an item's end — hanging punctuation, text-spacing-trim — do not ask
+	// one.
+	//
+	// It goes with Upright, which a composition also is: it stands on the line
+	// the way an ideograph does, and every rule that asks whether a run stands
+	// up gets the answer a single upright character would give.
+	Combine bool
 	// HyphenLastResort says a line may be sent back to the opportunity in front
 	// of this item only when there is no other — because the opportunity is one
 	// a soft hyphen or a hyphenation dictionary made, and "word-break:
@@ -494,7 +528,7 @@ type Item struct {
 	// whole or overflows.
 	NoWrap bool
 	// Inset marks an item that is an inline box's own horizontal margin, border
-	// and padding rather than anything of its content: §8.3, §8.4 and §8.5 make
+	// and padding rather than anything of its content: §8.3, §8.4 and §8.2 make
 	// all three apply to a non-replaced inline box on the horizontal axis, and
 	// what they do there is push the content along. See insetItems.
 	Inset bool
@@ -794,6 +828,28 @@ type State struct {
 	//
 	// The caller resolves it, because the ancestry is the caller's tree.
 	AfterBox Ref
+	// AfterSpaceBox is the box of the space that §4.1.1 kept, while
+	// AfterCollapsibleSpace says a run of collapsible spaces is in progress: the
+	// first space of the run, which every later one collapsed into. AfterBox is
+	// the box of the run's *last* space, and the two differ exactly where the
+	// run crosses a box boundary.
+	//
+	// It is here for the same rule as AfterBox, read for a different kind of
+	// opportunity. CSS Text §5.1: "for soft wrap opportunities created by
+	// characters that disappear at the line break (e.g. U+0020 SPACE),
+	// properties on the box directly containing that character control the
+	// line breaking at that opportunity". The run's opportunity at its end is
+	// created by the space that is still there, and §4.1.1 lets each space that
+	// collapsed into it keep its own, "if any" — so a line may end after the
+	// run where either box lets it. "1111 <nobr> 2222</nobr>" keeps the
+	// paragraph's space and collapses the nobr's, and asking the nobr alone
+	// set it on one line.
+	//
+	// Nil at the start of a context, where §4.1.2 removes the space and there
+	// is none to have kept. It means nothing while AfterCollapsibleSpace is
+	// false, and is not cleared then: the next collapsible space is not
+	// collapsed into anything, so it is kept, and it sets this afresh.
+	AfterSpaceBox Ref
 }
 
 // StartOfContext is the state an inline formatting context begins in.
@@ -978,6 +1034,22 @@ func (br *Breaker) splitItemAt(item Item, at int) (head, tail Item) {
 	// is cleared because leaving it would make the field state something untrue
 	// about where the item now sits, not because a document can tell.
 	tail.BreakBefore = false
+	// §8.2's trims are facts about one end of the item — the character a
+	// TrimStart would half-width is its first and a TrimEnd's its last — so
+	// each stays with the half that still has that end. A candidate is one
+	// character and is not cut in the middle, but a cut at either edge leaves
+	// one half empty, and a copy of the candidate on the empty half would be a
+	// trim of a character that is not there.
+	if at > 0 {
+		tail.TrimStart, tail.StartTrimmed = 0, false
+	} else {
+		head.TrimStart, head.StartTrimmed = 0, false
+	}
+	if at < len(item.Text) {
+		head.TrimEnd = 0
+	} else {
+		tail.TrimEnd = 0
+	}
 	return head, tail
 }
 
@@ -987,7 +1059,8 @@ func (it Item) shaping() Shaping {
 	return Shaping{
 		Before: it.PreContext, After: it.PostContext,
 		MergeBefore: it.MergePre, MergeAfter: it.MergePost, MergeGroup: it.MergeGroup,
-		ContextKerns: it.ContextKerns, Upright: it.Upright, Off: it.Off,
+		ContextKerns: it.ContextKerns, Upright: it.Upright, Combine: it.Combine,
+		Off: it.Off,
 	}
 }
 

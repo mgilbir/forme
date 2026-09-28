@@ -21,8 +21,8 @@ import (
 // What is read is CBDT::accelerator_t::get_extents at the pinned release: the
 // index subtable formats 1 and 3, and the image formats 17 and 18, whose
 // metrics precede the image. The other formats HarfBuzz reads no metrics from,
-// and neither does this; nor does it read sbix, the other bitmap table
-// HarfBuzz asks before this one, which no face in the corpora carries.
+// and neither does this. sbix, the other bitmap table, HarfBuzz asks before
+// this one; it is read in sbixink.go.
 
 // cbdtInk is the two tables a face's bitmap glyphs are read from.
 type cbdtInk struct {

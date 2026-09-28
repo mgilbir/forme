@@ -650,38 +650,13 @@ func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
 		}
 	}
 
-	for _, op := range ops {
-		switch o := op.(type) {
-		case FillRect:
-			if o.Overhang {
-				// A text decoration, and an inline box's background and border,
-				// are skipped for the reason FillRect.Overhang gives: this
-				// guard is about boxes the scale was computed from, and none of
-				// those is one.
-				continue
-			}
-			consider(o.Rect)
-		case DrawImage:
-			r := o.Rect
-			if o.Clip.Active {
-				// What is drawn is what the clip admits, which is also what the
-				// scale was computed from.
-				r = o.Clip.Rect.Intersect(r)
-			}
-			consider(r)
-		case TileImage:
-			// The clip is the area painted; nothing is drawn outside it,
-			// including the part of a tile that reaches past it.
-			consider(o.Clip)
-		case Link:
-			// Not ink, and not a box the scale was computed from: an inline
-			// <a>'s area is its content area, which §10.6.1 lets reach past
-			// the line it is on for the reason FillRect.Overhang gives, and
-			// every other area is a box already considered for what it
-			// draws. A link off the page is a link nobody can click, which
-			// the page shows by not showing what it is around.
+	var checkOps func([]Op)
+	checkOps = func(ops []Op) {
+		for _, op := range ops {
+			checkOp(op, consider, checkOps)
 		}
 	}
+	checkOps(ops)
 	if !found {
 		return
 	}
@@ -693,4 +668,69 @@ func checkPageOverflow(rec *Recorder, ops []Op, avail Size, scale float64) {
 			worst.X.Px(), worst.Y.Px(), worst.Right().Px(), worst.Bottom().Px(),
 			worstBy.Px(), page.W.Px(), page.H.Px()),
 	})
+}
+
+// checkOp hands the rectangle one operation puts ink in to consider, by the
+// rules checkPageOverflow gives.
+func checkOp(op Op, consider func(Rect), checkOps func([]Op)) {
+	switch o := op.(type) {
+	case FillRect:
+		if o.Overhang {
+			// A text decoration, and an inline box's background and border,
+			// are skipped for the reason FillRect.Overhang gives: this
+			// guard is about boxes the scale was computed from, and none of
+			// those is one.
+			return
+		}
+		consider(o.Rect)
+	case DrawImage:
+		r := o.Rect
+		if o.Clip.Active {
+			// What is drawn is what the clip admits, which is also what the
+			// scale was computed from.
+			r = o.Clip.Rect.Intersect(r)
+		}
+		consider(r)
+	case TileImage:
+		// The clip is the area painted; nothing is drawn outside it,
+		// including the part of a tile that reaches past it.
+		consider(o.Clip)
+	case FillGradient:
+		// A tiling as well, and skipped when it is an inline box's
+		// background for the reason FillRect.Overhang gives.
+		if !o.Overhang {
+			consider(o.Clip)
+		}
+	case FillPath:
+		if !o.Overhang {
+			r := o.Path.Bounds()
+			if o.Clip.Active {
+				r = o.Clip.Rect.Intersect(r)
+			}
+			consider(r)
+		}
+	case FilterGroup:
+		// What is inside it, each by its own rule. A blur spreads ink past
+		// what it blurs, and that is ink no layout decision placed, for the
+		// reason FillRect.Overhang gives.
+		checkOps(o.Ops)
+	case ClipPath:
+		// What is inside it, each by its own rule; the curve only takes
+		// ink away. Nested no deeper than the clipping boxes that made it,
+		// which resolveClips bounds.
+		checkOps(o.Ops)
+	case DrawText, DrawTextShadow, DrawEmphasisMark, DrawGlyphs:
+		// Text is not checked, for the reason FillRect.Overhang gives, and a
+		// shadow of text is text moved by an offset nothing in layout placed.
+		// An emphasis mark is beside its text, where the line's height was
+		// made to hold it, and is text's for the same reason. So are the
+		// glyphs of a formula's stretched operator, which are its text.
+	case Link:
+		// Not ink, and not a box the scale was computed from: an inline
+		// <a>'s area is its content area, which §10.6.1 lets reach past
+		// the line it is on for the reason FillRect.Overhang gives, and
+		// every other area is a box already considered for what it
+		// draws. A link off the page is a link nobody can click, which
+		// the page shows by not showing what it is around.
+	}
 }

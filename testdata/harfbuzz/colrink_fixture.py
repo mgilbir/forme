@@ -39,12 +39,26 @@
 # else. Each glyph has an outline too, which is what a glyph the bitmaps do not
 # answer for is measured by.
 #
+# SbixInk.ttf is the bitmap table HarfBuzz asks before CBDT: an sbix written
+# byte by byte, with a null strike, three sizes and two strikes of the largest,
+# of which the first is read; PNG images whose IHDR states the box, a PNG
+# wider than HarfBuzz reads, one too short to hold an IHDR, JPEG and TIFF
+# images it does not read, and duplicates — of an image, of a duplicate, of
+# itself, of a glyph the face does not have, one too short to name a glyph,
+# and a chain one longer than HarfBuzz follows. Its strike is 62.5 units a
+# pixel, so that the rounding of halves shows. SbixInkLarge.ttf is an sbix
+# whose boxes run to millions of units, where HarfBuzz's single precision
+# shows; SbixInkRejected.ttf, SbixInkOps.ttf and SbixInkOpsEdge.ttf are
+# tables its sanitizer refuses, and one it takes by a byte. The images are
+# placeholders behind their IHDR.
+#
 # It is built with fontTools and its timestamps fixed, so that building it
 # again produces the same bytes and the checksum the expectations record stays
 # true.
 import os
 import struct
 import sys
+import zlib
 
 from oracle import fonttools
 
@@ -262,8 +276,9 @@ def composite(with_matched):
 def build(path, variable):
     """ColourInk, variable along its weight axis; or, not variable,
     ColourInkStatic, whose composite has a component placed by matching
-    points, which LoadInstance cannot instance and so is not in the variable
-    face."""
+    points, which the variable face leaves out: it was built when
+    LoadInstance could not instance one, and pointmatch_fixture.py's faces
+    are where it is held to such components now."""
     order = list(OUTLINES) + ["comp"] + sorted(COLOR) + sorted(V0)
     fb = FontBuilder(1000, isTTF=True)
     fb.setupGlyphOrder(order)
@@ -392,6 +407,144 @@ def raw(tag, data):
     return t
 
 
+def png(width, height):
+    """The front of a PNG: its signature and an IHDR chunk stating the size,
+    which is all HarfBuzz reads of it, and then a placeholder where the image
+    would be."""
+    ihdr = b"IHDR" + struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    chunk = struct.pack(">I", 13) + ihdr + struct.pack(">I", zlib.crc32(ihdr))
+    return b"\x89PNG\r\n\x1a\n" + chunk + b"placeholder"
+
+
+def sbix_table(num_glyphs, strikes, offsets=None):
+    """An sbix table. strikes are (ppem, {glyph: (x, y, type, data)}), or None
+    for a null strike; a glyph a strike does not name has no data in it.
+    offsets, where given, replaces the strike offsets the table would state,
+    so that one can point where the strikes are not."""
+    head = 8 + 4 * len(strikes)
+    body = b""
+    at = []
+    for strike in strikes:
+        if strike is None:
+            at.append(0)
+            continue
+        ppem, glyphs = strike
+        at.append(head + len(body))
+        records = b""
+        index = []
+        start = 4 + 4 * (num_glyphs + 1)
+        for gid in range(num_glyphs):
+            index.append(start + len(records))
+            if gid in glyphs:
+                x, y, kind, data = glyphs[gid]
+                records += struct.pack(">hh4s", x, y, kind) + data
+        index.append(start + len(records))
+        body += struct.pack(">HH", ppem, 72) + b"".join(struct.pack(">I", o) for o in index) + records
+    if offsets is not None:
+        at = offsets
+    return struct.pack(">HHI", 1, 1, len(at)) + b"".join(struct.pack(">I", o) for o in at) + body
+
+
+def sbix_face(path, upem, glyphs, table):
+    order = [".notdef"] + ["sb%d" % i for i in range(1, glyphs)]
+    fb = FontBuilder(upem, isTTF=True)
+    fb.setupGlyphOrder(order)
+    fb.setupCharacterMap({0x41 + i: g for i, g in enumerate(order[1:26])})
+    fb.setupGlyf({g: poly((5 * i, 0), (5 * i, 300), (400, 300), (400, 0)) for i, g in enumerate(order)})
+    fb.setupHorizontalMetrics({g: (1200, 5 * i) for i, g in enumerate(order)})
+    fb.setupHorizontalHeader(ascent=upem, descent=-upem // 4)
+    fb.setupOS2(sTypoAscender=upem, sTypoDescender=-upem // 4, usWinAscent=upem, usWinDescent=upem // 4)
+    fb.setupNameTable({"familyName": "SbixInk", "styleName": "Regular"})
+    fb.setupPost()
+    fb.font["sbix"] = raw("sbix", table)
+    fb.font["head"].created = fb.font["head"].modified = 3660681600
+    fb.font.recalcTimestamp = False
+    fb.save(path)
+
+
+def sbix(directory):
+    """SbixInk.ttf, the bitmap table HarfBuzz asks before CBDT, and three
+    faces whose sbix HarfBuzz reads differently from it."""
+    # A duplicate's own offsets are not the ones its image is placed by, so
+    # they are given ones the image it names does not have.
+    dupe = lambda gid: (9, -9, b"dupe", struct.pack(">H", gid))  # noqa: E731
+    n = 27
+    # The strike HarfBuzz reads, asked at no size: the largest, and of two as
+    # large the first. Upem 1000 at 16 ppem is 62.5 units a pixel, so an odd
+    # number of pixels is a half unit, which HarfBuzz rounds up — towards
+    # zero below it.
+    chosen = {
+        1: (-3, -5, b"png ", png(17, 13)),
+        2: (32767, -32768, b"png ", png(1, 65535)),
+        3: (0, 0, b"png ", png(65536, 10)),  # too wide: HarfBuzz reads no box
+        4: dupe(1),  # the image of another glyph, with that glyph's offsets
+        5: dupe(4),  # a duplicate of a duplicate
+        6: dupe(6),  # a duplicate of itself, followed nine times and dropped
+        7: (0, 0, b"dupe", b"\x01"),  # too short to name a glyph
+        8: dupe(n + 3),  # a glyph the face does not have
+        9: (1, 1, b"jpg ", b"\xff\xd8\xff placeholder"),  # HarfBuzz reads PNG only
+        10: (1, 1, b"tiff", b"II*\x00 placeholder"),
+        11: (7, -9, b"png ", b"\x89PNG short"),  # shorter than an IHDR: a box of nothing
+        13: (0, 0, b"png ", b""),  # the record and no image
+        14: (-32768, 32767, b"png ", png(65535, 1)),
+        15: (3, 3, b"png ", png(0, 0)),
+        16: dupe(15),
+        # Eight duplicates in a row, which is as many as HarfBuzz follows, and
+        # a ninth in front of them, which is one too many.
+        **{g: dupe(g + 1) for g in range(17, 25)},
+        25: (2, -2, b"png ", png(5, 6)),
+        26: dupe(17),
+    }
+    # Glyph 12 only the smaller strikes have, and the equal strike after the
+    # chosen one draws every glyph differently, so that reading it shows. The
+    # first strike is null, whose size reads as zero.
+    other = {g: (1, 1, b"png ", png(2, 2)) for g in range(1, n)}
+    table = sbix_table(n, [
+        None, (8, other), (16, chosen), (16, other), (12, other),
+    ])
+    sbix_face(os.path.join(directory, "SbixInk.ttf"), 1000, n, table)
+    # 16384 units at 3 ppem, where a box a few thousand pixels across is
+    # millions of units, past where a float counts in halves: HarfBuzz
+    # rounds in single precision, which an odd count of units rounds to even,
+    # and then takes each edge through a float, where past 2^24 units only
+    # every other whole number is held — and a width of a quarter of a
+    # billion units, measured as the difference of two such edges, only
+    # every eighth.
+    large = sbix_table(5, [(3, {1: (1538, -1538, b"png ", png(1538, 3073)),
+                                 2: (-5121, 5121, b"png ", png(5121, 1)),
+                                 3: (-24523, 0, b"png ", png(49102, 1))})])
+    sbix_face(os.path.join(directory, "SbixInkLarge.ttf"), 16384, 5, large)
+    # A strike offset past the end of the table, which fails HarfBuzz's
+    # sanitizer and with it the whole table: every glyph is its outline.
+    bad = sbix_table(4, [(16, {1: (0, 0, b"png ", png(4, 4))}), (8, {})])
+    bad = bad[:12] + struct.pack(">I", len(bad) + 1) + bad[16:]
+    sbix_face(os.path.join(directory, "SbixInkRejected.ttf"), 1000, 4, bad)
+    # Two thousand strikes, the first few hundred sharing one strike's data
+    # and the rest null. HarfBuzz's sanitizer allows a table checking of 64
+    # units a byte of it, and checking costs a unit a byte checked: four for
+    # each strike offset, and for each strike that is not null, four for each
+    # of its glyph offsets. The live strikes and the padding after the table
+    # are chosen so that the checking costs exactly what this table allows,
+    # which is one unit too many — the allowance must be left above nothing —
+    # and the sanitizer refuses the whole table; and a byte more of padding
+    # allows sixty-four units more, and the same strikes pass.
+    glyphs = 300
+    shared = sbix_table(glyphs, [(16, {1: (0, 0, b"png ", png(4, 4))})])
+    at = struct.unpack(">I", shared[8:12])[0]
+    many = 2000
+    head = 8 + 4 * many
+    base = head + len(shared) - at
+    live = 0
+    while (4 * many + live * 4 * (glyphs + 1)) % 64 or 4 * many + live * 4 * (glyphs + 1) < 64 * base:
+        live += 1
+    pad = (4 * many + live * 4 * (glyphs + 1)) // 64 - base
+    offsets = struct.pack(">I", head) * live + struct.pack(">I", 0) * (many - live)
+    ops = struct.pack(">HHI", 1, 1, many) + offsets + shared[at:]
+    sbix_face(os.path.join(directory, "SbixInkOps.ttf"), 1000, glyphs, ops + b"\0" * pad)
+    sbix_face(os.path.join(directory, "SbixInkOpsEdge.ttf"), 1000, glyphs, ops + b"\0" * (pad + 1))
+
+
 build(os.path.join(sys.argv[1], "ColourInk.ttf"), True)
 build(os.path.join(sys.argv[1], "ColourInkStatic.ttf"), False)
 bitmap(os.path.join(sys.argv[1], "BitmapInk.ttf"))
+sbix(sys.argv[1])

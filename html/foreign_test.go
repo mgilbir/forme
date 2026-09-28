@@ -6,8 +6,9 @@ import (
 	"time"
 )
 
-// Foreign content — SVG and MathML — and why its subtree is skipped rather than
-// parsed on.
+// Foreign content — SVG — and why its subtree is skipped rather than parsed
+// on. MathML's is parsed on, as MathML, and is laid out: its text is the text
+// of MathML token elements, which mathml_test.go holds to that.
 //
 // An unknown *HTML* element keeps its place in the tree and its content is
 // parsed on, and that is right: the content is HTML, a browser shows it, and a
@@ -51,8 +52,6 @@ func TestForeignContentDoesNotReachTheFlow(t *testing.T) {
 			`<p>before</p><svg width="10"><text x="0" y="9">LEAK</text></svg><p>after</p>`},
 		{"nested svg",
 			`<p>before</p><svg><svg><text>LEAK</text></svg><text>LEAK</text></svg><p>after</p>`},
-		{"mathml",
-			`<p>before</p><math><mi>LEAK</mi></math><p>after</p>`},
 		{"an svg holding what looks like html",
 			`<p>before</p><svg><foreignObject><div>LEAK</div></foreignObject></svg><p>after</p>`},
 	} {

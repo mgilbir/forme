@@ -54,6 +54,9 @@
 //
 // # Subsetting
 //
+// A font whose outlines are CFF2 is read as the CFF font it draws where it is
+// cut (cff2cff.go), and is subsetted and embedded as that.
+//
 // Both glyf and CFF outlines are subsetted, by the same rule: glyph indices are
 // retained and a dropped glyph becomes an empty one. A CID-keyed CFF is the
 // exception. Its subset holds only the glyphs kept, renumbered in their order,
@@ -147,14 +150,31 @@ type Face struct {
 	// face has in its glyph headers instead: nil for every face but a CFF one.
 	// See cffink.go.
 	ink *cffInk
+	// cff2 is a face whose outlines are CFF2 read at its default instance,
+	// written as CFF a glyph at a time as it is asked for (cff2cff.go), and
+	// nil for every other face. cff2Limits is what writing an instance cut
+	// from one reported. Each says which glyphs were written empty, and why.
+	cff2       *cff2Default
+	cff2Limits []string
 	// colr measures the ink of a colour glyph by painting it, which is asked
 	// before the outline is: nil for a face with no COLR table. See
 	// colrink.go.
 	colr *colrInk
 	// bitmap reads the ink of a colour bitmap glyph from its metrics, which is
-	// asked before anything else: nil for a face with no CBDT. See
-	// bitmapink.go.
+	// asked before COLR is: nil for a face with no CBDT. See bitmapink.go.
 	bitmap *cbdtInk
+	// sbix reads the ink of an sbix bitmap glyph from its image's size, which
+	// is asked before anything else: nil for a face with no sbix table, or one
+	// HarfBuzz would refuse. See sbixink.go.
+	sbix *sbixInk
+	// varc measures and draws a glyph through the VARC table, which is asked
+	// after COLR and before the outline: nil for a face with none, or one
+	// HarfBuzz would refuse. See varc.go.
+	varc *varcFace
+	// varcInk is the ink of each VARC glyph of a face from LoadInstance, which
+	// was written out as a glyf outline and whose table was dropped, as
+	// HarfBuzz measures the glyph at the location. See varcinstance.go.
+	varcInk map[int]extents
 	// simple is set when the face is to be embedded as a simple font: one byte
 	// per character through WinAnsiEncoding, rather than as a composite font
 	// keyed by glyph index.
@@ -199,6 +219,13 @@ type Face struct {
 	// nil stands for.
 	varCoords []float64
 
+	// settingsOn and settingsOff are the features this face was loaded asking
+	// for and against — an @font-face rule's font-feature-settings — in the
+	// settled form Features.Tags is kept in. Empty for a face nobody asked
+	// that of, which is every face but one WithFeatureSettings made. See
+	// WithFeatureSettings.
+	settingsOn, settingsOff string
+
 	used map[int]bool // glyph indices this face has encoded
 }
 
@@ -240,6 +267,33 @@ func noCmapError(prog *font.Program) error {
 	return errors.New("fonts: the font has no Unicode character map")
 }
 
+// headUnitsPerEm is the em a font's glyphs are drawn on: head's unitsPerEm,
+// and a thousand units where the font has no head HarfBuzz reads (one shorter
+// than the table's fifty-four bytes), as HarfBuzz takes it.
+//
+// A head that states an em outside 16..16384 is refused. OpenType allows no
+// other (since 1.8.2), and nothing else agrees what such a font is. HarfBuzz
+// reads it as a thousand units (hb-ot-head-table.hh, get_upem). FreeType
+// refuses the font outright, and so do the browsers' font sanitizer and every
+// PDF reader built on FreeType. pdf.js takes the em as stated for its metrics.
+// So there is no number this package could measure and write a document's
+// widths with that the readers of the embedded program would agree with:
+// HarfBuzz's thousand is not the em the program states, and the stated em is
+// not one most readers will draw at all. Refusing it is what the author can
+// act on; either reading is a page drawn wrong.
+func headUnitsPerEm(head []byte) (int, error) {
+	if len(head) < 54 {
+		return 1000, nil
+	}
+	u := font.Be16(head, 18)
+	if u < 16 || u > 16384 {
+		return 0, fmt.Errorf("fonts: the font's head table states %d units to the em, "+
+			"outside the 16 to 16384 OpenType allows; FreeType and the browsers refuse "+
+			"such a font, so no reader would draw it as measured", u)
+	}
+	return u, nil
+}
+
 // Load parses an sfnt font program — TrueType or OpenType — and prepares it for
 // embedding. The bytes are retained as they are, and Subset cuts them down.
 //
@@ -268,9 +322,22 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	if tables == nil {
 		return nil, errors.New("fonts: not an sfnt font program (TrueType or OpenType)")
 	}
+	unitsPerEm, err := headUnitsPerEm(tables["head"])
+	if err != nil {
+		return nil, err
+	}
 	_, hasGlyf := tables["glyf"]
 	_, hasCFF := tables["CFF "]
-	if !hasGlyf && !hasCFF {
+	// CFF2 outlines: a variable font whose charstrings blend their own
+	// variations. A document format that predates CFF2 cannot carry it, and a
+	// face is embedded as what it draws, so such a face is read as the CFF font
+	// it draws at its default instance (cff2Default in cff2cff.go) — exactly
+	// what the CFF2 charstrings draw there, since nothing is blended — and is
+	// measured, subsetted and embedded as that. LoadInstance cuts it anywhere
+	// else.
+	_, hasCFF2 := tables["CFF2"]
+	cff2Outlines := hasCFF2 && !hasGlyf && !hasCFF
+	if !hasGlyf && !hasCFF && !cff2Outlines {
 		return nil, errors.New("fonts: the font carries neither glyf nor CFF outlines")
 	}
 	// One budget for the whole font, shared by the sfnt and CFF readers, so
@@ -295,7 +362,20 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	var gidToCID []int
 	var registry, ordering string
 	var supplement int
-	if !hasGlyf {
+	var cff2 *cff2Default
+	if cff2Outlines {
+		var err error
+		if cff2, err = newCFF2Default(tables, budget); err != nil {
+			// Said as what it is — a CFF2 font whose table cannot be read —
+			// rather than as the table's own complaint alone, which names an
+			// INDEX or a DICT and not the kind of font it was.
+			return nil, fmt.Errorf("fonts: the font's outlines are CFF2, and its CFF2 table cannot be read: %w", err)
+		}
+		// The CFF it is embedded as is CID-keyed in Adobe-Identity-0, each
+		// glyph's CID its index: see cff2cff.go.
+		gidToCID = identityCIDs(prog.NumGlyphs)
+		registry, ordering, supplement = "Adobe", "Identity", 0
+	} else if !hasGlyf {
 		// The CFF table has to be parsed on its own: the sfnt reader answers
 		// questions from cmap, hmtx and maxp and never opens it, so nothing
 		// about the outlines is known until it is asked directly. (Reading
@@ -339,15 +419,12 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		supplement: supplement,
 		prog:       prog,
 		cff:        !hasGlyf,
-		unitsPerEm: 1000,
+		unitsPerEm: unitsPerEm,
 		varCoords:  coords,
 		used:       map[int]bool{},
 	}
 	head := tables["head"]
 	if len(head) >= 54 {
-		if u := font.Be16(head, 18); u > 0 {
-			f.unitsPerEm = u
-		}
 		f.bbox = [4]int{
 			signed16(font.Be16(head, 36)), signed16(font.Be16(head, 38)),
 			signed16(font.Be16(head, 40)), signed16(font.Be16(head, 42)),
@@ -378,13 +455,19 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	}
 	f.readOS2(tables["OS/2"])
 	f.readPost(tables["post"])
-	if !hasGlyf {
+	switch {
+	case cff2 != nil:
+		f.cff2 = cff2
+		f.ink = newCFF2Ink(cff2)
+	case !hasGlyf:
 		f.ink = newCFFInk(tables["CFF "], prog.NumGlyphs)
 	}
 	if len(tables["COLR"]) > 0 {
 		f.colr = newCOLRInk(f, tables, prog.NumGlyphs)
 	}
 	f.bitmap = newCBDTInk(tables, f.unitsPerEm)
+	f.sbix = newSbixInk(tables, prog.NumGlyphs, f.unitsPerEm)
+	f.varc = newVARCFace(f, tables, prog.NumGlyphs)
 	f.vert = readVerticalTables(tables, prog.NumGlyphs, budget)
 	if err := budget.Err(); err != nil {
 		return nil, err

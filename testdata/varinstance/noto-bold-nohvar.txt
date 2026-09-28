@@ -14,7 +14,7 @@ font-sha256 bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d
 strip-hvar yes
 location wght=700
 axes wght wdth
-normalized 0.6100073219837122 0.0
+normalized 0.61004638671875 0.0
 glyphs 4515
 noise 773
 noise-sampled 62

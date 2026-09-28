@@ -10,6 +10,7 @@ import (
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/diag"
 )
 
 // The cascade: deciding which declaration wins when several apply, and what an
@@ -161,6 +162,14 @@ type Styler struct {
 	// sends them back to a document that still has the finding in it. See
 	// suppressed, which is the key.
 	seen map[string]bool
+
+	// namespaces is what the stylesheet being prepared declared with
+	// @namespace, nil for nothing, and namespacesClosed says a rule has come
+	// after which none may be declared. Both are per sheet: CSS Namespaces 3
+	// scopes a declaration to the sheet it is written in. See
+	// prepareNamespace.
+	namespaces       *css.Namespaces
+	namespacesClosed bool
 
 	// intern shares what the document's computed styles have in common. See
 	// styleInterner; it is per Styler because a Styler styles one document.
@@ -452,6 +461,9 @@ func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media, urls InlineU
 		// below. It is a view of the builder and not a copy; the writes that
 		// follow go through the builder.
 		cs := b.cs
+		// math-depth before font-size, which "font-size: math" scales by how
+		// far it moved. See mathml.go.
+		s.resolveMathDepth(b, parent)
 
 		// The parent's own size, which is what an em means here, and the
 		// initial size for the root — a document that says nothing about
@@ -475,7 +487,7 @@ func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media, urls InlineU
 		if !parent.IsZero() {
 			fontStyle = parent
 		}
-		size, resolved := fontSizeOf(cs, own, parentSize, rootSize, s.viewport, m, fontStyle)
+		size, resolved := s.fontSize(cs, own, parent, parentSize, rootSize, m, fontStyle)
 		// The scale a stated size is on is the one it was stated in, so this
 		// asks only where nothing has been stated: by this element, and by
 		// none of its ancestors either. See DefaultMonospaceFontSize.
@@ -526,6 +538,7 @@ func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media, urls InlineU
 			b.set(fontSizeID, s.interner().value(pxValue(size)))
 		}
 		s.absolutiseLengths(b, declared, size, rootSize)
+		s.resolveRelativeWeight(b, parent)
 
 		cs = s.interner().finish(b)
 		out.Styles[n] = cs
@@ -541,17 +554,19 @@ func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media, urls InlineU
 			key := PseudoKey{Node: n, Name: name}
 			pb, pdeclared, own := s.computeForPseudo(n, rules, cs, name)
 			pcs := pb.cs
+			s.resolveMathDepth(pb, cs)
 			// A pseudo-element's em is relative to its own font-size, and it
 			// inherits from the element it belongs to rather than from that
 			// element's parent.
 			// A pseudo-element's ex is its originating element's, for the same
 			// reason its em is: it inherits from that element and not from that
 			// element's parent.
-			psize, presolved := fontSizeOf(pcs, own, size, rootSize, s.viewport, m, cs)
+			psize, presolved := s.fontSize(pcs, own, cs, size, rootSize, m, cs)
 			if presolved {
 				pb.set(fontSizeID, s.interner().value(pxValue(psize)))
 			}
 			s.absolutiseLengths(pb, pdeclared, psize, rootSize)
+			s.resolveRelativeWeight(pb, cs)
 			out.Pseudo[key] = s.interner().finish(pb)
 			if own {
 				out.OwnPseudoFontSize[key] = true
@@ -619,6 +634,7 @@ func (s *Styler) prepare(sheets []Sheet) []preparedRule {
 
 	for _, sheet := range sheets {
 		s.sheet = sheet.Name
+		s.namespaces, s.namespacesClosed = nil, false
 		if done, ok := preparedBefore(sheet, order, s.media); ok {
 			// The same sheet, prepared before, at the same place in the order.
 			// The rules are reused; the findings are raised again, because they
@@ -960,6 +976,17 @@ func utf8Charset(label string) bool {
 func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 	out *[]preparedRule, order *int) {
 
+	if rule.At && ascii.EqualFold(rule.Name, "namespace") {
+		s.prepareNamespace(rule, parent)
+		return
+	}
+	if !rule.At || !(ascii.EqualFold(rule.Name, "charset") ||
+		ascii.EqualFold(rule.Name, "layer") && !rule.HasBlock) {
+		// Anything but these three ends the part of a sheet where an
+		// @namespace may be written. (@import never reaches here: the loader
+		// has already put the sheet it names in its place.)
+		s.namespacesClosed = true
+	}
 	if rule.At {
 		if ascii.EqualFold(rule.Name, "media") {
 			s.prepareMedia(rule, parent, origin, out, order)
@@ -1024,7 +1051,7 @@ func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 	// Nested or not, the prelude is parsed once and as the author wrote it: a
 	// nested rule's selectors are relative, and their "&" is the parent by
 	// reference. See css.ParseNestedSelectorList.
-	sels, errs, ok := css.ParseNestedSelectorList(rule.Prelude, parent)
+	sels, errs, ok := css.ParseNestedSelectorListIn(rule.Prelude, parent, s.namespaces)
 	for _, e := range errs {
 		s.report(Finding{
 			Offset:      e.Offset,
@@ -1044,6 +1071,74 @@ func (s *Styler) prepareRule(rule css.Rule, parent *css.Nesting, origin Origin,
 	}
 
 	s.prepareStyleBlock(rule, sels, nil, origin, out, order)
+}
+
+// prepareNamespace reads an @namespace rule: CSS Namespaces 3 §3, a default
+// namespace or a prefix bound to one, which the selectors after it in the same
+// sheet are read against. It is valid only at the top of a sheet, before
+// every rule but @charset, @import and a statement @layer; anywhere else, and
+// with a prelude that is not an optional prefix and a string or url(), it is
+// invalid and ignored, which is reported. A prefix declared twice, or the
+// default namespace, keeps the later declaration.
+func (s *Styler) prepareNamespace(rule css.Rule, parent *css.Nesting) {
+	if parent != nil || s.namespacesClosed || rule.HasBlock {
+		s.report(Finding{
+			Offset: rule.Offset,
+			Message: "an @namespace rule must be written before every other rule but " +
+				"@charset, @import and @layer statements; this one was ignored",
+			Property: "@namespace",
+		})
+		return
+	}
+	var vals []css.ComponentValue
+	for _, v := range rule.Prelude {
+		if v.IsToken() && v.Token.Kind == css.Whitespace {
+			continue
+		}
+		vals = append(vals, v)
+	}
+	prefix, hasPrefix := "", false
+	if len(vals) == 2 && vals[0].IsToken() && vals[0].Token.Kind == css.Ident {
+		prefix, hasPrefix = vals[0].Token.Value, true
+		vals = vals[1:]
+	}
+	uri, ok := "", len(vals) == 1
+	if ok {
+		switch v := vals[0]; {
+		case v.IsToken() && (v.Token.Kind == css.String || v.Token.Kind == css.URL):
+			uri = v.Token.Value
+		case v.IsFunction() && ascii.EqualFold(v.Token.Value, "url"):
+			var args []css.ComponentValue
+			for _, a := range v.Values {
+				if !a.IsToken() || a.Token.Kind != css.Whitespace {
+					args = append(args, a)
+				}
+			}
+			ok = len(args) == 1 && args[0].IsToken() && args[0].Token.Kind == css.String
+			if ok {
+				uri = args[0].Token.Value
+			}
+		default:
+			ok = false
+		}
+	}
+	if !ok {
+		s.report(Finding{
+			Offset: rule.Offset,
+			Message: "the @namespace rule " + quoted(serialize(rule.Prelude)) +
+				" is not a prefix and a namespace name, so it was ignored",
+			Property: "@namespace",
+		})
+		return
+	}
+	if s.namespaces == nil {
+		s.namespaces = &css.Namespaces{Prefixes: map[string]string{}}
+	}
+	if hasPrefix {
+		s.namespaces.Prefixes[prefix] = uri
+	} else {
+		s.namespaces.Default, s.namespaces.HasDefault = uri, true
+	}
 }
 
 // prepareStyleBlock prepares one style block: the declarations it holds, which
@@ -1503,6 +1598,8 @@ var displayOutside = map[string]bool{"block": true, "inline": true, "run-in": tr
 var displayInside = map[string]bool{
 	"flow": true, "flow-root": true, "table": true,
 	"flex": true, "grid": true, "ruby": true,
+	// MathML Core §4.1: <display-outside> || [ <display-inside> | math ].
+	"math": true,
 }
 
 // singleDisplay is every value that stands on its own: the box keywords, the
@@ -1604,6 +1701,12 @@ var nonNegative = map[string]bool{
 	"column-gap": true, "row-gap": true, "gap": true, "columns": true,
 	"line-clamp": true, "-webkit-line-clamp": true,
 	"flex": true,
+
+	// CSS Backgrounds 3 §4.1's corners, <length-percentage [0,∞]>{1,2}, and
+	// their shorthand, every number of which is one of those radii.
+	"border-top-left-radius": true, "border-top-right-radius": true,
+	"border-bottom-right-radius": true, "border-bottom-left-radius": true,
+	"border-radius": true,
 }
 
 // The logical longhands and shorthands whose physical counterparts may not be
@@ -1838,7 +1941,16 @@ func (s *Styler) report(f Finding) {
 // Unsupported finding the bound drops turns the note into one, with that
 // finding's property — which is what decides the rule a caller maps it to — and
 // its message, so what the page lacked is named rather than hinted at.
+//
+// It is also where a finding is made text. A message quotes the stylesheet and
+// the document — a value, a property, a media query, a tag name — and those are
+// bytes the author chose: "color: a\x01b" put a control character in a message,
+// and an element named in a document that is not UTF-8 put bytes that are not
+// text at all. Every finding this stage produces passes through here, so this
+// is where the guarantee is kept rather than at each of the places that quote.
+// See internal/diag.
 func appendBounded(findings []Finding, f Finding) []Finding {
+	f.Message, f.Property = diag.Text(f.Message), diag.Text(f.Property)
 	if len(findings) < maxFindings {
 		return append(findings, f)
 	}
@@ -1990,7 +2102,34 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 	// ever does. They belong to the element and not to its pseudo-elements,
 	// which have no attributes of their own.
 	if pseudo == "" {
-		for property, value := range presentationalHints(n) {
+		hints := presentationalHints(n)
+		names := make([]string, 0, len(hints))
+		for property := range hints {
+			names = append(names, property)
+		}
+		sort.Strings(names)
+		for _, property := range names {
+			value := hints[property]
+			// A hint is the declaration its attribute implies, and one whose
+			// value this engine does not evaluate — mspace width="13lh",
+			// mathsize="2rlh" — is dropped and said to be, as the declaration
+			// written in a stylesheet is (see valuegate.go). Kept, it stood in
+			// the cascade as a value no length is ever resolved from: the space
+			// was no width at all, and nothing said why.
+			//
+			// Only a valid value is asked about. Every hint is built to its
+			// property's grammar, so an invalid one would be a hint written
+			// wrong, and a shorthand, which has no grammar of its own here,
+			// would read as invalid.
+			if v := judgeValue(property, value); v.ok && v.unsupported != "" {
+				s.report(Finding{
+					Offset: n.Offset, InMarkup: true,
+					Message: "an attribute read as its declaration: " +
+						unevaluatedReason(property, value, v.unsupported),
+					Unsupported: true, Property: property,
+				})
+				continue
+			}
 			cands = append(cands, candidate{
 				property: property, value: value,
 				text:   s.interner().value(serialize(value)),

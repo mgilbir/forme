@@ -176,11 +176,18 @@ type ReplacedContent struct {
 	// band's edges fall depends on how long the gradient line is. See
 	// gradient.go.
 	Bands *bandedGradient
+
+	// gradient is set when the content is any other gradient: one whose colour
+	// interpolates, which only the FillGradient operation can paint. Like Bands
+	// it needs a size before it is a picture, and it is laid out for each tile
+	// it is painted in. See gradientparse.go.
+	gradient *gradientSpec
 }
 
 // Paints reports whether this content puts anything on the page.
 func (r *ReplacedContent) Paints() bool {
-	return r != nil && (r.Image != nil || r.Solid != nil || r.SVG != nil || r.Bands != nil)
+	return r != nil && (r.Image != nil || r.Solid != nil || r.SVG != nil || r.Bands != nil ||
+		r.gradient != nil)
 }
 
 // replacedLoader turns the references in a box tree into loaded content.
@@ -282,6 +289,21 @@ func resolveReplaced(root *Box, res ResourceResolver, base documentBase, rec *Re
 }
 
 func (l *replacedLoader) walk(b *Box) {
+	if b.Element != nil && b.Element.Namespace != html.NamespaceHTML {
+		// An <svg> is its source. It is not an HTML element, and neither is
+		// any MathML element that shares a name with one: a MathML <img> or
+		// <video> is laid out as MathML.
+		if b.Element.Foreign != "" {
+			l.foreign(b)
+		}
+		l.markerImage(b)
+		l.contentImage(b)
+		l.backgrounds(b)
+		for _, c := range b.Children {
+			l.walk(c)
+		}
+		return
+	}
 	if b.Element != nil && ascii.EqualFold(b.Element.Name, "img") {
 		l.image(b)
 	}

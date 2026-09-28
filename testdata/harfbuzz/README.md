@@ -84,10 +84,24 @@ fonts to 3.6 MB — against the 2 MB the bundled face already costs.
 | `vertical_fixture.py`, `fonts/Vertical*.ttf` | the three faces that oracle needs and no foundry made |
 | `cffink.py`, `cffink.expected.txt` | the ink of CFF glyphs — see below |
 | `cffink_fixture.py`, `fonts/CFFInk.otf` | the face that oracle needs and no foundry made |
+| `cffsubrs.py`, `cffsubrs.expected.txt` | which subroutines of a name-keyed CFF a subset keeps, asked of fontTools — see below |
+| `cff2.py`, `cff2.expected.txt` | CFF2 variable fonts drawn by HarfBuzz and instanced by fontTools at several locations — see below |
+| `cff2_fixture.py`, `fonts/CFF2Blend.otf` | the CFF2 face that oracle needs and no foundry made |
 | `verticalinstance.py`, `verticalinstance.expected.txt` | a variable face set upright off its default, and a kern table's vertical subtables — see below |
 | `verticalinstance_fixture.py`, `fonts/VerticalVariable*.ttf`, `fonts/VerticalKern*.ttf` | the faces that oracle needs and no foundry made |
-| `colrink.py`, `colrink.expected.txt` | the ink of colour glyphs, painted from COLR or read from CBDT — see below |
-| `colrink_fixture.py`, `fonts/ColourInk*.ttf`, `fonts/BitmapInk.ttf` | the faces that oracle needs and no foundry made |
+| `instancevaried.py`, `instancevaried.expected.txt` | a variable face's font-wide metrics and its GPOS devices off its default — see below |
+| `variedlayout_fixture.py`, `fonts/VariedLayout*.ttf` | the faces that oracle needs and no foundry made |
+| `fonts/VariedAxes.ttf` | built by the same script: five axes and two named instances, which layout's tests of where CSS sets a variable face use |
+| `colrink.py`, `colrink.expected.txt` | the ink of colour glyphs, painted from COLR or read from CBDT or sbix — see below |
+| `colrink_fixture.py`, `fonts/ColourInk*.ttf`, `fonts/BitmapInk.ttf`, `fonts/SbixInk*.ttf` | the faces that oracle needs and no foundry made |
+| `pointmatch.py`, `pointmatch.expected.txt` | components placed by matching points, instanced — see below |
+| `varc.py`, `varc.expected.txt` | variable composites (VARC): their ink, and their outlines drawn — see below |
+| `varc_fixture.py`, `fonts/VarComposite*` | the faces that oracle needs and no foundry made |
+| `pointmatch_fixture.py`, `fonts/PointMatch*.ttf` | the faces that oracle needs and no foundry made |
+| `mathtable.py`, `mathtable.expected.txt` | what each face's MATH table states — see below |
+| `mathtable_fixture.py`, `fonts/MathTable.ttf` | the face that oracle needs and no foundry made |
+| `mirroredform.py`, `mirroredform.expected.txt` | what each face's 'rtlm' makes of every glyph it maps — see below |
+| `mirroredform_fixture.py`, `fonts/MirroredForms.ttf` | the face that oracle needs and no foundry made |
 | `ignorables_fixture.py`, `fonts/Ignorables.ttf`, `ignorables.txt`, `ignorables.expected.txt` | a corpus of the characters nothing is drawn for, shaped by `shape.py` in the face it needs — see below |
 
 Each corpus is weighted towards the places shaping decides something rather than
@@ -187,6 +201,54 @@ it stays small.
 
 `make hbcffink` regenerates it.
 
+## The subroutines a subset keeps
+
+A subset carries only the subroutines its glyphs reach, and reaching one can
+take a chain of calls through others, each named by a number pushed in front of
+it. `cffsubrs.py` runs fontTools' subsetter — keeping subroutines rather than
+inlining them — over sets of glyphs of three name-keyed faces, `fonts/CFFInk.otf`
+and the static Source Sans 3 and Source Serif 4 (`make cff-fonts`), and writes
+which of each face's original global and local subroutines survive each set.
+`shape/cffsubrs_test.go` holds the subsetter to that, subroutine for
+subroutine, and holds every kept glyph of every subset to the outline it drew
+before, point for point.
+
+It is fontTools rather than HarfBuzz because the question is a subsetter's, and
+fontTools' subsetter is the one that keeps subroutines. The file records the
+fontTools release as well as HarfBuzz's, and is held to the pin like the rest.
+
+`make cffsubrs` regenerates it.
+
+## CFF2
+
+A CFF2 font's charstrings blend their own variations, and a face made from one
+is embedded as the CFF font it draws where it is cut (`shape/cff2cff.go`).
+Two oracles hold it, each to the question it answers. `cff2.py` asks HarfBuzz
+how a sample of each face's glyphs draw at several locations — extents,
+outlines point for point, advances, and for Noto Sans JP the vertical advances
+and origins VVAR moves — which `shape/cff2_test.go` holds the reader to with
+blends resolved as HarfBuzz resolves them. And it asks fontTools' instancer for
+a static instance at each location, downgraded to CFF: its outlines, its
+glyphs' bounds, its advances, HarfBuzz's extents of its glyphs, and for the
+fixture its hints and its Private DICTs, which the instances this package cuts
+are held to.
+
+The faces are the variable Source Sans 3, Source Serif 4 and Noto Sans JP
+(`make cff-fonts`), and `fonts/CFF2Blend.otf`, built by `cff2_fixture.py` for
+what the real ones never do: numbers blended onto a half, a region of two axes
+at a location where the order its scalars are multiplied in decides a
+rounding, a second group of regions, blends in subroutines, more operands and
+more stems than a CFF charstring holds, the flex operators, 16.16 numbers, a
+second Font DICT with a blended Private DICT, and an HVAR whose advances land
+on halves. It is generated, carries no licence of its own, and rebuilds to the
+same bytes.
+
+The file holds a sample of each real face. The whole of every face — every
+glyph at every location — was compared out of tree (set `CFF2_SAMPLE` and
+`CFF2_OUTLINES` past the glyph count), and agrees.
+
+`make hbcff2` regenerates the fixture and the file.
+
 ## Upright text away from the default instance
 
 A face from `LoadInstance` is a static font cut at one location, and a glyph
@@ -213,18 +275,45 @@ weight 700 where it departs from fontTools there.
 
 `make hbverticalinstance` regenerates it.
 
+## Metrics and positioning away from the default instance
+
+An instance moves more than its outlines. MVAR moves its font-wide numbers —
+the ascent, the x-height, the underline and the strikeout — and GPOS's Device
+tables, where they are VariationIndexes into GDEF's item variation store, move
+its kerning and its mark and cursive anchors. `instancevaried.py` asks HarfBuzz
+for every `hb_ot_metrics_tag_t` it reports and for strings shaped across, at
+several locations of `fonts/VariedLayout.ttf` and `fonts/VariedLayoutTypo.ttf`
+— built by `variedlayout_fixture.py` to state every MVAR tag and a device on
+every kind of GPOS record, with deltas that land on half units, the second with
+USE_TYPO_METRICS set — of the bundled Noto Sans and of `fonts/NotoSansArabic.ttf`.
+`shape/instancevaried_test.go` holds `LoadInstance` to all of it: the metrics
+read out of the instance's own tables as HarfBuzz reads a static face's, and the
+strings shaped in the instance, whole and cut into two runs.
+
+HarfBuzz moves hhea's ascender, descender and line gap by MVAR's 'hasc', 'hdsc'
+and 'hlgp' as well as OS/2's; fontTools' instancer moves hhea's only where it
+stated the same numbers as OS/2's. This package follows HarfBuzz, and the
+fixture's two tables differ so that the choice shows.
+
+`make hbinstancevaried` regenerates it.
+
 ## The ink of a colour glyph
 
 A colour glyph's box is where it paints, and HarfBuzz measures it by painting
 it: a COLRv1 glyph through its paint graph — every transform, clip, group and
 composite — and a COLRv0 glyph as the union of its layers, unless the table
-states a clip box, and a CBDT glyph by the metrics in front of its image in the
-largest strike. `shape/colrink.go` and `shape/bitmapink.go` do the same.
+states a clip box, a CBDT glyph by the metrics in front of its image in the
+largest strike, and an sbix glyph by the size its PNG's IHDR states, placed at
+the offsets in front of it, in the largest strike. `shape/colrink.go`,
+`shape/bitmapink.go` and `shape/sbixink.go` do the same.
 `colrink.py` asks HarfBuzz for the extents of every glyph of
 `fonts/ColourInk.ttf` — at its default and at three weights, since its
 variable paints move — of `fonts/ColourInkStatic.ttf`, the same face not
-varying with a composite LoadInstance cannot instance, and of
-`fonts/BitmapInk.ttf`, all built by `colrink_fixture.py`, and shapes a few
+varying with a composite placed by matching points, of
+`fonts/BitmapInk.ttf`, and of `fonts/SbixInk*.ttf` — an sbix face, one whose
+boxes are millions of units across, and three whose tables HarfBuzz's
+sanitizer refuses or takes by a byte — all built by `colrink_fixture.py`, and
+shapes a few
 strings in the first across the page and down it, where HarfBuzz places the
 marks and hangs the glyphs by their painted boxes. `shape/colrink_test.go` holds the package to all of it.
 
@@ -233,6 +322,76 @@ tree when the readers were written, and every one agrees; the fixtures cover
 the paint formats and the cases those faces do not reach.
 
 `make hbcolrink` regenerates it.
+
+## Components placed by matching points
+
+A composite may place a component by matching one of its points to a point
+already gathered, and in a variable face both points move. `pointmatch.py`
+instances the two faces `pointmatch_fixture.py` builds at five weights with
+HarfBuzz's instancer and with fontTools', draws every glyph with HarfBuzz at
+each weight, and draws fontTools' instance with HarfBuzz too.
+`shape/pointmatch_test.go` holds `LoadInstance` to all of it: the ordinary
+matches kept as both instancers keep them, record for record, box for box and
+point for point; the instance read as HarfBuzz reads it, including a nested
+match that HarfBuzz and fontTools count differently; and the matches no
+instance can keep — a phantom point, the component's own point, a point
+nobody has — placed at an offset, where HarfBuzz draws the variable face.
+
+`make hbpointmatch` regenerates it.
+
+## Variable composites
+
+A VARC glyph is drawn from other glyphs, each through a transform and at
+coordinates of its own, both varying at the location. `varc.py` asks HarfBuzz
+for every glyph's extents and path in `fonts/VarComposite.ttf`, which
+`varc_fixture.py` builds, at its default and at nine locations, and fontTools'
+glyph set for each VARC glyph's path; and for the extents of the faces beside
+it — conditions nested as deep as HarfBuzz's sanitizer takes and one deeper,
+a table it refuses, a VARC table over CFF glyphs, and a face with no design
+space. `shape/varc_test.go` holds `shape/varc.go` to all of it: every glyph's
+ink as HarfBuzz states it, a VARC glyph's outline HarfBuzz's to the bit, and
+the glyf outline an instance and a subset write for it HarfBuzz's rounded to
+whole units.
+
+`make hbvarc` regenerates it. `fonts/VarCompositeCFF.otf` is built from
+`fonts/CFFInk.otf`, so `make hbcffink` comes first where that changes.
+
+## The MATH table
+
+A math font's MATH table is what MathML is set with: fifty-six constants, and
+per glyph its italics correction, where an accent above it is centred, whether
+it is an extended shape, its kerning, its size variants and how to build it of
+any size from parts. `shape/math.go` reads it where it lies. `mathtable.py`
+asks HarfBuzz for all of it — and fontTools too, and stops if the two
+disagree, so every value written has been read twice by readers that share no
+code — for `fonts/MathTable.ttf`, built by `mathtable_fixture.py` with every
+part of the table in it and a device table of each kind, for the suite's own
+math test fonts (every one with a MATH table but `operators.woff`, whose two
+thousand constructions are one construction repeated), and for Noto Sans Math
+and STIX Two Math from the Google Fonts library. Only what a font states is
+written; `shape/math_test.go` asks every glyph of every face and requires "not
+stated" of every glyph the file does not name.
+
+`make hbmath` regenerates it.
+
+## A glyph's mirrored form
+
+MathML Core draws a right-to-left operator or radical with the font's 'rtlm'
+form of its glyph where the font has one, before it asks for a mirror
+character (§5.3.2) — the other order from a line of text's.
+`shape/mirroredform.go` answers what 'rtlm' makes of one glyph, and
+`mirroredform.py` asks HarfBuzz the same of every character each face maps:
+the character shaped alone, left to right, as it is and with 'rtlm' on for the
+run. The faces are `fonts/MirroredForms.ttf`, built by
+`mirroredform_fixture.py` with the feature stated in each way the answer
+depends on (both single-substitution formats, a second lookup over the first's
+output, a lookup that takes a glyph apart, forms under one script only), the
+suite's `radical-rtlm.woff`, and Noto Sans Math, which states 182 forms, and
+STIX Two Math, which states none. `shape/mirroredform_test.go` asks every
+character of every face and requires "no form" of every one the file does not
+name.
+
+`make hbmirroredform` regenerates it.
 
 ## The characters nothing is drawn for
 

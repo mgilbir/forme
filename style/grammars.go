@@ -54,23 +54,44 @@ func init() {
 	g["z-index"] = single(either(kw("auto"), num(integerSlot)))
 
 	// css-ui-4 §3: auto | <outline-line-style>, the border styles without hidden.
+	// css-backgrounds-3 §4.1: <length-percentage [0,∞]>{1,2}.
+	for _, corner := range []string{"top-left", "top-right", "bottom-right", "bottom-left"} {
+		g["border-"+corner+"-radius"] = repeated(lpNonNeg, 1, 2)
+	}
 	g["outline-width"] = single(lineWidth)
 	g["outline-style"] = single(kw("auto", "none", "dotted", "dashed", "solid",
 		"double", "groove", "ridge", "inset", "outset"))
 	// css-ui-4 §3.4 has auto; CSS 2.1 §18.4 has invert.
 	g["outline-color"] = single(either(kw("auto", "invert"), colour))
+	// css-ui-4 §3.5: <length>, of either sign.
+	g["outline-offset"] = single(num(lengthSlot))
 	g["list-style-image"] = single(either(kw("none"), image))
 
 	// css-color-4 §3.
 	g["color"] = single(colour)
 	g["background-color"] = single(colour)
 	g["text-decoration-color"] = single(colour)
+	// css-text-decor-3 §4: none | [ <color>? && [ <length>{2} <length [0,∞]>? ] ]#,
+	// which is drop-shadow()'s argument list, repeated.
+	g["text-shadow"] = oneOf(single(kw("none")), commaList(dropShadowArgs))
+	// css-text-decor-3 §3.1: none | [ [ filled | open ] || [ dot | circle |
+	// double-circle | triangle | sesame ] ] | <string>; §3.2: <color>; §3.4:
+	// [ over | under ] && [ right | left ]?.
+	g["text-emphasis-style"] = oneOf(single(kw("none")),
+		anyOrder(kw("filled", "open"), kw("dot", "circle", "double-circle", "triangle", "sesame")),
+		single(str))
+	g["text-emphasis-color"] = single(colour)
+	g["text-emphasis-position"] = anyOrderRequired(kw("over", "under"), kw("right", "left"))
 
 	// css-fonts-4.
 	g["font-family"] = commaList(familyName)
 	g["font-size"] = single(either(fontSizeKeyword, lpNonNeg))
 	g["font-style"] = fontStyle
 	g["font-weight"] = single(fontWeight)
+	// normal | <percentage [0,∞]> | the eight width keywords.
+	g["font-width"] = single(either(kw("normal", "ultra-condensed", "extra-condensed",
+		"condensed", "semi-condensed", "semi-expanded", "expanded", "extra-expanded",
+		"ultra-expanded"), num(numeric{percent: true}.nonNeg())))
 	g["font-kerning"] = single(kw("auto", "normal", "none"))
 	g["font-variant-ligatures"] = oneOf(single(kw("normal", "none")), groups(ligatureKeywordGroup))
 	g["font-variant-caps"] = single(kw("normal", "small-caps", "all-small-caps",
@@ -79,6 +100,9 @@ func init() {
 	g["font-variant-east-asian"] = oneOf(single(kw("normal")), groups(eastAsianKeywordGroup))
 	g["font-variant-position"] = single(kw("normal", "sub", "super"))
 	g["font-feature-settings"] = oneOf(single(kw("normal")), commaList(featureTag))
+	// §8.2: normal | [ <opentype-tag> <number> ]#, and §8.1: auto | none.
+	g["font-variation-settings"] = oneOf(single(kw("normal")), commaList(variationTag))
+	g["font-optical-sizing"] = single(kw("auto", "none"))
 
 	// CSS 2.1 §10.8.1 and css-inline-3.
 	g["line-height"] = single(either(kw("normal"), num(numeric{number: true,
@@ -232,12 +256,25 @@ func init() {
 	g["clip"] = single(either(kw("auto"), rectFn))
 	// css-color-4 §11.2.
 	g["opacity"] = single(num(numeric{number: true, percent: true}))
+	// filter-effects-1 §5: none | <filter-value-list>.
+	g["filter"] = filterValue
+	// css-will-change-1 §3: auto | <animateable-feature>#, a feature being
+	// scroll-position, contents or a <custom-ident> that is none of the
+	// words below.
+	g["will-change"] = oneOf(single(kw("auto")), commaList(single(either(
+		kw("scroll-position", "contents"),
+		customIdent("will-change", "none", "all", "auto", "scroll-position", "contents")))))
 	// css-images-3 §5.5-6.
 	g["object-fit"] = single(kw("fill", "contain", "cover", "none", "scale-down"))
 	g["object-position"] = position
 
 	// css-display-3, kept as it was written: see legalDisplay.
 	g["display"] = fromBool(legalDisplay)
+
+	// MathML Core §4.3–§4.5.
+	g["math-style"] = single(kw("normal", "compact"))
+	g["math-shift"] = single(kw("normal", "compact"))
+	g["math-depth"] = single(either(kw("auto-add"), addFn, num(integerSlot)))
 }
 
 // lineWidth is <line-width>: a non-negative length or one of three keywords.
@@ -283,6 +320,14 @@ func aspectRatio(it []css.ComponentValue) verdict {
 		return n(it[0]).and(n(it[2]))
 	}
 	return invalid
+}
+
+// addFn is math-depth's add(<integer>).
+func addFn(v css.ComponentValue) verdict {
+	if !v.IsFunction() || !ascii.EqualFold(v.Token.Value, "add") {
+		return invalid
+	}
+	return single(num(integerSlot))(items(v.Values))
 }
 
 // fontSizeKeyword is <absolute-size> | <relative-size> | math.
@@ -373,6 +418,26 @@ func featureTag(it []css.ComponentValue) verdict {
 		return either(kw("on", "off"), num(integerSlot.nonNeg()))(it[1])
 	}
 	return valid
+}
+
+// variationTag is one entry of font-variation-settings: "<opentype-tag>
+// <number>", the tag a string of four printable ASCII characters and the
+// number any number at all — an axis's range is the font's to say, and a
+// value outside it is clamped to it, not refused.
+func variationTag(it []css.ComponentValue) verdict {
+	if len(it) != 2 || !str(it[0]).ok {
+		return invalid
+	}
+	tag := it[0].Token.Value
+	if len(tag) != 4 {
+		return invalid
+	}
+	for i := 0; i < 4; i++ {
+		if tag[i] < 0x20 || tag[i] > 0x7e {
+			return invalid
+		}
+	}
+	return num(numberSlot)(it[1])
 }
 
 // groups is a "||" of keyword groups, each written at most once: the numeric,
@@ -951,4 +1016,93 @@ func rectFn(v css.ComponentValue) verdict {
 		return invalid
 	}
 	return repeated(either(kw("auto"), num(lengthSlot)), 4, 4)(parts)
+}
+
+// filterValue is Filter Effects 1 §5's "none | [ <filter-function> | <url> ]+",
+// with §6.1's ten functions and their arguments.
+//
+// It says which values are CSS and not which this engine applies: every
+// function here is valid, and layout reports the ones it does not draw.
+func filterValue(it []css.ComponentValue) verdict {
+	if len(it) == 1 {
+		if name, ok := identOf(it[0]); ok && name == "none" {
+			return valid
+		}
+	}
+	if len(it) == 0 {
+		return invalid
+	}
+	// Each is read by layout's filterChain, which evaluates a calc() of a
+	// number, a percentage and an angle (style.ParseNumberPercentage and
+	// style.ParseAngle).
+	amount := num(numeric{number: true, percent: true, readsCalc: true}.nonNeg())
+	out := valid
+	for _, v := range it {
+		if v.IsToken() && v.Token.Kind == css.URL {
+			continue
+		}
+		if !v.IsFunction() {
+			return invalid
+		}
+		args := items(v.Values)
+		var got verdict
+		switch ascii.Lower(v.Token.Value) {
+		case "url":
+			got = valid
+		case "blur":
+			got = optionalOne(args, num(lengthSlot.nonNeg()))
+		case "brightness", "contrast", "grayscale", "invert", "opacity", "saturate", "sepia":
+			got = optionalOne(args, amount)
+		case "hue-rotate":
+			got = optionalOne(args, num(numeric{angle: true, readsCalc: true}))
+		case "drop-shadow":
+			got = dropShadowArgs(args)
+		default:
+			return invalid
+		}
+		if out = out.and(got); !out.ok {
+			return invalid
+		}
+	}
+	return out
+}
+
+// optionalOne is a function's arguments when they are at most one, of a term.
+func optionalOne(args []css.ComponentValue, t term) verdict {
+	switch len(args) {
+	case 0:
+		return valid
+	case 1:
+		return t(args[0])
+	}
+	return invalid
+}
+
+// dropShadowArgs is drop-shadow()'s "<color>? && <length>{2,3}", the third
+// length a standard deviation and never negative.
+func dropShadowArgs(args []css.ComponentValue) verdict {
+	out := valid
+	lengths := 0
+	sawColour := false
+	for i, a := range args {
+		if got := colour(a); got.ok && !sawColour && (i == 0 || i == len(args)-1) {
+			sawColour = true
+			out = out.and(got)
+			continue
+		}
+		slot := lengthSlot
+		if lengths == 2 {
+			slot = lengthSlot.nonNeg()
+		}
+		got := num(slot)(a)
+		if !got.ok {
+			return invalid
+		}
+		out = out.and(got)
+		lengths++
+	}
+	if lengths < 2 || lengths > 3 {
+		return invalid
+	}
+	return out
 }

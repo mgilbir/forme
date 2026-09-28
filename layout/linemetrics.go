@@ -27,6 +27,13 @@ func (l *layouter) strutFor(b *Box) strut { return l.strutAt(b, b.FontSize) }
 func (l *layouter) strutAt(b *Box, size style.Unit) strut {
 	h := l.lineHeightAt(b, size)
 	s := strut{Height: h, Baseline: l.baselineAt(b, h, size)}
+	// The strut is the block's root inline box, and the emphasis marks of its
+	// text are its own: it takes the leading withEmphasis gives the block's
+	// text, so a line holds the marks of a block whose text on it has none.
+	if above, below := l.withEmphasis(b, size, s.Baseline, h.Sub(s.Baseline)); above != s.Baseline ||
+		below != h.Sub(s.Baseline) {
+		s.Baseline, s.Height = above, above.Add(below)
+	}
 	face, ok := l.fontFor(b)
 	if !ok {
 		return s
@@ -124,6 +131,17 @@ func (l *layouter) leadingInFace(b *Box, face *shape.Face) (above, below style.U
 }
 
 func (l *layouter) leadingInFaceAt(b *Box, face *shape.Face, size style.Unit) (above, below style.Unit) {
+	above, below = l.textLeadingInFaceAt(b, face, size)
+	// And far enough on one side to hold the box's emphasis marks, where the
+	// leading leaves them too little room. See withEmphasis.
+	return l.withEmphasis(b, size, above, below)
+}
+
+// textLeadingInFaceAt is leadingInFaceAt without the emphasis marks: how far
+// the text's own half-leading and extents reach, which is what the marks'
+// leading is then measured against. See runLeading, which has to move a run's
+// extents before the marks are asked.
+func (l *layouter) textLeadingInFaceAt(b *Box, face *shape.Face, size style.Unit) (above, below style.Unit) {
 	h := l.lineHeightInFaceAt(b, face, size)
 	above = l.baselineInFaceAt(b, face, h, size)
 	return above, h.Sub(above)
@@ -279,7 +297,7 @@ func (l *layouter) spaceAdvance(block *Box, fallback *shape.Face) style.Unit {
 	// block landed at three fifths of the column it belongs in.
 	return l.br.MeasureSpacedInContext(face, " ", block.FontSize,
 		paragraph.TextSpacing{},
-		shaping{ContextKerns: true, Upright: l.uprightText(block), Off: l.featuresFor(block)}).
+		shaping{ContextKerns: true, Upright: l.uprightRun(block, " "), Off: l.featuresFor(block)}).
 		Add(s.Letter).Add(s.Word)
 }
 

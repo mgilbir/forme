@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonttest"
 )
 
@@ -253,9 +254,14 @@ func FuzzLoadAndUse(f *testing.F) {
 	// The largest is left out on purpose: it is 2 MB, and a fuzzer spends its
 	// time proportionally to the size of what it mutates.
 	for _, name := range []string{
-		"NotoSansBalinese.ttf", // 338 contextual positioning subtables
-		"NotoSansJavanese.ttf", // the universal engine's features
-		"NotoSansArabic.ttf",   // cursive joining and mark filtering
+		"NotoSansBalinese.ttf",  // 338 contextual positioning subtables
+		"NotoSansJavanese.ttf",  // the universal engine's features
+		"NotoSansArabic.ttf",    // cursive joining and mark filtering
+		"CFF2Blend.otf",         // CFF2: blends, Font DICTs, HVAR, VVAR and VORG
+		"SbixInk.ttf",           // sbix strikes, duplicates and image formats
+		"PointMatchPhantom.ttf", // components placed by matching points, instanced
+		"PointMatch.ttf",        // and matched as an instance keeps them
+		"VarComposite.ttf",      // variable composites (VARC), measured, drawn, instanced
 	} {
 		if data, err := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", name)); err == nil {
 			f.Add(data)
@@ -320,6 +326,11 @@ func FuzzLoadAndUse(f *testing.F) {
 // An error is a legitimate answer and is not one of the three: a standard font
 // has no program to subset, and a font whose loca and glyf disagree is one
 // Subset refuses rather than lies about.
+//
+// "Parses" is Load, except for one kind of subset Load cannot take: a
+// renumbered one whose kept glyphs map no character, whose character map is
+// empty because nothing true could go in it. That one is parsed by the sfnt
+// and CFF readers instead, and held to the same glyphs and advances.
 func checkSubset(t *testing.T, f *Face) {
 	t.Helper()
 	prog, kept, err := f.SubsetGlyphs()
@@ -336,6 +347,14 @@ func checkSubset(t *testing.T, f *Face) {
 		}
 	}
 	sub, err := Load(prog)
+	if err != nil && keptMapNoCharacter(f, kept) {
+		// A renumbered subset whose glyphs map no character maps nothing,
+		// and Load refuses a face that can set no text (see
+		// unmappedsubset_test.go). It is still the program a document
+		// embeds, and it is held to that instead.
+		checkUnmappedSubset(t, f, prog, kept)
+		return
+	}
 	if err != nil || sub == nil {
 		t.Fatalf("the subset this package wrote cannot be read back: %v", err)
 	}
@@ -343,6 +362,47 @@ func checkSubset(t *testing.T, f *Face) {
 		if got, want := sub.advanceGID(gid), f.advanceGID(gid); got != want {
 			t.Fatalf("glyph %d advances %v in the subset and %v in the font",
 				gid, got, want)
+		}
+	}
+}
+
+// keptMapNoCharacter reports whether no glyph of kept but .notdef has a
+// character in f's own map, which is when a renumbered subset's map is empty.
+func keptMapNoCharacter(f *Face, kept []int) bool {
+	in := map[int]bool{}
+	for _, gid := range kept {
+		in[gid] = true
+	}
+	for _, gid := range f.Cmap() {
+		if gid != 0 && in[gid] {
+			return false
+		}
+	}
+	return true
+}
+
+// checkUnmappedSubset holds a subset Load refuses for its empty character map
+// to what the subset is for. Its map has to be the reason, read and empty; the
+// program has to parse, with its CFF, as exactly the kept glyphs, renumbered
+// in order; and each has to advance as it did in the face.
+func checkUnmappedSubset(t *testing.T, f *Face, prog []byte, kept []int) {
+	t.Helper()
+	fp := font.ParseSFNT(prog, maxFontWork)
+	if fp == nil {
+		t.Fatal("the subset this package wrote is not an sfnt")
+	}
+	if len(fp.Cmap) != 0 || fp.CmapPartial {
+		t.Fatalf("the subset maps %d characters and Load refuses it", len(fp.Cmap))
+	}
+	if fp.NumGlyphs != len(kept) {
+		t.Fatalf("the subset holds %d glyphs and kept %d", fp.NumGlyphs, len(kept))
+	}
+	if cff := font.ParseCFFGlyphs(font.SFNTTables(prog)["CFF "], font.NewBudget(maxFontWork)); cff == nil || cff.NumGlyphs != len(kept) {
+		t.Fatalf("the subset's CFF does not parse as its %d glyphs", len(kept))
+	}
+	for i, gid := range kept {
+		if got, want := fp.WidthByGID[i], f.advanceGID(gid); got != want {
+			t.Fatalf("glyph %d advances %v in the subset and %v in the font", gid, got, want)
 		}
 	}
 }
@@ -432,6 +492,10 @@ func useFace(face *Face) {
 	_ = face.Program()
 	_ = face.GlyphAdvances()
 	_ = face.StatesVerticalMetrics()
+	// Every instance's name is looked at: a match that accepts nothing walks
+	// the whole of fvar and the name table.
+	_, _ = face.NamedInstance(func(string) bool { return false })
+	_, _ = face.NamedInstance(func(string) bool { return true })
 
 	// Per glyph, past the end of the table as well: a count a font states and a
 	// table that does not hold it is the shape of the bug this is looking for.
@@ -440,16 +504,60 @@ func useFace(face *Face) {
 		_, _, _ = face.GlyphVerticalMetrics(gid)
 		_ = face.GlyphCode(gid)
 		_, _, _ = face.HalfWidthTrim(gid)
+		_, _, _, _, _ = face.GlyphExtents(gid)
+	}
+	// And the ink of the first few dozen glyphs, which is read from whichever
+	// table answers for each — a bitmap's strike, a colour glyph's paint, a
+	// composite's components — and each of those is its own reader of the
+	// file's offsets. The glyphs shaped below reach only the few the cmap
+	// maps the sample text to.
+	for gid := 2; gid < min(face.NumGlyphs(), 64); gid++ {
+		_, _, _, _, _ = face.GlyphExtents(gid)
+	}
+	_, _, _ = face.ScriptOffsets()
+	// The MATH table, where the font has one: every question, for glyphs in
+	// range and out. See FuzzMathTable for a target on the table alone.
+	if m, err := face.MathTable(); err == nil && m != nil {
+		for c := MathConstant(0); c < MathConstantCount; c++ {
+			_, _ = m.Constant(c)
+		}
+		_ = m.MinConnectorOverlap()
+		for _, gid := range []int{-1, 0, 1, face.NumGlyphs(), face.NumGlyphs() + 1} {
+			_, _ = m.ItalicsCorrection(gid)
+			_, _ = m.TopAccentAttachment(gid)
+			_ = m.IsExtendedShape(gid)
+			_, _ = m.Kern(gid, MathKernTopRight, 0)
+			for _, v := range []bool{false, true} {
+				_ = m.Variants(gid, v)
+				_, _ = m.Assembly(gid, v)
+				_, _ = m.Stretch(gid, v, 5000)
+			}
+			_ = m.PreferredStretchWidth(gid)
+		}
+		_ = m.Limits()
 	}
 	for _, r := range []rune{'a', 0x0628, 0x0915, 0x1B13, 0x2011, 0x3000, 0x10FFFF} {
 		_, _ = face.GlyphID(r)
 		_, _ = face.Advance(r)
 		_, _ = face.GlyphIDForTest(r)
 		_ = face.StandsIn(r)
+		_, _ = face.MirroredForm(r)
+	}
+	// The characters a font's 'rtlm' is for: a bracket with a mirror, and
+	// operators with none.
+	for _, r := range []rune{'(', 0x221A, 0x2211, 0x222B} {
+		_, _ = face.MirroredForm(r)
 	}
 
 	clone := face.Clone()
-	stack := NewStack(face, clone)
+	// And a copy loaded with settings of its own, turning on what nothing asks
+	// for by default and off what is on, so that the plans built from the
+	// font's bytes are asked with a second step in them.
+	settled := face.WithFeatureSettings([]FeatureSetting{
+		{Tag: "smcp", On: true}, {Tag: "liga"}, {Tag: "kern"}, {Tag: "zzzz", On: true},
+	})
+	_ = settled.FeatureSettings()
+	stack := NewStack(face, clone, settled)
 	_ = stack.Faces()
 
 	// With a language, so that the language systems a font names are read as
@@ -483,6 +591,8 @@ func useFace(face *Face) {
 	_, _ = face.ShapeGlyphsInContextOrAcross(text, before, after, true, off)
 	_ = face.ContextCanChange(text, off)
 	_ = face.FormsFollowNeighbours(text, off)
+	_, _ = settled.ShapeGlyphsInContext(text, before, after, off)
+	_ = settled.ContextCanChange(text, off)
 
 	whole := face.ShapeGroup(text, before, after, true, off)
 	_, _ = GroupContext(before, after, before, after)

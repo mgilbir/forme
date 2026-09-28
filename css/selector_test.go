@@ -522,13 +522,13 @@ func TestMalformedSelectorsAreRefused(t *testing.T) {
 	}
 }
 
-// TestNamespacesAreRefused pins that a qualified name is refused rather than
-// misread. "svg|circle" is not the element "svg" followed by something — a
-// reader that ignores the namespace selects elements the author did not ask for.
-func TestNamespacesAreRefused(t *testing.T) {
-	for _, input := range []string{
-		"svg|circle", "*|a", "|a", "[svg|href]", "a[*|x=y]",
-	} {
+// TestAttributeNamespacesAreRefused pins that a qualified attribute name is
+// refused rather than misread: "[svg|href]" is not an "svg" attribute
+// followed by something, and a reader that ignored the namespace would select
+// elements the author did not ask for. Namespaces on element names are read
+// (see TestNamespacedTypeSelectors); on attributes they are not.
+func TestAttributeNamespacesAreRefused(t *testing.T) {
+	for _, input := range []string{"[svg|href]", "a[*|x=y]", "a[|x]"} {
 		sels, errs, ok := parseSel(t, input)
 		if ok || len(sels) != 0 {
 			t.Errorf("%q was accepted, and its namespace was ignored", input)
@@ -544,6 +544,81 @@ func TestNamespacesAreRefused(t *testing.T) {
 	sels := mustParse(t, "[lang|=en]")
 	if got := sels[0].Compounds[0].Attrs[0].Op; got != AttrDashMatch {
 		t.Errorf("[lang|=en] read its operator as %q, want |=", got)
+	}
+}
+
+// TestNamespacedTypeSelectors is CSS Namespaces 3 §5 for element names: a
+// declared prefix, "*|" for any namespace, "|" for none, and the default
+// namespace for a name or a compound written with no prefix.
+func TestNamespacedTypeSelectors(t *testing.T) {
+	ns := &Namespaces{Default: "urn:d", HasDefault: true,
+		Prefixes: map[string]string{"m": "urn:m", "e": ""}}
+	for _, tc := range []struct {
+		src         string
+		typ         string
+		universal   bool
+		namespace   string
+		hasNS       bool
+		withDefault bool
+	}{
+		{"m|mi", "mi", false, "urn:m", true, true},
+		{"m|*", "", true, "urn:m", true, true},
+		{"*|mi", "mi", false, "", false, true},
+		{"*|*", "", true, "", false, true},
+		{"|mi", "mi", false, "", true, true},
+		{"e|mi", "mi", false, "", true, true},
+		{"mi", "mi", false, "urn:d", true, true},
+		{"*", "", true, "urn:d", true, true},
+		{".c", "", false, "urn:d", true, true},
+		// With no default declared, what has no prefix is in any namespace.
+		{"mi", "mi", false, "", false, false},
+		{".c", "", false, "", false, false},
+	} {
+		use := ns
+		if !tc.withDefault {
+			use = &Namespaces{Prefixes: ns.Prefixes}
+		}
+		vals, _ := ParseComponentValues(tc.src)
+		sels, errs, ok := ParseSelectorListIn(vals, use)
+		if !ok {
+			t.Errorf("%q: refused: %v", tc.src, errs)
+			continue
+		}
+		c := sels[0].Compounds[0]
+		if c.Type != tc.typ || c.Universal != tc.universal || c.Namespace != tc.namespace || c.HasNamespace != tc.hasNS {
+			t.Errorf("%q = type %q universal %v namespace %q (%v), want %q %v %q (%v)", tc.src,
+				c.Type, c.Universal, c.Namespace, c.HasNamespace, tc.typ, tc.universal, tc.namespace, tc.hasNS)
+		}
+	}
+	// Inside a selector argument an implied universal selector is in any
+	// namespace, and a written one is in the default.
+	vals, _ := ParseComponentValues(":not(.c):is(mi)")
+	sels, _, ok := ParseSelectorListIn(vals, ns)
+	if !ok {
+		t.Fatal(":not(.c):is(mi) was refused")
+	}
+	pseudos := sels[0].Compounds[0].Pseudos
+	if c := pseudos[0].Args[0].Compounds[0]; c.HasNamespace {
+		t.Errorf(":not(.c)'s argument is in namespace %q; an implied universal selector there is in any", c.Namespace)
+	}
+	if c := pseudos[1].Args[0].Compounds[0]; !c.HasNamespace || c.Namespace != "urn:d" {
+		t.Errorf(":is(mi)'s argument is in %q (%v), want the default", c.Namespace, c.HasNamespace)
+	}
+
+	// A prefix no @namespace declared makes the selector invalid, and so does
+	// a separator with nothing after it or in the middle of a compound.
+	for _, src := range []string{"svg|circle", "m|", "|", "a.b|c", "m|.c"} {
+		vals, _ := ParseComponentValues(src)
+		if sels, errs, ok := ParseSelectorListIn(vals, ns); ok || len(sels) != 0 || len(errs) == 0 {
+			t.Errorf("%q was accepted: %v %v", src, sels, errs)
+		}
+	}
+	// Without any declarations a prefixed name is invalid, and "*|" and "|"
+	// are still read.
+	for src, ok := range map[string]bool{"svg|circle": false, "*|a": true, "|a": true} {
+		if _, _, got := parseSel(t, src); got != ok {
+			t.Errorf("%q with no @namespace: ok = %v, want %v", src, got, ok)
+		}
 	}
 }
 

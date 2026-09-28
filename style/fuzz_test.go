@@ -6,6 +6,7 @@ import (
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/diag"
 )
 
 // Fuzzing the styling stage.
@@ -109,6 +110,11 @@ func FuzzApply(f *testing.F) {
 		for _, fi := range got.Findings {
 			if fi.Message == "" {
 				t.Fatal("a finding with no message")
+			}
+			// Both quote the inputs, and both are shown to a person: text, with
+			// no control character. See internal/diag.
+			if !diag.IsText(fi.Message) || !diag.IsText(fi.Property) {
+				t.Fatalf("a finding that is not text: %q (%q)", fi.Message, fi.Property)
 			}
 			if fi.Offset < 0 {
 				t.Fatalf("a finding at offset %d", fi.Offset)

@@ -219,6 +219,26 @@ func describeInsetLine(runs []inlineItem) string {
 // Each box's work is its own content now: the items whose nearest box it is, and
 // the two ends of each box directly inside it. The shapes below are the flat
 // line, the nested one, and one in which every box's insets have to move.
+//
+// Each is measured twice. What the placement allocates at n boxes and at 4n is
+// counted: the heap's count is the same on any machine under any load, and the
+// old placement rebuilt the order for every box, which is sixteen times the
+// bytes; the placement reads 4.1 to 4.5, and the old one, restored, 15.9 to
+// 16.7. What it takes is timed, for a defect that allocates nothing — a box
+// asking every item on the line whether it is its own — across sixteen times
+// the boxes (sixty-four for the nested line) with a bound of four times
+// linear. Linear is sixteen and that defect two hundred and fifty-six, so the
+// bound is a factor of four from each; the smaller side places sixteen lines
+// of its own in turn so that both read as much memory, as costtest.TimeCopies
+// does. The placement reads 17 to 32 on the flat lines and 63 to 82 on the
+// nested one, and the defect 171 to 261 and 1,282 to 1,980, with nothing else
+// running and with memory streamed on six threads beside the test.
+//
+// It was one timed ratio at n and 4n with a bound of eight: linear four and
+// the defect sixteen, a factor of two from each. It read 3.8 to 5.1 with
+// nothing else running and 4.5 to 9.1 with memory streamed beside it, which
+// failed the test in each of three runs, and it once crossed the bound under
+// heavy local load.
 func TestInsetPlacementIsLinearInTheBoxesOnALine(t *testing.T) {
 	px := func(n int) style.Unit {
 		u, _ := style.FromPx(float64(n))
@@ -233,10 +253,13 @@ func TestInsetPlacementIsLinearInTheBoxesOnALine(t *testing.T) {
 	}
 	shapes := []struct {
 		name string
-		n    int
-		line func(n int) ([]inlineItem, []int)
+		// n is the smaller size of the allocation's ratio, and 4n the larger.
+		// The time's is across spread² times the boxes: n/spread against
+		// n·spread.
+		n, spread int
+		line      func(n int) ([]inlineItem, []int)
 	}{
-		{"n empty padded boxes and a letter", 1000, func(n int) ([]inlineItem, []int) {
+		{"n empty padded boxes and a letter", 1000, 4, func(n int) ([]inlineItem, []int) {
 			block := &Box{Style: style.Initial()}
 			var runs []inlineItem
 			for i := 0; i < n; i++ {
@@ -248,7 +271,7 @@ func TestInsetPlacementIsLinearInTheBoxesOnALine(t *testing.T) {
 			runs = append(runs, inlineItem{Box: &Box{Parent: block}, Text: "x", Width: px(5)})
 			return runs, identity(len(runs))
 		}},
-		{"n padded boxes holding a letter each", 1000, func(n int) ([]inlineItem, []int) {
+		{"n padded boxes holding a letter each", 1000, 4, func(n int) ([]inlineItem, []int) {
 			block := &Box{Style: style.Initial()}
 			var runs []inlineItem
 			for i := 0; i < n; i++ {
@@ -260,7 +283,7 @@ func TestInsetPlacementIsLinearInTheBoxesOnALine(t *testing.T) {
 			}
 			return runs, identity(len(runs))
 		}},
-		{"n right-to-left boxes, each of whose insets moves", 1000, func(n int) ([]inlineItem, []int) {
+		{"n right-to-left boxes, each of whose insets moves", 1000, 4, func(n int) ([]inlineItem, []int) {
 			block := &Box{Style: style.Initial()}
 			rtl := style.Initial().With("direction", "rtl")
 			var runs []inlineItem
@@ -274,8 +297,12 @@ func TestInsetPlacementIsLinearInTheBoxesOnALine(t *testing.T) {
 			return runs, identity(len(runs))
 		}},
 		// Fewer, because the old cost of this one was the cube: each of n
-		// boxes asked each of 2n items a question that walked n boxes up.
-		{"n boxes nested in one another", 100, func(n int) ([]inlineItem, []int) {
+		// boxes asked each of 2n items a question that walked n boxes up. And
+		// across sixty-four times the boxes rather than sixteen, because each
+		// box's own work here is more than in the flat lines, and a defect that
+		// asks every item a question as cheap as a comparison read only 83 to
+		// 135 across sixteen times.
+		{"n boxes nested in one another", 200, 8, func(n int) ([]inlineItem, []int) {
 			parent := &Box{Style: style.Initial()}
 			var runs []inlineItem
 			var boxes []*Box
@@ -295,17 +322,43 @@ func TestInsetPlacementIsLinearInTheBoxesOnALine(t *testing.T) {
 	}
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {
-			small, large := shape.n, 4*shape.n
 			place := func(n int) func() {
 				runs, order := shape.line(n)
 				l := &layouter{}
 				return func() { l.placeInsetsBySide(runs, slices.Clone(order)) }
 			}
-			r := costtest.Time(t, shape.name, place(small), place(large))
-			if r.Ratio > 8 {
+
+			// What it allocates, at n and 4n: the same number on any machine
+			// under any load, and the defect it is about rebuilt the order for
+			// every box.
+			n := shape.n
+			if a := costtest.Allocated(t, shape.name+", bytes", place(n), place(4*n)); a > 8 {
+				t.Errorf("placing the insets of %d boxes allocated %.1f times what "+
+					"placing those of %d did: linear is four, and copying the line for "+
+					"every box is sixteen", 4*n, a, n)
+			}
+
+			// What it takes, across sixteen times the boxes rather than four:
+			// linear is sixteen and the product of the boxes and the items two
+			// hundred and fifty-six, so a bound of sixty-four is a factor of four
+			// from each. The smaller side places sixteen lines of its own in
+			// turn, so that both read as much memory; see costtest.TimeCopies.
+			small, large := n/shape.spread, n*shape.spread
+			growth := float64(large / small)
+			var lines [16]func()
+			for k := range lines {
+				lines[k] = place(small)
+			}
+			next := 0
+			r := costtest.Time(t, shape.name, func() {
+				lines[next]()
+				next = (next + 1) % len(lines)
+			}, place(large))
+			if r.Ratio > 4*growth {
 				t.Errorf("placing the insets of %d boxes took %v and of %d took %v, "+
-					"a factor of %.1f: linear is four and the product of the boxes and "+
-					"the items is sixteen", small, r.Small, large, r.Large, r.Ratio)
+					"a factor of %.1f: linear is %.0f and the product of the boxes "+
+					"and the items is %.0f", small, r.Small, large, r.Large, r.Ratio,
+					growth, growth*growth)
 			}
 		})
 	}

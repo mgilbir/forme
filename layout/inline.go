@@ -271,6 +271,7 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 		l.reportSpacingTrim(b, unhandledTrim)
 	}
 	items = l.markClosingPunctuation(items, trim)
+	items = l.markOpeningPunctuation(items, trim)
 	items = l.linkShapingContext(items)
 
 	// §5.12.1's ::first-line, which is not a box and cannot be one: it changes
@@ -920,10 +921,17 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						MergePost:    item.MergePost,
 						ContextKerns: item.ContextKerns,
 						Upright:      item.Upright,
-						Features:     item.Off,
+						Features:     runFeatures(item),
 						RTL:          item.Level&1 == 1,
 						Shift:        shift,
+						emphasis:     l.emphasisOf(heldBox(item.Box), heldBox(item.Box).FontSize.Mul(lineScale)),
+						drawShift:    l.drawShiftOf(item),
 					})
+					if item.Combine {
+						run := &line.Runs[len(line.Runs)-1]
+						run.combined = true
+						run.combineScale, run.combineWidth = l.combineFit(item)
+					}
 				}
 				// Which *side* it hangs off, which is not a second way of saying how
 				// much. §4.1.2 hangs the white space past the line's end, and the
@@ -1046,8 +1054,11 @@ func (l *layouter) inlineContent(b *Box, parent *Fragment, width style.Unit, ori
 						// The ellipsis is set the way the line it ends is set.
 						// See clampRoom, which reserves the room for it with the
 						// same question asked.
-						Upright: l.uprightText(ending.box),
+						Upright: l.uprightRun(ending.box, blockEllipsis),
 					})
+					last := &line.Runs[len(line.Runs)-1]
+					last.drawShift, _ = l.centralShift(ending.box, ending.face,
+						ending.size, last.Upright)
 				}
 				parent.Lines = append(parent.Lines, line)
 				l.clampLine()

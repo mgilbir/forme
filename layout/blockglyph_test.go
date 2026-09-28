@@ -81,6 +81,10 @@ type blockFont struct {
 	// that inks nothing, such as a space; a rune absent is one whose outline is
 	// not a rectangle, or that the font does not have.
 	rects map[rune]blockRect
+	// glyphs is the same table keyed by the glyph the cmap maps each of those
+	// runes to. It answers for a character the font draws with a glyph it
+	// holds for another — see fills.
+	glyphs map[int]blockRect
 }
 
 // blockRect is a glyph's ink, in font units. An empty one is a blank glyph.
@@ -115,7 +119,12 @@ func blockFills(ops []Op) []Op {
 	var out []Op
 	changed := false
 	for i, op := range ops {
+		// An emphasis mark is glyphs like a run's, and a mark set in a face of
+		// rectangles inks rectangles as the run does.
 		v, ok := op.(DrawText)
+		if m, isMark := op.(DrawEmphasisMark); isMark {
+			v, ok = m.Mark, true
+		}
 		if !ok {
 			if changed {
 				out = append(out, op)
@@ -178,6 +187,27 @@ func (b *blockFont) fills(v DrawText, measure func(s string, size float64) float
 	for i, r := range runes {
 		br, ok := b.rects[r]
 		if !ok {
+			// A character the font has no entry for may still be drawn with
+			// one of its glyphs. The shaper does what HarfBuzz does and sets
+			// U+2011 NON-BREAKING HYPHEN with the face's U+2010 where it has no
+			// glyph of its own, and a space separator with its U+0020 (see
+			// shape/spacefallback.go). Ahem has U+2010 and not U+2011, and its
+			// U+2010 is a square: line-break-anywhere-overrides-uax-behavior-013
+			// and -014 draw one where their references draw a green square,
+			// which all three browsers pass, and the comparison saw a run of
+			// text over a square of red.
+			//
+			// So the question is asked of the glyph the page draws, not of the
+			// character. One glyph, and one the table classified; .notdef is
+			// never in it, so a character the face cannot draw at all is still
+			// refused below.
+			glyphs, _ := v.Face.ShapeGlyphs(string(r))
+			if len(glyphs) == 1 {
+				if gbr, ok := b.glyphs[glyphs[0].GID]; ok {
+					rects[i] = gbr
+					continue
+				}
+			}
 			// A character the face draws nothing for is not a glyph this has
 			// to place. It is absent from the table for the same reason it is
 			// absent from the page: the shaper takes the default-ignorables
@@ -188,7 +218,7 @@ func (b *blockFont) fills(v DrawText, measure func(s string, size float64) float
 			// no advance is not the same as one with no glyph — a combining
 			// mark has the first and not the second — and treating a mark as
 			// blank would drop ink from the picture.
-			if glyphs, _ := v.Face.ShapeGlyphs(string(r)); len(glyphs) == 0 {
+			if len(glyphs) == 0 {
 				rects[i] = blockRect{blank: true}
 				continue
 			}
@@ -229,17 +259,23 @@ func (b *blockFont) fills(v DrawText, measure func(s string, size float64) float
 	after := spacingAfter(v.Text)
 
 	scale := v.Size.Px() / float64(b.unitsPerEm)
+	// A run squeezed across (DrawText.WidthScale) is its rectangles squeezed
+	// about its origin: each one narrower, and each advance with it.
+	squeeze := 1.0
+	if v.WidthScale > 0 {
+		squeeze = v.WidthScale
+	}
 	pen := v.At.X
 	var out []Op
 	for _, i := range order {
 		br := rects[i]
-		step, ok := style.FromPx(adv[i])
+		step, ok := style.FromPx(adv[i] * squeeze)
 		if !ok {
 			return nil, false
 		}
 		if !br.blank {
-			x0, ok0 := style.FromPx(float64(br.x0) * scale)
-			x1, ok1 := style.FromPx(float64(br.x1) * scale)
+			x0, ok0 := style.FromPx(float64(br.x0) * scale * squeeze)
+			x1, ok1 := style.FromPx(float64(br.x1) * scale * squeeze)
 			y0, ok2 := style.FromPx(float64(br.y0) * scale)
 			y1, ok3 := style.FromPx(float64(br.y1) * scale)
 			if !ok0 || !ok1 || !ok2 || !ok3 {
@@ -309,7 +345,8 @@ func newBlockFont(data []byte) (*blockFont, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := &blockFont{unitsPerEm: upem, rects: map[rune]blockRect{}}
+	out := &blockFont{unitsPerEm: upem, rects: map[rune]blockRect{},
+		glyphs: map[int]blockRect{}}
 	for r, gid := range chars {
 		if gid <= 0 || gid >= numGlyphs {
 			continue
@@ -320,6 +357,7 @@ func newBlockFont(data []byte) (*blockFont, error) {
 		}
 		if start == end {
 			out.rects[r] = blockRect{blank: true}
+			out.glyphs[gid] = blockRect{blank: true}
 			continue
 		}
 		if end > len(glyf) {
@@ -327,6 +365,7 @@ func newBlockFont(data []byte) (*blockFont, error) {
 		}
 		if br, ok := rectContour(glyf[start:end]); ok {
 			out.rects[r] = br
+			out.glyphs[gid] = br
 		}
 	}
 	if len(out.rects) == 0 {

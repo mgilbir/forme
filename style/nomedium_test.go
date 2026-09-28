@@ -46,8 +46,9 @@ func TestAPropertyWithNothingToApplyToIsReportedWithoutClaimingThePageIsWrong(t 
 		// Change over time, of which a page rendered once has none.
 		"transition: all 1s",
 		"transition-duration: 2s",
-		// And the hint whose definition says it has no rendering effect.
-		"will-change: transform",
+		// "will-change: transform" stood here, on the hint's definition that
+		// it has no rendering effect. It has two, a stacking context and a
+		// containing block, which layout makes: see layout/willchange_test.go.
 	} {
 		f, ok := findingFor(t, decl)
 		if !ok {
@@ -82,7 +83,9 @@ func TestAPropertyThatWouldHaveChangedThePageIsStillUnsupported(t *testing.T) {
 		"overflow: hidden",
 		"resize: both",
 		"mix-blend-mode: multiply",
-		"text-emphasis: filled dot",
+		// "text-emphasis: filled dot" stood here until emphasis marks were
+		// drawn; a float's wrap shape is as far from being drawn.
+		"shape-outside: circle(50%)",
 		"clip-path: circle(50%)",
 		// The two scrollbar properties that are *not* in the table, which is the
 		// line it draws: a browser reserves a gutter for "stable" and takes the

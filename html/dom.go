@@ -63,6 +63,52 @@ const (
 	TextNode
 )
 
+// Namespace is the vocabulary an element is in.
+//
+// HTML's parser puts an element in one of three: HTML, SVG or MathML. The zero
+// value is HTML, which is every element of a document that is not inside an
+// <svg> or a <math> — including an XHTML document's elements whatever
+// namespace they declare, since this engine reads every such document as
+// HTML. The other two are what a selector's namespace, a type selector's case
+// and an element's layout are decided by: a <mi> is a MathML identifier inside
+// a <math> and an unknown HTML element outside one.
+type Namespace uint8
+
+const (
+	// NamespaceHTML is http://www.w3.org/1999/xhtml.
+	NamespaceHTML Namespace = iota
+	// NamespaceSVG is http://www.w3.org/2000/svg: an <svg> element, whose
+	// content is kept as source (see Node.Foreign).
+	NamespaceSVG
+	// NamespaceMathML is http://www.w3.org/1998/Math/MathML: a <math> and
+	// every element the tree builder read inside it as MathML.
+	NamespaceMathML
+	// NamespaceOther is an element an XHTML document put in a namespace this
+	// engine does not know, inside a <math>. Nothing lays it out.
+	NamespaceOther
+)
+
+// The namespace names, as XML and CSS spell them.
+const (
+	HTMLNamespaceURI   = "http://www.w3.org/1999/xhtml"
+	SVGNamespaceURI    = "http://www.w3.org/2000/svg"
+	MathMLNamespaceURI = "http://www.w3.org/1998/Math/MathML"
+)
+
+// URI is the namespace's name, and empty for NamespaceOther, whose name is
+// not kept.
+func (ns Namespace) URI() string {
+	switch ns {
+	case NamespaceHTML:
+		return HTMLNamespaceURI
+	case NamespaceSVG:
+		return SVGNamespaceURI
+	case NamespaceMathML:
+		return MathMLNamespaceURI
+	}
+	return ""
+}
+
 // Attribute is one attribute of an element.
 type Attribute struct {
 	// Name is lowercased in an HTML document, because HTML attribute names are
@@ -92,6 +138,10 @@ type Node struct {
 
 	// Text is the character data of a TextNode, with references resolved.
 	Text string
+
+	// Namespace is the vocabulary an element is in; see Namespace. It is
+	// meaningless for the other two kinds.
+	Namespace Namespace
 
 	// Parent is nil for the document node.
 	Parent *Node
@@ -124,8 +174,8 @@ type Node struct {
 	// recovered later.
 	Offset int
 
-	// Foreign is the unparsed source of a subtree that is not HTML, and is empty
-	// for everything else.
+	// Foreign is the unparsed source of an <svg>'s subtree, and is empty for
+	// everything else — a <math>'s subtree is parsed, as MathML.
 	//
 	// An <svg> element's children are SVG. They are not laid out as HTML — that
 	// spliced their text into the flow around them, see foreignElements — and
@@ -201,7 +251,7 @@ func (n *Node) AttrNamed(name string, xml bool) (string, bool) {
 // this element ASCII case-insensitively: whether it is an HTML element in an
 // HTML document. xml says the document is XHTML. See AttrNamed.
 func (n *Node) NamesFoldCase(xml bool) bool {
-	return !xml && n != nil && !foreignElements[n.Name]
+	return !xml && n != nil && n.Namespace == NamespaceHTML
 }
 
 // Language is the language in force at a node: the value of the nearest lang or
@@ -232,14 +282,14 @@ func (n *Node) NamesFoldCase(xml bool) bool {
 // XHTML the prefix "xml" is bound to that namespace by definition, so an
 // "xml:lang" is the attribute wherever it is written. In an HTML document the
 // parser stores it as a literal name in no namespace, which the section says
-// "has no effect on language processing" — except on the roots of SVG and
-// MathML, whose start tags the tree builder puts through "adjust foreign
-// attributes", which moves an xml:lang into the XML namespace. Honouring it on
+// "has no effect on language processing" — except on an SVG root and on
+// every MathML element, whose start tags the tree builder puts through
+// "adjust foreign attributes", which moves an xml:lang into the XML namespace. Honouring it on
 // an HTML element there would be a language this engine invents; ignoring it on
 // an <svg> would be one it loses.
 //
 // **lang in no namespace is an HTML and SVG attribute**, and the section reads
-// it only on those. A <math> has no lang to read, so its language is its
+// it only on those. A MathML element has no lang to read, so its language is its
 // xml:lang or its parent's; and in an XHTML document an element whose name still
 // carries a prefix is in a namespace this engine does not know (see
 // parser.resolveName, which drops a prefix only when it names one it does), so
@@ -278,17 +328,17 @@ func (n *Node) Language() (string, bool) {
 // ownLanguage is the language a node itself declares, if it declares one: the
 // one rule Language and Languages both walk, so that the two cannot come to
 // answer differently. See Language for the rule. xml is asked only when the
-// answer depends on it — an xml:lang on an element that is not a foreign root,
+// answer depends on it — an xml:lang on an element that is not SVG or MathML,
 // or a lang on an element whose name carries a prefix — which leaves the
 // ordinary document, with lang alone, never asking.
 func (n *Node) ownLanguage(xml func() bool) (string, bool) {
 	if n.Type != ElementNode {
 		return "", false
 	}
-	if v, ok := n.Attr("xml:lang"); ok && (foreignElements[n.Name] || xml()) {
+	if v, ok := n.Attr("xml:lang"); ok && (n.Namespace != NamespaceHTML || xml()) {
 		return v, true
 	}
-	if n.Name == "math" {
+	if n.Namespace == NamespaceMathML {
 		return "", false
 	}
 	if v, ok := n.Attr("lang"); ok {

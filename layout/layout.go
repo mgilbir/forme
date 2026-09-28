@@ -56,6 +56,9 @@ type Fragment struct {
 	// Zero when there is no outline to draw, which is the ordinary case and is
 	// what keeps the paint pass cheap.
 	Outline style.Unit
+	// outlineOffset is the used outline-offset, read beside Outline and for
+	// the same reason. See outlineshape.go.
+	outlineOffset style.Unit
 
 	Children []*Fragment
 
@@ -86,6 +89,19 @@ type Fragment struct {
 	// which of its cells took part in their alignment. See firstRowBaseline.
 	tableBaseline, tableRowTop style.Unit
 	hasTableBaseline           bool
+	// mathBaseline is a MathML box's alphabetic baseline, measured down its
+	// content box, and hasMathBaseline says it is one: the formula's own
+	// answer to where its baseline is, which the lines of the tokens inside it
+	// are not. See mathlayout.go.
+	mathBaseline    style.Unit
+	hasMathBaseline bool
+	// mathMarks are the rules a MathML box draws that are not boxes — a
+	// fraction bar, a radical's overbar — each measured from its content box,
+	// as its children are. See mathpaint.go.
+	mathMarks []Rect
+	// mathGlyphs are the glyph constructions it draws that are not its text:
+	// a stretched operator, a radical sign.
+	mathGlyphs []mathGlyphDraw
 	// column is which column of its parent's pour this fragment was put in,
 	// counted from one, and nought where its parent was not poured — a box
 	// whose parent is not a multicol container, or is one that laid its
@@ -134,6 +150,8 @@ type Fragment struct {
 	// area of the bottom layer and so is the border box by default rather than
 	// the padding box. An empty rectangle means no colour is painted.
 	bgColorRect Rect
+	// bgColorRadii is the curve of that rectangle's box. See radius.go.
+	bgColorRadii Radii
 	// bgBands are the rectangles this box's background is painted in, instead of
 	// over its whole box. An empty slice means the ordinary single rectangle.
 	//
@@ -151,6 +169,11 @@ type Fragment struct {
 	// the whole box and only *shown* through the cells — an image tiled per band
 	// would start afresh in each one, which is a different picture.
 	bgBands []Rect
+	// turnedBack marks the fragment of a horizontal inline-block on a turned
+	// line (layouter.turnedBack): the turn moves its rectangle and permutes
+	// its edges and leaves what is inside it alone, because what is inside it
+	// was laid out across the page already. See turnFragment.
+	turnedBack bool
 	// bgSuppressed marks the box whose background became the canvas's, so that
 	// it is not also painted over its own smaller box. See §2.11.2: the element
 	// the background was taken from is left with the initial values.
@@ -181,6 +204,33 @@ type Fragment struct {
 	// box, because a box that is not drawn is far harder to notice than one
 	// that is drawn too large.
 	clipSelf, clipContent Clip
+	// roundSelf and roundContent are the rounded rectangles that clip the same
+	// two things, when some box's border-radius curves a clip: the curve of an
+	// "overflow" box's padding edge, clipping what is inside it. The rectangle
+	// each one is inside is already in clipSelf or clipContent, so these add
+	// only the corners. nil is no curve. See radius.go.
+	roundSelf, roundContent *roundClip
+	// filterClip and filterRound are what clips a filtered box's group, which
+	// is applied after the filter rather than to what the group holds: the
+	// clip and the curves around the box, and its own "clip". See filter.go.
+	filterClip  Clip
+	filterRound *roundClip
+	// filters is, on the root fragment only, every filtered box's chain, which
+	// the painter wraps each such box's group in. See filter.go.
+	filters map[*Box][]FilterFunction
+	// paintLengths is, on the root fragment only, what a length the painter
+	// reads is resolved against beyond its box's font size: the page, for the
+	// viewport units the cascade leaves unresolved, and the root's font size.
+	// See textshadow.go.
+	paintLengths style.LengthContext
+
+	// radii is the box's used border-radius, CSS Backgrounds 3 §4, and zero
+	// for a box with square corners. See radius.go.
+	radii Radii
+	// slicedLeft and slicedRight mark a piece of an inline box that does not
+	// begin or does not end the box on that side — §8.6's slice model, which
+	// gives such a side no border, no padding and no rounded corners.
+	slicedLeft, slicedRight bool
 
 	// absolute says absolutise has made this fragment's position a page
 	// position, which it does to every fragment in the tree and to nothing
@@ -272,8 +322,8 @@ func newLayouter(root *Box, avail Size, set FontSet, rec *Recorder) *layouter {
 		inlineOffsets:    map[*Box]Point{},
 		inlineAligns:     map[*Box]vAlignState{},
 		intrinsic:        map[*Box]intrinsicWidths{},
-		turnedUpright:    map[*Box]bool{},
 		turnedMode:       map[*Box]writingMode{},
+		turnedBack:       map[*Box]writingMode{},
 		grids:            map[*Box]*tableGrid{},
 		tableDemands:     map[*Box][]tableColumnDemand{},
 		collapsed:        map[*Box]*collapsedGrid{},
@@ -296,6 +346,9 @@ func newLayouter(root *Box, avail Size, set FontSet, rec *Recorder) *layouter {
 	}
 	if l.fontSet == nil {
 		l.fontSet = StandardFonts()
+	}
+	if l.inst = instancerOf(l.fontSet); l.inst == nil {
+		l.inst = newInstancer()
 	}
 	return l
 }
@@ -342,6 +395,8 @@ func (l *layouter) layout() *Fragment {
 		frag := icb.Children[0]
 		l.resolveBackgrounds(frag, page)
 		l.resolveClips(frag)
+		l.resolveFilters(frag)
+		frag.paintLengths = l.paintLengths()
 		return frag
 	}
 	frag, m := l.block(root, avail.W,
@@ -385,10 +440,37 @@ func (l *layouter) layout() *Fragment {
 	// never about layout, and a clipped box still occupies every inch of the
 	// space it did — so nothing computed above depends on it.
 	l.resolveClips(frag)
+
+	// And the filters, whose groups are clipped as a whole by what
+	// resolveClips set aside for them.
+	l.resolveFilters(frag)
+	frag.paintLengths = l.paintLengths()
 	return frag
 }
 
+// paintLengths is the length context the painter resolves a computed length
+// in, less the box's own font size, which the painter supplies.
+func (l *layouter) paintLengths() style.LengthContext {
+	return style.LengthContext{
+		RootFontSize:   l.rootFontSize,
+		ViewportWidth:  l.avail.W,
+		ViewportHeight: l.avail.H,
+		ViewportKnown:  true,
+	}
+}
+
 type layouter struct {
+	// What laying out MathML keeps for the run: each face's MATH table, read
+	// once; each box's class as an embellished operator or a space-like
+	// element, and each core operator's properties, which every row asks of
+	// its children, and each row's ends; the token whose text block layout is
+	// laying out as a line rather than as MathML. See mathlayout.go.
+	mathTables  map[*shape.Face]*shape.MathTable
+	mathClasses map[*Box]mathClass
+	mathOps     map[*Box]*mathOp
+	mathEnds    map[*Box]mathEnds
+	mathTextBox *Box
+
 	// languageMemo answers the language questions each text box asks. See
 	// languageMemo.
 	languageMemo
@@ -396,6 +478,13 @@ type layouter struct {
 	// reportedAspect keeps each aspect-ratio narrowing to one finding per
 	// document. See reportAspectRatio.
 	reportedAspect map[string]bool
+
+	// emphases memoizes emphasisOf: what a box's emphasis marks are, at the
+	// size its text is set at. See emphasis.go.
+	emphases map[emphasisKey]*runEmphasis
+	// runKinds memoizes emphasisKinds: which kinds of run — upright, lying
+	// along the line — a box's text holds on a vertical line.
+	runKinds map[*Box]uint8
 
 	rec   *Recorder
 	avail Size
@@ -449,17 +538,24 @@ type layouter struct {
 	// intrinsic memoizes the two content-based widths of a box, which are what
 	// a float with an auto width is sized by.
 	intrinsic map[*Box]intrinsicWidths
-	// turnedUpright records, for each box whose content is laid out sideways,
-	// whether its characters stand upright on the line rather than lying along
-	// it. Only the box that *starts* the turn is in here, because only it can:
-	// the turn is refused outright for a subtree that changes the writing mode
-	// again. See uprightText, which is what reads it, and writingmode.go.
-	turnedUpright map[*Box]bool
-	// turnedMode is the same set keyed to the mode each box was turned in, which
-	// is what the boxes inside it need: their own declarations are physical and
-	// have to be read in the frame the turn will put them back through. See
-	// insideTurn and untuneEdges.
+	// turnedMode records each box whose content is laid out sideways, keyed to
+	// the mode it was turned in. Only the box that *starts* the turn is in
+	// here, because only it can: the turn is refused outright for a subtree
+	// that changes the writing mode again. The boxes inside it need it twice:
+	// their own declarations are physical and have to be read in the frame the
+	// turn will put them back through (insideTurn and untuneEdges), and their
+	// text faces whichever way that mode and their own text-orientation say
+	// (facingOf).
 	turnedMode map[*Box]writingMode
+	// turnedBack records each horizontal inline-block standing on a turned
+	// line, keyed to the vertical mode of the line it is on. It is laid out
+	// across the page in its own frame and is not turned with the line: only
+	// its rectangle is. See layout/writingmode.go's turnsBack.
+	turnedBack map[*Box]writingMode
+	// pendingBack is the turnedBack entries the subtree walk of a box that may
+	// turn has found, kept until the turn is decided: a box refused for
+	// something further on does not turn, and neither do they.
+	pendingBack []*Box
 	// grids and tableDemands memoize the two expensive answers about a table:
 	// where its cells sit in the grid, and what each column asks for. Both are
 	// wanted once while the table's width is being resolved and again while it
@@ -495,8 +591,10 @@ type layouter struct {
 	// bounded by an invariant rather than by an answer, the count is the only
 	// witness there is. See TestAligningTableCellsIsLinearInTheOutOfFlowBoxes.
 	absScans int
-	// positioned maps each positioned box to its fragment, which is how an
-	// absolutely positioned box finds the containing block §10.1 gives it. It is
+	// positioned maps each positioned box to its fragment, and each box a
+	// filter or a will-change makes a containing block (see
+	// containsAbsolutes), which is how an
+	// out-of-flow box finds the containing block §10.1 gives it. It is
 	// a map rather than a walk up the fragment tree because a fragment does not
 	// know its parent — layout builds downwards — and giving it one would add a
 	// pointer to every fragment to answer a question a handful of boxes ask.
@@ -507,6 +605,10 @@ type layouter struct {
 
 	// fontSet is where faces come from.
 	fontSet FontSet
+	// inst is the document's instances of variable faces: the set's own
+	// where the set is the document's, one of the layouter's where a caller
+	// laid out with a set of its own. See fontinstance.go.
+	inst *instancer
 	// rootFontSize is the font-size of the root element, which is what "rem"
 	// resolves against. It is settled once, before the walk: the point of rem is
 	// that it does not compound as elements nest, so reading it from the box in
@@ -560,15 +662,19 @@ type layouter struct {
 	// elements is one thing to be told. Keyed by whatever tells two of them
 	// apart. See reportOnce.
 	reportedOnce map[string]bool
+	// interpolated memoizes a gradient's stops restated in sRGB; see restater.
+	interpolated map[string]interpolatedStops
 	// inlineDraws memoizes whether an inline box has a background or a border to
 	// paint, and inlineChains the chain of such boxes above another box. Both are
 	// asked once per item per line, which is the hottest loop in the engine, and
 	// both answer "nothing" for almost every box in an ordinary document.
 	inlineDraws  map[*Box]bool
 	inlineChains map[*Box][]*Box
-	// inlineFragments are the fragments a *positioned* inline box produced, in
-	// line order. §10.1 forms the containing block of an absolutely positioned
-	// descendant from the first and last of them — see inlineContainingBlock.
+	// inlineFragments are the fragments an inline box that containsAbsolutes —
+	// a *positioned* one, or one a filter or a will-change makes a containing
+	// block — produced, in line order. §10.1 forms the containing block of an
+	// out-of-flow descendant from the first and last of them — see
+	// inlineContainingBlock and containsAbsolutes.
 	inlineFragments map[*Box][]*Fragment
 	// inlineOffsets is §9.4.3's accumulated displacement at each inline box that
 	// has one, which is what its background and border are drawn at. It is
@@ -969,6 +1075,7 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 			W: width.Add(padding.Horizontal()).Add(border.Horizontal()),
 		},
 	}
+	frag.outlineOffset = l.outlineOffsetOf(b)
 	if b.Position == PositionRelative {
 		frag.Offset = l.relativeOffset(b, containing, at.cbHeight, at.cbDefinite)
 	}
@@ -982,11 +1089,13 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 		frag.Offset.X = frag.Offset.X.Add(d.X)
 		frag.Offset.Y = frag.Offset.Y.Add(d.Y)
 	}
-	if b.Position.positioned() {
+	if containsAbsolutes(b) {
 		// Recorded even for a box that is only relatively positioned, because
 		// §10.1 makes any positioned ancestor a containing block — that is the
 		// entire reason the "position: relative with no offsets" wrapper is an
-		// idiom rather than a no-op.
+		// idiom rather than a no-op — and for a box with a filter, which Filter
+		// Effects 1 §5 makes one too, or with a will-change that asks for one,
+		// as css-will-change 1 §3 lets it. See containsAbsolutes.
 		l.setPositioned(b, frag)
 	}
 
@@ -1103,7 +1212,22 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 			// It is the same shrink-to-fit a float does, asked of the same
 			// measurement, because it is the same question: the horizontal
 			// engine's widths *are* this box's inline extents.
-			lineLength = l.shrinkToFit(b, l.avail.H)
+			//
+			// §7.3.2 names the constraint: the smallest of the containing
+			// block's size where that is definite and the initial containing
+			// block's, stretch-fit into — so less the box's own margins,
+			// borders and padding on the two sides the line runs between,
+			// which are its top and bottom. It was the page's height whole,
+			// which let a vertical box with a margin run its lines past the
+			// page by the margin, and ignored a containing block with a height
+			// of its own.
+			room := l.avail.H
+			if at.cbDefinite && at.cbHeight < room {
+				room = at.cbHeight
+			}
+			room = maxZero(room.Sub(margin.Vertical()).Sub(border.Vertical()).
+				Sub(padding.Vertical()))
+			lineLength = l.shrinkToFit(b, room)
 		}
 	}
 	// Where the content began, so that a pour that cannot be made can be taken
@@ -1330,6 +1454,12 @@ func (l *layouter) children(b *Box, parent *Fragment, width style.Unit,
 	topOpen, bottomOpen bool, origin flow) (height style.Unit,
 	hoistTop, hoistBottom marginRun, placed bool) {
 
+	if b.Inner == InnerMath && b != l.mathTextBox {
+		// A MathML box's children are not a flow either: its MathML Core
+		// algorithm places them. A <math> root, or any MathML box block
+		// layout reaches, lays its content out here. See mathlayout.go.
+		return l.mathBlockContent(b, parent, width, topOpen, bottomOpen, origin), marginRun{}, marginRun{}, true
+	}
 	if b.Inner == InnerTable {
 		// A table's children are not a flow at all: they are the grid, and §17.5
 		// places them from the columns and rows rather than by stacking them.
@@ -2202,7 +2332,10 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 		}
 	}
 
-	if !hasWidth {
+	var width style.Unit
+	if hasWidth {
+		width = clamp(declared)
+	} else {
 		// An auto width fills whatever the margins leave, which is why a plain
 		// <div> is as wide as its parent. An auto margin against an auto width
 		// is zero — there is nothing left over to distribute.
@@ -2212,11 +2345,33 @@ func (l *layouter) resolveWidth(b *Box, margin, border, padding Edges,
 		if marginRightAuto {
 			out.Right = 0
 		}
-		width := available.Sub(out.Horizontal())
-		return clamp(maxZero(width))
+		fill := maxZero(available.Sub(out.Horizontal()))
+		width = clamp(fill)
+		if width == fill {
+			return width
+		}
+		// The fill broke a minimum or a maximum, and §10.4 does not stop at
+		// the clamp:
+		//
+		//	If the tentative used width is greater than 'max-width', the rules
+		//	above are applied again, but this time using the computed value of
+		//	'max-width' as the computed value for 'width'.
+		//
+		// and the same for 'min-width'. "The rules above" are §10.3.3's, so the
+		// margins are solved again against a width that is no longer auto —
+		// which is the whole of what "max-width: 600px; margin: 0 auto" means,
+		// and the reason a box narrowed in a right-to-left containing block
+		// hangs from the right edge rather than the left: the margin that gives
+		// way is the end one, and in right-to-left that is margin-left.
+		// Returning the clamped width with the margins the fill solved for left
+		// both at zero, so the narrowed box sat at the containing block's left
+		// edge whatever its margins or its parent's direction said.
+		//
+		// So it continues into the declared-width rules below, with the auto
+		// margins auto again. The out values they were zeroed to are
+		// overwritten there for every auto side, and the declared sides are
+		// as the author wrote them in both.
 	}
-
-	width := clamp(declared)
 	slack := available.Sub(width).Sub(margin.Horizontal())
 
 	// §10.3.3's first sentence, which is easy to read past because it is about

@@ -1234,3 +1234,96 @@ func TestPictureKeepsARunTheClipOnlyCuts(t *testing.T) {
 		t.Error("an unclipped run was treated as marking nothing")
 	}
 }
+
+// picGradient is a gradient from red at the top of a box to blue at its bottom,
+// as one tile over the box.
+func picGradient(x, y, w, h float64, from, to style.RGBA) FillGradient {
+	r := picRect(x, y, w, h)
+	return FillGradient{
+		Clip: r, Tile: r, StepX: r.W, StepY: r.H,
+		Gradient: Gradient{
+			Kind:  LinearGradient,
+			Start: Point{X: r.W.Div(2)}, End: Point{X: r.W.Div(2), Y: r.H},
+			Stops: []GradientStop{{Color: from, Exponent: 1}, {Offset: 1, Color: to, Exponent: 1}},
+		},
+	}
+}
+
+// TestPictureSeesAGradient holds the sampled cells to both directions: a
+// gradient is the same page as itself and as itself a rounding away, and a
+// different page from a gradient of other colours, from one a few pixels
+// away, and from a flat fill of its middle colour.
+func TestPictureSeesAGradient(t *testing.T) {
+	g := picGradient(10, 10, 100, 60, picRed, picBlue)
+	page := []Op{picFill(0, 0, 200, 200, picGreen), g}
+	if !pictureEqual(page, page, picPage) {
+		t.Error("a gradient is not the same page as itself")
+	}
+	nudged := g
+	nudged.Clip.X, nudged.Tile.X = nudged.Clip.X+1, nudged.Tile.X+1
+	if !pictureEqual(page, []Op{page[0], nudged}, picPage) {
+		t.Error("a gradient a layout unit away is ruled a different page")
+	}
+	for name, other := range map[string]Op{
+		"other colours": picGradient(10, 10, 100, 60, picRed, picGreen),
+		"moved":         picGradient(10, 14, 100, 60, picRed, picBlue),
+		"reversed":      picGradient(10, 10, 100, 60, picBlue, picRed),
+		"flat":          picFill(10, 10, 100, 60, style.RGBA{R: 127.5, B: 127.5, A: 1}),
+	} {
+		if pictureEqual(page, []Op{page[0], other}, picPage) {
+			t.Errorf("a gradient and %s are ruled the same page", name)
+		}
+	}
+	// Occlusion still holds: a gradient under an opaque fill is not seen, and
+	// an opaque fill under a gradient whose stops are opaque is not either.
+	covered := []Op{picFill(0, 0, 200, 200, picGreen), g, picFill(0, 0, 200, 200, picGreen)}
+	if !pictureEqual(covered, []Op{picFill(0, 0, 200, 200, picGreen)}, picPage) {
+		t.Error("a gradient under an opaque fill was seen")
+	}
+	under := []Op{picFill(0, 0, 200, 200, picGreen), picFill(10, 10, 100, 60, picRed), g}
+	if !pictureEqual(under, page, picPage) {
+		t.Error("a fill under an opaque gradient was seen")
+	}
+	// And a translucent one shows what is under it.
+	half := picGradient(10, 10, 100, 60, style.RGBA{R: 255, A: 0.5}, style.RGBA{B: 255, A: 0.5})
+	if pictureEqual([]Op{picFill(0, 0, 200, 200, picGreen), half},
+		[]Op{picFill(0, 0, 200, 200, picRed), half}, picPage) {
+		t.Error("what is under a translucent gradient is not seen")
+	}
+}
+
+// TestPictureForgivesAGradientsRounding is the sliver tolerance at a hard edge
+// inside a gradient. The edge here runs down through the centres of a column of
+// pixels, so a copy a layout unit to the right puts those centres on the other
+// side of it: every sample in the column differs, and a quarter pixel either
+// way finds the other document's colour.
+func TestPictureForgivesAGradientsRounding(t *testing.T) {
+	edge := func(dx style.Unit) FillGradient {
+		r := picRect(0, 0, 100, 40)
+		return FillGradient{
+			Clip: r, Tile: r, StepX: r.W, StepY: r.H,
+			Gradient: Gradient{
+				Kind:  LinearGradient,
+				Start: Point{X: dx}, End: Point{X: picPx(100).Add(dx)},
+				Stops: []GradientStop{
+					{Color: picRed, Exponent: 1}, {Offset: 0.505, Color: picRed, Exponent: 1},
+					{Offset: 0.505, Color: picBlue, Exponent: 1}, {Offset: 1, Color: picBlue, Exponent: 1},
+				},
+			},
+		}
+	}
+	if !pictureEqual([]Op{edge(0)}, []Op{edge(1)}, picPage) {
+		t.Error("a hard edge a layout unit away is ruled a different page")
+	}
+	if pictureEqual([]Op{edge(0)}, []Op{edge(picPx(1))}, picPage) {
+		t.Error("a hard edge a pixel away is ruled the same page")
+	}
+}
+
+// TestAGradientIsNotABlankPage: the vacuous-pass check reads normaliseOps, and a
+// page whose only mark is a gradient has something on it.
+func TestAGradientIsNotABlankPage(t *testing.T) {
+	if normaliseOps([]Op{picGradient(10, 10, 100, 60, picRed, picBlue)}) == "" {
+		t.Error("a page painted with a gradient reads as blank")
+	}
+}

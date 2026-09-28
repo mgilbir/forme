@@ -693,95 +693,156 @@ func TestFontFaceWeightAndStyleChoose(t *testing.T) {
 // TestWeightRankFollowsTheSpecification pins the one part of font matching that
 // is not "closest number", because it is the part that would look like a bug.
 func TestWeightRankFollowsTheSpecification(t *testing.T) {
+	pick := func(want float64, weights ...valueRange) float64 {
+		v, ok := search(weights, weightProbes(want)...)
+		if !ok {
+			t.Fatalf("no weight was found among %v", weights)
+		}
+		return v
+	}
+	one := func(w float64) valueRange { return valueRange{w, w} }
 	// At 400, a 500 face beats a 300 one even though 300 is the same distance.
-	if weightRank(400, 500) >= weightRank(400, 300) {
-		t.Error("at a desired weight of 400, a 500 face must be preferred to a 300 one")
+	if got := pick(400, one(500), one(300)); got != 500 {
+		t.Errorf("at a desired weight of 400, the 500 and 300 faces gave %v; 500 must be preferred", got)
 	}
 	// At 400, anything above 500 loses to anything below 400.
-	if weightRank(400, 600) <= weightRank(400, 100) {
-		t.Error("at 400, a 600 face must lose to a 100 one")
+	if got := pick(400, one(600), one(100)); got != 100 {
+		t.Errorf("at 400, the 600 and 100 faces gave %v; the 600 must lose", got)
 	}
 	// Above 500 it is heavier-first.
-	if weightRank(700, 900) >= weightRank(700, 600) {
-		t.Error("at 700, a 900 face must be preferred to a 600 one")
+	if got := pick(700, one(900), one(600)); got != 900 {
+		t.Errorf("at 700, the 900 and 600 faces gave %v; 900 must be preferred", got)
 	}
 	// Below 400 it is lighter-first.
-	if weightRank(300, 100) >= weightRank(300, 400) {
-		t.Error("at 300, a 100 face must be preferred to a 400 one")
+	if got := pick(300, one(100), one(400)); got != 100 {
+		t.Errorf("at 300, the 100 and 400 faces gave %v; 100 must be preferred", got)
 	}
 	// An exact match always wins.
-	for _, d := range []float64{100, 400, 500, 700, 900} {
-		if weightRank(d, d) != 0 {
-			t.Errorf("an exact match at %v ranked %v", d, weightRank(d, d))
+	for _, d := range []float64{100, 400, 450, 500, 700, 900} {
+		if got := pick(d, one(d-50), one(d), one(d+50)); got != d {
+			t.Errorf("an exact match at %v gave %v", d, got)
 		}
 	}
-	// A range covers everything inside it at no cost.
-	if clampWeight(650, 100, 900) != 650 {
-		t.Error("a weight inside a declared range was not matched exactly")
+	// A range covers everything inside it, and a weight past it reaches its
+	// nearer end.
+	if got := pick(650, valueRange{100, 900}); got != 650 {
+		t.Errorf("a weight inside a declared range gave %v, want itself", got)
 	}
-	if clampWeight(900, 100, 400) != 400 {
-		t.Error("a weight above a declared range did not clamp to its top")
+	if got := pick(900, valueRange{100, 400}); got != 400 {
+		t.Errorf("a weight above a declared range gave %v, want its top", got)
+	}
+	// Between 400 and 500 the search goes up to 500 and no further before it
+	// turns: at 450 a 480 face beats a 420 one, and a 420 one a 520 one.
+	if got := pick(450, one(420), one(480)); got != 480 {
+		t.Errorf("at 450, the 420 and 480 faces gave %v, want 480", got)
+	}
+	if got := pick(450, one(420), one(520)); got != 420 {
+		t.Errorf("at 450, the 420 and 520 faces gave %v, want 420", got)
 	}
 }
 
-// TestFontWeightAndStyleDescriptorGrammar pins what the two descriptors take,
+// TestFontWeightAndStyleDescriptorGrammar pins what the descriptors take,
 // including the range form a variable font declares and the values that are
 // refused — a descriptor this engine cannot read falls back to the default and
 // says so, rather than being silently treated as normal.
 func TestFontWeightAndStyleDescriptorGrammar(t *testing.T) {
-	weight := func(s string) (float64, float64, bool) {
+	weight := func(s string) (faceRange, bool) {
 		vals, _ := css.ParseComponentValues(s)
 		return parseWeightDescriptor(vals)
 	}
 	for _, tc := range []struct {
 		in        string
 		low, high float64
-		ok        bool
+		auto, ok  bool
 	}{
-		{"normal", 400, 400, true},
-		{"bold", 700, 700, true},
-		{"350", 350, 350, true},
-		{"100 900", 100, 900, true},
-		{"1 1000", 1, 1000, true},
-		// Refused: out of range, reversed, relative, and not a number at all.
-		{"0", 0, 0, false},
-		{"1001", 0, 0, false},
-		{"900 100", 0, 0, false},
-		{"bolder", 0, 0, false},
-		{"lighter", 0, 0, false},
-		{"400 500 600", 0, 0, false},
-		{"", 0, 0, false},
-		{"heavy", 0, 0, false},
+		{"normal", 400, 400, false, true},
+		{"bold", 700, 700, false, true},
+		{"350", 350, 350, false, true},
+		{"100 900", 100, 900, false, true},
+		{"1 1000", 1, 1000, false, true},
+		{"auto", 0, 0, true, true},
+		{"AUTO", 0, 0, true, true},
+		// A reversed range is swapped, as §4.4 says; it was refused.
+		{"900 100", 100, 900, false, true},
+		{"bold normal", 400, 700, false, true},
+		// Refused: out of range, relative, three values, auto in a range, and
+		// not a number at all.
+		{"0", 0, 0, false, false},
+		{"1001", 0, 0, false, false},
+		{"bolder", 0, 0, false, false},
+		{"lighter", 0, 0, false, false},
+		{"400 500 600", 0, 0, false, false},
+		{"auto 400", 0, 0, false, false},
+		{"", 0, 0, false, false},
+		{"heavy", 0, 0, false, false},
 	} {
-		low, high, ok := weight(tc.in)
-		if ok != tc.ok || (ok && (low != tc.low || high != tc.high)) {
-			t.Errorf("font-weight %q gave %v %v %v, want %v %v %v",
-				tc.in, low, high, ok, tc.low, tc.high, tc.ok)
+		r, ok := weight(tc.in)
+		if ok != tc.ok || (ok && (r.auto != tc.auto || !r.auto && (r.lo != tc.low || r.hi != tc.high))) {
+			t.Errorf("font-weight %q gave %+v %v, want %v..%v auto %v %v",
+				tc.in, r, ok, tc.low, tc.high, tc.auto, tc.ok)
 		}
 	}
 
-	style := func(s string) (bool, bool) {
+	width := func(s string) (faceRange, bool) {
+		vals, _ := css.ParseComponentValues(s)
+		return parseWidthDescriptor(vals)
+	}
+	for _, tc := range []struct {
+		in        string
+		low, high float64
+		auto, ok  bool
+	}{
+		{"auto", 0, 0, true, true},
+		{"normal", 100, 100, false, true},
+		{"condensed", 75, 75, false, true},
+		{"ultra-condensed ultra-expanded", 50, 200, false, true},
+		{"75% 125%", 75, 125, false, true},
+		{"125% 75%", 75, 125, false, true},
+		{"0%", 0, 0, false, true},
+		{"-1%", 0, 0, false, false},
+		{"75", 0, 0, false, false},
+		{"squashed", 0, 0, false, false},
+		{"50% 75% 100%", 0, 0, false, false},
+	} {
+		r, ok := width(tc.in)
+		if ok != tc.ok || (ok && (r.auto != tc.auto || !r.auto && (r.lo != tc.low || r.hi != tc.high))) {
+			t.Errorf("font-width %q gave %+v %v, want %v..%v auto %v %v",
+				tc.in, r, ok, tc.low, tc.high, tc.auto, tc.ok)
+		}
+	}
+
+	style := func(s string) (faceStyle, bool) {
 		vals, _ := css.ParseComponentValues(s)
 		return parseStyleDescriptor(vals)
 	}
 	for _, tc := range []struct {
-		in         string
-		italic, ok bool
+		in   string
+		want faceStyle
+		ok   bool
 	}{
-		{"normal", false, true},
-		{"italic", true, true},
-		{"oblique", true, true},
-		{"oblique 14deg", true, true},
-		{"oblique 0deg", false, true},
-		{"oblique -20deg 30deg", true, true},
-		{"", false, false},
-		{"slanted", false, false},
-		{"italic 20deg", false, false},
-		{"oblique 20px", false, false},
+		{"auto", faceStyle{kind: styleAuto}, true},
+		{"normal", faceStyle{kind: styleNormal}, true},
+		{"italic", faceStyle{kind: styleItalic}, true},
+		{"left", faceStyle{kind: styleItalic}, true},
+		{"right", faceStyle{kind: styleItalic}, true},
+		// An oblique face is oblique, at 14 degrees where it names no angle.
+		{"oblique", faceStyle{kind: styleOblique, angles: valueRange{14, 14}}, true},
+		{"oblique 14deg", faceStyle{kind: styleOblique, angles: valueRange{14, 14}}, true},
+		{"oblique 0deg", faceStyle{kind: styleOblique}, true},
+		{"oblique 0", faceStyle{kind: styleOblique}, true},
+		{"oblique -20deg 30deg", faceStyle{kind: styleOblique, angles: valueRange{-20, 30}}, true},
+		{"oblique 30deg -20deg", faceStyle{kind: styleOblique, angles: valueRange{-20, 30}}, true},
+		{"oblique 0.25turn", faceStyle{kind: styleOblique, angles: valueRange{90, 90}}, true},
+		{"", faceStyle{}, false},
+		{"slanted", faceStyle{}, false},
+		{"italic 20deg", faceStyle{}, false},
+		{"oblique 20px", faceStyle{}, false},
+		{"oblique 91deg", faceStyle{}, false},
+		{"oblique 1deg 2deg 3deg", faceStyle{}, false},
 	} {
-		italic, ok := style(tc.in)
-		if ok != tc.ok || (ok && italic != tc.italic) {
-			t.Errorf("font-style %q gave %v %v, want %v %v", tc.in, italic, ok, tc.italic, tc.ok)
+		got, ok := style(tc.in)
+		if ok != tc.ok || (ok && got != tc.want) {
+			t.Errorf("font-style %q gave %+v %v, want %+v %v", tc.in, got, ok, tc.want, tc.ok)
 		}
 	}
 
@@ -790,17 +851,18 @@ func TestFontWeightAndStyleDescriptorGrammar(t *testing.T) {
 	res := &fileResolver{files: map[string][]byte{"a.ttf": realFont()}}
 	built := Build(Input{
 		HTML: docWithFontFace(`@font-face { font-family: Trial; src: url(a.ttf);
-			font-weight: heavy; font-style: slanted; }`),
+			font-weight: heavy; font-style: slanted; font-stretch: squashed; }`),
 		Resources: res,
 	})
 	requireFinding(t, built.Findings, RuleInvalidCSS, "font-weight")
 	requireFinding(t, built.Findings, RuleInvalidCSS, "font-style")
+	requireFinding(t, built.Findings, RuleInvalidCSS, "font-stretch")
 	set, ok := built.Fonts.(*documentFonts)
 	if !ok {
 		t.Fatalf("an unreadable descriptor took the rule down; findings: %v", built.Findings)
 	}
-	if r := set.faces[0].rule; r.weightLow != 400 || r.weightHigh != 400 || r.italic {
-		t.Errorf("the defaults after an unreadable descriptor are %+v, want 400..400 upright", r)
+	if r := set.faces[0].rule; !r.weight.auto || !r.width.auto || r.style.kind != styleAuto {
+		t.Errorf("the defaults after an unreadable descriptor are %+v, want auto, auto, auto", r)
 	}
 	fired[RuleInvalidCSS] = true
 }

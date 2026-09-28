@@ -177,6 +177,16 @@ type bgPaint struct {
 	// tile is what the gradient's line spans, and the tiling repeats the whole
 	// stack of them. It is empty for every other layer.
 	Bands []bgBand
+
+	// Gradient is set instead of any of them when the layer paints a gradient
+	// whose colour interpolates, laid out for this layer's tile.
+	Gradient *Gradient
+
+	// Area and Radii are the painting area and its curve, when its corners are
+	// rounded: CSS Backgrounds 3 §4.3 clips a background to the curve of the
+	// box background-clip names. Radii is zero for a box with square corners.
+	Area  Rect
+	Radii Radii
 }
 
 // bgBand is one stripe of a banded gradient, positioned within a tile.
@@ -246,9 +256,12 @@ func (l *layouter) resolveBackgrounds(root *Fragment, canvas Rect) {
 
 	var walk func(*Fragment)
 	walk = func(f *Fragment) {
+		// The corners first, since a background is clipped to one of their
+		// curves. See radius.go.
+		f.radii = l.usedRadii(f)
 		if f.Box != nil && !f.bgSuppressed {
 			f.background = l.paintsFor(f.Box, f, canvas, Rect{})
-			f.bgColorRect = l.colorRect(f)
+			f.bgColorRect, f.bgColorRadii = l.colorRect(f)
 		}
 		// An inline box's own fragments, one per line it is broken across. They
 		// are not children — see LineFragment.Boxes — and each is positioned
@@ -257,8 +270,19 @@ func (l *layouter) resolveBackgrounds(root *Fragment, canvas Rect) {
 		// That is what the slice model asks for and what every browser does.
 		for i := range f.Lines {
 			for _, ib := range f.Lines[i].Boxes {
+				ib.radii = l.usedRadii(ib)
+				if (ib.slicedLeft || ib.slicedRight) && !ib.radii.IsZero() && hasPercentRadius(ib.Box) {
+					l.reportOnce("radius-slice:"+PathOf(ib.Box.Element), Finding{
+						Rule:   RuleUnsupportedValue,
+						Source: AtHTML(offsetOf(ib.Box)),
+						Message: "a percentage border-radius on an inline box broken across lines " +
+							"was measured against each piece rather than against the whole box",
+						Path:     PathOf(ib.Box.Element),
+						Property: "border-radius",
+					})
+				}
 				ib.background = l.paintsFor(ib.Box, ib, canvas, Rect{})
-				ib.bgColorRect = l.colorRect(ib)
+				ib.bgColorRect, ib.bgColorRadii = l.colorRect(ib)
 			}
 		}
 		for _, c := range f.Children {
@@ -380,16 +404,19 @@ func bodyOf(root *Fragment) *Fragment {
 // and is why this is not simply the padding box. The default is the border box,
 // so a colour runs under the border — which is what makes a dashed border show
 // the colour through its gaps rather than the page.
-func (l *layouter) colorRect(f *Fragment) Rect {
+//
+// The radii are that box's curve, which the colour is clipped to as well.
+func (l *layouter) colorRect(f *Fragment) (Rect, Radii) {
 	if f.Box == nil {
-		return f.BorderRect
+		return f.BorderRect, f.radii
 	}
 	raw := ascii.TrimCSSSpace(f.Box.Style.Get("background-clip"))
 	if raw == "" || ascii.EqualFold(raw, "border-box") {
-		return f.BorderRect
+		return f.BorderRect, f.radii
 	}
 	clips := l.bgBoxes(f.Box, "background-clip", bgBorderBox)
-	return boxRect(f, clips[len(clips)-1])
+	which := clips[len(clips)-1]
+	return boxRect(f, which), f.radiiFor(which)
 }
 
 // boxRect is one of the three rectangles an origin or a clip names.
@@ -431,6 +458,12 @@ func (l *layouter) paintsFor(b *Box, f *Fragment, canvas, over Rect) []bgPaint {
 			painting = over
 		}
 		if p, ok := l.tiling(b, layer, positioning, painting); ok {
+			if over.Empty() {
+				// The curve of the painting area, which the layer is clipped
+				// to. The canvas has no corners: a root element's radius
+				// rounds its own box and not the page its background covers.
+				p.Area, p.Radii = painting, f.radiiFor(layer.clip)
+			}
 			out = append(out, p)
 		}
 	}
@@ -511,7 +544,7 @@ func (l *layouter) tiling(b *Box, layer backgroundLayer, positioning, painting R
 	if !l.tilesWithinCap(b, clip, stepX, stepY) {
 		return bgPaint{}, false
 	}
-	return bgPaint{
+	out := bgPaint{
 		Clip:  clip,
 		Tile:  Rect{X: x, Y: y, W: w, H: h},
 		StepX: stepX, StepY: stepY,
@@ -519,7 +552,40 @@ func (l *layouter) tiling(b *Box, layer backgroundLayer, positioning, painting R
 		Key:   layerKey(layer),
 		Solid: layer.image.Solid,
 		Bands: tileBands(layer.image.Bands, w, h),
-	}, true
+	}
+	if spec := layer.image.gradient; spec != nil {
+		// Laid out now and not when it was read, because where its stops fall
+		// depends on the size of the tile — which is what CSS Images calls the
+		// gradient box, and which background-size has only just decided.
+		laid := spec.layOut(w, h, l.restater(spec))
+		if laid.none {
+			if laid.tooMany != "" {
+				l.reportOnce("bg-image-interpolated:"+spec.source, Finding{
+					Rule:     RuleLimit,
+					Source:   AtHTML(offsetOf(b)),
+					Message:  "the gradient " + quoteValue(spec.source) + " was not drawn: " + laid.tooMany,
+					Path:     PathOf(b.Element),
+					Property: "background-image",
+				})
+			}
+			return bgPaint{}, false
+		}
+		if laid.tooFine != "" {
+			l.reportOnce("bg-image-fine:"+spec.source, Finding{
+				Rule:     RuleLimit,
+				Source:   AtHTML(offsetOf(b)),
+				Message:  "the repeating gradient " + quoteValue(spec.source) + " was drawn as its average colour: " + laid.tooFine,
+				Path:     PathOf(b.Element),
+				Property: "background-image",
+			})
+		}
+		if laid.solid != nil {
+			out.Solid = laid.solid
+		} else {
+			out.Gradient = &laid.gradient
+		}
+	}
+	return out, true
 }
 
 // tilesWithinCap refuses a tiling whose cell count is past what this engine will
@@ -650,7 +716,8 @@ func (l *layouter) tileSize(layer backgroundLayer, area Rect) (w, h style.Unit, 
 	if img.HeightPercent > 0 {
 		ih = area.H.Mul(img.HeightPercent)
 	}
-	if iw <= 0 && ih <= 0 && ratio <= 0 && img.Solid == nil && img.Bands == nil {
+	if iw <= 0 && ih <= 0 && ratio <= 0 && img.Solid == nil && img.Bands == nil &&
+		img.gradient == nil {
 		// A picture with no size at all is one that failed to load or decode.
 		// Content that paints a colour legitimately has none, and is sized
 		// below by the default object size like any other image without one.
@@ -883,10 +950,27 @@ func (l *layouter) backgroundImage(b *Box, raw string) *ReplacedContent {
 	if bands, ok := l.bandsOf(b, raw); ok {
 		return &ReplacedContent{Bands: bands}
 	}
-	// A real gradient, an image-set, element(). Each is a value this engine
-	// reads and cannot paint, and each leaves a box that looks as though the
-	// declaration were absent — which is the silent failure the whole finding
-	// vocabulary exists for.
+	// Any other gradient, which the FillGradient operation paints. See
+	// gradientfill.go.
+	spec, status := l.parseGradient(b, raw)
+	switch status {
+	case gradientRead:
+		return &ReplacedContent{gradient: spec}
+	case gradientTooManyStops:
+		l.reportOnce("bg-image-stops:"+raw, Finding{
+			Rule:   RuleLimit,
+			Source: AtHTML(offsetOf(b)),
+			Message: fmt.Sprintf("a gradient has more colour stops and hints than the %d "+
+				"this engine draws; no image was drawn", maxGradientStops),
+			Path:     PathOf(b.Element),
+			Property: "background-image",
+		})
+		return nil
+	}
+	// A gradient in a form this engine does not read, an image-set, element().
+	// Each is a value this engine cannot paint, and each leaves a box that
+	// looks as though the declaration were absent — which is the silent
+	// failure the whole finding vocabulary exists for.
 	l.reportOnce("bg-image:"+raw, Finding{
 		Rule:     RuleUnsupportedValue,
 		Source:   AtHTML(offsetOf(b)),

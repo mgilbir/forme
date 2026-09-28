@@ -36,8 +36,9 @@ func TestAKeywordReaderTakesCSSWhiteSpaceOnly(t *testing.T) {
 	}{
 		{"parseDisplay", func(v string) bool { d := parseDisplay(v); return d.outer == OuterInline && d.inner == InnerFlowRoot }, "inline-block"},
 		{"parseBorderStyle", func(v string) bool { return parseBorderStyle(v) == parseBorderStyle("solid") }, "solid"},
-		{"isBold", isBold, "bold"},
-		{"isItalic", isItalic, "italic"},
+		{"parseFontWeight", func(v string) bool { w, ok := parseFontWeight(v); return ok && w == 700 }, "bold"},
+		{"parseFontStyle", func(v string) bool { s, _, ok := parseFontStyle(v); return ok && s == SlopeItalic }, "italic"},
+		{"parseFontWidth", func(v string) bool { w, ok := parseFontWidth(v); return ok && w == 75 }, "condensed"},
 		{"objectFitOf", func(v string) bool { f, ok := objectFitOf(v); return ok && f == objectContain }, "contain"},
 		{"noBorder", noBorder, "hidden"},
 		{"markerText", func(v string) bool { return markerText(v, 1) == markerText("square", 1) }, "square"},

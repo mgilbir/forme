@@ -54,6 +54,42 @@ type coloured struct {
 	// expected square with a solid PNG while the test draws it with a
 	// background. Those arrive here as ordinary fills, so img is empty.
 	img string
+	// shade is set when the mark's colour is not one colour across its
+	// rectangle: a gradient, whose colour at each point shade says. c is then
+	// unused. See rasterCell, which is what reads a cell such a mark reaches.
+	shade shader
+	// masks are the shapes the mark is clipped to, when it was drawn inside a
+	// ClipPath or is a FillPath: it marks a point only where every one of them
+	// holds it. A mark with masks is not uniform across its rectangle, and is
+	// sampled like a gradient.
+	masks []mask
+}
+
+// mask is a path, with its boundary cut into the pieces its inside test reads.
+type mask struct {
+	path   Path
+	pieces []edgePiece
+}
+
+func newMask(p Path) mask { return mask{path: p, pieces: p.pieces()} }
+
+func (m mask) holds(x, y style.Unit) bool { return m.path.containsPx(x.Px(), y.Px(), m.pieces) }
+
+// shader is the colour a mark that varies puts at a point, alpha included, the
+// point in page pixels.
+type shader interface {
+	at(x, y float64) style.RGBA
+}
+
+// gradientShade is one tile of a FillGradient: the gradient, and where the
+// tile's top left is on the page, which is where its geometry is measured from.
+type gradientShade struct {
+	g      Gradient
+	ox, oy float64
+}
+
+func (s gradientShade) at(x, y float64) style.RGBA {
+	return s.g.ColorAtOffset(s.g.offsetOf(x-s.ox, y-s.oy))
 }
 
 // sample is what is visible at a point: either a colour or a picture.
@@ -88,6 +124,12 @@ const sliver = style.Unit(16) // 1/4 px, given 64 units to the pixel
 // Order is the whole point and must not be sorted away: it is what decides which
 // of two overlapping marks is visible.
 func picFills(ops []Op) []coloured {
+	return picFillsIn(ops, nil)
+}
+
+// picFillsIn is picFills for operations inside the given masks: every mark
+// they make is clipped to all of them.
+func picFillsIn(ops []Op, masks []mask) []coloured {
 	out := make([]coloured, 0, len(ops))
 	for _, op := range ops {
 		switch v := op.(type) {
@@ -168,6 +210,76 @@ func picFills(ops []Op) []coloured {
 				continue
 			}
 			out = append(out, tiledFills(v)...)
+
+		case FillGradient:
+			out = append(out, gradientFills(v)...)
+
+		case FillPath:
+			if len(v.Path) == 0 || v.Color.A == 0 {
+				continue
+			}
+			r := v.Path.Bounds()
+			if v.Clip.Active {
+				r = intersect(r, v.Clip.Rect)
+			}
+			if r.Empty() {
+				continue
+			}
+			out = append(out, coloured{r: r, c: v.Color, masks: []mask{newMask(v.Path)}})
+
+		case ClipPath:
+			out = append(out, picFillsIn(v.Ops, []mask{newMask(v.Path)})...)
+
+		case FilterGroup:
+			if m, ok := filteredFills(v); ok {
+				out = append(out, m)
+			}
+		}
+	}
+	// Every mark made here, including those of the groups inside, is clipped
+	// to what this level is inside as well. A new slice each, since a group's
+	// marks may share one.
+	if len(masks) > 0 {
+		for i := range out {
+			out[i].masks = append(append([]mask(nil), masks...), out[i].masks...)
+		}
+	}
+	return out
+}
+
+// gradientFills is the marks a gradient's tiling puts on the page: one per tile,
+// each the part of the tile inside the clip, coloured point by point.
+//
+// Past maxComparedTiles the tiling is one mark keyed by what it is, for the
+// reason tiledFills gives, with the first tile drawn as its origin so that two
+// descriptions of one tiling agree. A key is not a colour, so such a tiling
+// hides what is under it — the direction that calls documents different.
+func gradientFills(v FillGradient) []coloured {
+	if v.Clip.Empty() || v.Tile.Empty() || v.StepX <= 0 || v.StepY <= 0 {
+		return nil
+	}
+	cols, rows := v.Tiles()
+	if cols <= 0 || rows <= 0 {
+		return nil
+	}
+	firstX := alignTile(v.Clip.X, v.Tile.X, v.Tile.W, v.StepX)
+	firstY := alignTile(v.Clip.Y, v.Tile.Y, v.Tile.H, v.StepY)
+	if cols > maxComparedTiles/rows {
+		key := fmt.Sprintf("gradient %+v at %s,%s size %s step %s,%s",
+			v.Gradient, num(firstX), num(firstY),
+			num(v.Tile.W)+"x"+num(v.Tile.H), num(v.StepX), num(v.StepY))
+		return []coloured{{r: v.Clip, c: style.RGBA{A: 1}, img: key}}
+	}
+	out := make([]coloured, 0, cols*rows)
+	for j := 0; j < rows; j++ {
+		y := firstY.Add(v.StepY.Mul(float64(j)))
+		for i := 0; i < cols; i++ {
+			x := firstX.Add(v.StepX.Mul(float64(i)))
+			r := intersect(Rect{X: x, Y: y, W: v.Tile.W, H: v.Tile.H}, v.Clip)
+			if r.Empty() {
+				continue
+			}
+			out = append(out, coloured{r: r, shade: gradientShade{g: v.Gradient, ox: x.Px(), oy: y.Px()}})
 		}
 	}
 	return out
@@ -543,6 +655,9 @@ func trimRunSpace(v DrawText) DrawText {
 	}
 	if lead := v.Text[:strings.Index(v.Text, trimmed)]; lead != "" {
 		w, _ := style.FromPx(v.Face.Measure(lead, v.Size.Px()))
+		if v.WidthScale > 0 {
+			w = w.Mul(v.WidthScale)
+		}
 		if v.Upright {
 			// What the run was placed with: the face's vertical advances, or
 			// one em a character where it states none. See DrawText.Upright.
@@ -652,12 +767,62 @@ func drawnGlyphs(v DrawText) string {
 }
 
 func texts(ops []Op, under []coloured, page Rect) []textMark {
+	ops, paths := flattenGroups(ops, "")
 	covers := opaqueCovers(ops)
 	var marking []DrawText
+	// The shape each marking run is clipped to, where it was drawn inside a
+	// ClipPath: part of what the mark is, exactly as a rectangle clip is.
+	var markingPaths []string
+	// A formula's glyphs named by index, and the curves they are cut by.
+	var glyphRuns []DrawGlyphs
+	var glyphPaths []string
 	for i, op := range ops {
-		v, ok := op.(DrawText)
-		if !ok {
+		// A shadow of a run is the run's glyphs, moved and recoloured, and a
+		// sharp one is exactly those glyphs in that colour: it is compared as
+		// what it puts on the page. A blurred one is a different mark, keyed by
+		// its blur, and reaches further — three deviations — for every question
+		// about where its ink is.
+		var v DrawText
+		key := paths[i]
+		var blur style.Unit
+		switch o := op.(type) {
+		case DrawText:
+			v = o
+		case DrawEmphasisMark:
+			// A mark is its glyphs in its colour, which is the ink a run of
+			// the same character drawn there makes: it is compared as that.
+			v = o.Mark
+		case DrawTextShadow:
+			v, blur = o.Run, o.StdDev
+			if blur > 0 {
+				k := "shadow blurred " + num(blur)
+				if key != "" {
+					k = key + " and " + k
+				}
+				key = k
+			}
+		case DrawGlyphs:
+			// Glyphs a formula draws by index are marks glyph by glyph, as a
+			// run's are, each where its offsets put it — the pieces of an
+			// assembly are placed by nothing else. Ink the colour of what is
+			// under it is still counted, which errs towards two pages being
+			// different.
+			ink := glyphsInk(o)
+			if len(o.Glyphs) == 0 || o.Color.A == 0 || buriedUnder(covers, i, ink) ||
+				!page.Empty() && intersect(ink, page).Empty() ||
+				o.Clip.Active && intersect(ink, o.Clip.Rect).Empty() {
+				continue
+			}
+			glyphRuns = append(glyphRuns, o)
+			glyphPaths = append(glyphPaths, key)
 			continue
+		default:
+			continue
+		}
+		ink := markInk(v)
+		if blur > 0 {
+			d := blur.Mul(blurReach)
+			ink = ink.Outset(Edges{Top: d, Right: d, Bottom: d, Left: d})
 		}
 		if !leavesInk(v.Text) {
 			// A space marks no paper. It is drawn so that text extraction
@@ -684,6 +849,7 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 			// a character that marks no paper — and skips them *by position*, so
 			// what is left still says where every visible glyph is.
 			marking = append(marking, v)
+			markingPaths = append(markingPaths, key)
 			continue
 		}
 		if invisibleInk(v, under) {
@@ -695,13 +861,13 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 			// document shows.
 			continue
 		}
-		if buriedUnder(covers, i, textInk(v)) {
+		if buriedUnder(covers, i, ink) {
 			continue
 		}
-		if v.Face != nil && !page.Empty() && intersect(textInk(v), page).Empty() {
+		if v.Face != nil && !page.Empty() && intersect(ink, page).Empty() {
 			continue
 		}
-		if v.Clip.Active && intersect(textInk(v), v.Clip.Rect).Empty() {
+		if v.Clip.Active && intersect(ink, v.Clip.Rect).Empty() {
 			// Clipped away entirely. The letters sit outside the clip, so
 			// nothing of this run reaches the page.
 			//
@@ -721,10 +887,11 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 			continue
 		}
 		marking = append(marking, trimRunSpace(v))
+		markingPaths = append(markingPaths, key)
 	}
 
 	var out []textMark
-	for _, v := range marking {
+	for mi, v := range marking {
 		shape := fmt.Sprintf("text in %s size %s", faceKey(v.Face), num(v.Size))
 		what := shape + " " + colourKey(v.Color)
 		if v.Clip.Active {
@@ -741,7 +908,34 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 			what += " clipped to " + rectKey(v.Clip.Rect)
 			shape += " clipped to " + rectKey(v.Clip.Rect)
 		}
+		if p := markingPaths[mi]; p != "" {
+			// Cut by a curve, which is the same statement about a shape: the
+			// two documents agree only where they cut the same run by the same
+			// curve.
+			what += " clipped to path " + p
+			shape += " clipped to path " + p
+		}
 		out = append(out, glyphMarks(v, what, shape, v.Color.A >= 1)...)
+	}
+	for gi, v := range glyphRuns {
+		shape := fmt.Sprintf("glyphs in %s size %s", faceKey(v.Face), num(v.Size))
+		if v.Clip.Active {
+			shape += " clipped to " + rectKey(v.Clip.Rect)
+		}
+		if p := glyphPaths[gi]; p != "" {
+			shape += " clipped to path " + p
+		}
+		what := shape + " " + colourKey(v.Color)
+		pen := 0.0
+		for _, g := range v.Glyphs {
+			x, _ := style.FromPx((pen + g.XOffset) * v.Size.Px() / 1000)
+			y, _ := style.FromPx(-g.YOffset * v.Size.Px() / 1000)
+			out = append(out, textMark{
+				what: fmt.Sprintf("%s glyph %d", what, g.GID), x: v.At.X.Add(x), y: v.At.Y.Add(y),
+				shape: fmt.Sprintf("%s glyph %d", shape, g.GID), opaque: v.Color.A >= 1,
+			})
+			pen += g.XAdvance
+		}
 	}
 	out = buriedUnderInk(out)
 	sort.Slice(out, func(i, j int) bool {
@@ -855,17 +1049,15 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 		}}
 	}
 	text := ShapedText(v)
-	glyphs, _ := ShapedGlyphs(v)
-	// An upright run in a face that states vertical metrics is drawn as a
-	// backend following DrawText.Upright draws it: shaped with
-	// shape.Features.Vertical, the pen stepping down by each glyph's
-	// YAdvance.
-	vertical := v.Upright && v.Face.StatesVerticalMetrics()
-	if vertical {
-		off := v.Features
-		off.Vertical = true
-		glyphs, _ = v.Face.ShapeGlyphsInContext(text, v.PreContext, v.PostContext, off)
+	// An upright run is drawn as a backend following DrawText.Upright draws
+	// it: its glyphs are ShapedGlyphs', shaped with shape.Features.Vertical and
+	// with the em as their advances where the face states no vertical metrics,
+	// and the pen steps down by each glyph's YAdvance. Its text is its own —
+	// see shapedUpright.
+	if v.Upright {
+		text = v.Text
 	}
+	glyphs, _ := ShapedGlyphs(v)
 	var out []textMark
 	// How far along the run each glyph is. Along, and not "x": a sideways run
 	// advances down the page, so the pen moves in y and the baseline's x is
@@ -879,22 +1071,20 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 	// a pen that added the spacing after each glyph would move the marks off
 	// the letter they are drawn on. See spacingAfterGlyph.
 	spaceAfter := spacingAfterGlyph(v, text, glyphs)
+	// A run squeezed across (DrawText.WidthScale) has its advances and offsets
+	// along it squeezed with it, and its glyphs are other shapes than the
+	// face's: the mark says by how much.
+	squeeze, squeezed := 1.0, ""
+	if v.WidthScale > 0 {
+		squeeze, squeezed = v.WidthScale, fmt.Sprintf(" squeezed %g", v.WidthScale)
+	}
 	for i, g := range glyphs {
-		adv, _ := style.FromPx(g.XAdvance * v.Size.Px() / 1000)
-		if vertical {
+		adv, _ := style.FromPx(g.XAdvance * squeeze * v.Size.Px() / 1000)
+		if v.Upright {
 			adv, _ = style.FromPx(-g.YAdvance * v.Size.Px() / 1000)
-		} else if v.Upright {
-			// One em per character, whatever the face's horizontal advance
-			// for it is, and nothing for a mark that is drawn on the character
-			// in front of it. See DrawText.Upright and paragraph.UprightUnits,
-			// which is the same count in the aggregate.
-			adv = 0
-			if uprightUnits(clusterText(text, g.Cluster)) > 0 {
-				adv = v.Size
-			}
 		}
 		if !blankCluster(text, g.Cluster) {
-			off, _ := style.FromPx(g.XOffset * v.Size.Px() / 1000)
+			off, _ := style.FromPx(g.XOffset * squeeze * v.Size.Px() / 1000)
 			at := Point{X: along.Add(off), Y: v.At.Y}
 			if v.Sideways {
 				at = Point{X: v.At.X, Y: along.Add(runStep(v, off))}
@@ -902,7 +1092,7 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 			out = append(out, textMark{
 				what: fmt.Sprintf("%s glyph %d", what, g.GID),
 				x:    at.X, y: at.Y,
-				shape:  fmt.Sprintf("%s glyph %d", shape, g.GID),
+				shape:  fmt.Sprintf("%s glyph %d%s", shape, g.GID, squeezed),
 				opaque: opaque,
 			})
 		}
@@ -912,6 +1102,93 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 		}
 	}
 	return out
+}
+
+// markInk is where the comparison takes a run's ink to be, for every question
+// it asks about whether a reader can see the run: whether it is under ink of
+// its own colour, buried under something opaque, off the page, or clipped away
+// entirely.
+//
+// It is textInk across the line — the extent the text's glyphs reach above and
+// below the baseline — and along it the glyphs' own boxes, each where the pen
+// puts it, where textInk takes the run's advance. The advance is where the
+// next run starts and not where this one's ink is: a full-width closing
+// bracket is a mark in the left quarter of its em, and line-break-anywhere-001
+// sets one at 13px in a column 7.8px wide under an opaque green box that its
+// ink, from 0.6px to 4.0px as HarfBuzz measures NotoSansJP's glyph, is wholly
+// under. Asked of the advance it poked 5.2px out of the box, and a red mark
+// nobody can see failed the document.
+//
+// The boxes are the face's (shape.Face.GlyphExtents), which is what HarfBuzz
+// answers and what the engine's own vertical extent is made of, so a glyph
+// that reaches past its advance — an italic's overhang — is ink past it here,
+// which the advance never said. Where the face cannot state a glyph's box, or
+// the run's glyphs put no ink anywhere, it is textInk: the answer the
+// comparison always had. An upright run is textInk as well, whose extent is
+// already its glyphs' (see uprightExtent).
+//
+// This is the comparison's reading and not the engine's. textInk stays what
+// clipOps asks whether a clip cuts a run with, and nothing in the display list
+// changes.
+func markInk(v DrawText) Rect {
+	if v.Face == nil || v.Upright {
+		return textInk(v)
+	}
+	lo, hi, ok := glyphInkAlong(v)
+	if !ok {
+		return textInk(v)
+	}
+	above, below := textInkAcross(v)
+	return placeRun(Rect{
+		X: lo, Y: style.Unit(0).Sub(above),
+		W: hi.Sub(lo), H: above.Add(below),
+	}, v.At, turnOfRun(v))
+}
+
+// glyphInkAlong is how far along the run, from its origin, its glyphs' ink
+// begins and ends: each glyph's box, from where the pen and the glyph's own
+// offset put it. The pen moves as glyphMarks moves it — the shaped advance,
+// and the letter-spacing after each typographic character unit — so the two
+// agree about where every glyph is. A glyph in a blank cluster is passed over
+// as glyphMarks passes it over, and an empty glyph has no box to add. ok is
+// false where some glyph's box cannot be read, and where no glyph has one.
+func glyphInkAlong(v DrawText) (lo, hi style.Unit, ok bool) {
+	upem := float64(v.Face.UnitsPerEm())
+	if upem <= 0 {
+		return 0, 0, false
+	}
+	text := ShapedText(v)
+	glyphs, _ := ShapedGlyphs(v)
+	spaceAfter := spacingAfterGlyph(v, text, glyphs)
+	scale := v.Size.Px() / upem
+	var pen style.Unit
+	for i, g := range glyphs {
+		if !blankCluster(text, g.Cluster) {
+			xb, _, w, _, has := v.Face.GlyphExtents(g.GID)
+			if !has {
+				return 0, 0, false
+			}
+			if w != 0 {
+				off, _ := style.FromPx(g.XOffset * v.Size.Px() / 1000)
+				left, _ := style.FromPx(float64(xb) * scale)
+				right, _ := style.FromPx(float64(xb+w) * scale)
+				a, b := pen.Add(off).Add(left), pen.Add(off).Add(right)
+				if !ok || a < lo {
+					lo = a
+				}
+				if !ok || b > hi {
+					hi = b
+				}
+				ok = true
+			}
+		}
+		adv, _ := style.FromPx(g.XAdvance * v.Size.Px() / 1000)
+		pen = pen.Add(adv)
+		if n := spaceAfter[i]; n > 0 {
+			pen = pen.Add(v.CharSpacing.Mul(float64(n)))
+		}
+	}
+	return lo, hi, ok
 }
 
 // spacingAfterGlyph reports, for each glyph of a run, whether §8.2's
@@ -1187,6 +1464,9 @@ func joinRuns(runs []DrawText) [][]DrawText {
 		// share a column and advance towards each other, so joining them would
 		// splice a word out of two that are upside down to one another.
 		sideways, anticlockwise, upright bool
+		// And two runs squeezed by different amounts are two different sets
+		// of shapes. See DrawText.WidthScale.
+		widthScale float64
 		// Two runs cut by different clips do not put the same ink down even
 		// where they abut, so they are not joined. Clip is comparable, which is
 		// what lets it sit in a map key at all.
@@ -1219,7 +1499,7 @@ func joinRuns(runs []DrawText) [][]DrawText {
 			continue
 		}
 		k := key{runAcross(v), v.Size, v.CharSpacing, v.Face, v.Color, v.Sideways,
-			v.Anticlockwise, v.Upright, v.Clip}
+			v.Anticlockwise, v.Upright, v.WidthScale, v.Clip}
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}
@@ -1317,6 +1597,10 @@ func runAdvance(v DrawText) style.Unit {
 		return along.Add(v.CharSpacing.Mul(float64(spacedUnits(text))))
 	}
 	w, _ := style.FromPx(v.Face.Measure(text, v.Size.Px()))
+	if v.WidthScale > 0 {
+		// Squeezed across, as a backend draws it. See DrawText.WidthScale.
+		w = w.Mul(v.WidthScale)
+	}
 	// Units and not runes: §8.2's spacing goes after each typographic character
 	// unit, which is a grapheme cluster. See paragraph.SpacedUnits.
 	return w.Add(v.CharSpacing.Mul(float64(spacedUnits(text))))
@@ -1403,19 +1687,45 @@ var paper = style.RGBA{R: 255, G: 255, B: 255, A: 1}
 // stops at the first rectangle. A translucent mark blends with what is under it,
 // which is why the accumulation is a composite rather than a first-hit.
 func colourAt(fs []coloured, x, y style.Unit) sample {
+	got, _ := colourVaryingAt(fs, x, y)
+	return got
+}
+
+// colourVaryingAt is colourAt, and also whether a mark whose colour varies
+// across its rectangle took part in the answer — in which case the colour is
+// the one at this point only, and not the one across the cell the point was
+// chosen to stand for.
+func colourVaryingAt(fs []coloured, x, y style.Unit) (sample, bool) {
 	var acc style.RGBA
 	remaining := 1.0
+	varies := false
 	for i := len(fs) - 1; i >= 0; i-- {
 		f := fs[i]
 		if x < f.r.X || x >= f.r.X.Add(f.r.W) || y < f.r.Y || y >= f.r.Y.Add(f.r.H) {
 			continue
+		}
+		if len(f.masks) > 0 {
+			varies = true
+			held := true
+			for _, m := range f.masks {
+				if held = m.holds(x, y); !held {
+					break
+				}
+			}
+			if !held {
+				continue
+			}
+		}
+		if f.shade != nil {
+			varies = true
+			f.c = f.shade.at(x.Px(), y.Px())
 		}
 		if f.img != "" {
 			// A picture hides what is beneath it, so the walk stops here.
 			// Anything translucent painted over it does not change *which*
 			// picture is at this point, and blending a colour into one would
 			// invent a value that neither document could be compared against.
-			return sample{img: f.img}
+			return sample{img: f.img}, varies
 		}
 		a := f.c.A * remaining
 		acc.R += f.c.R * a
@@ -1432,7 +1742,7 @@ func colourAt(fs []coloured, x, y style.Unit) sample {
 	acc.G += paper.G * remaining
 	acc.B += paper.B * remaining
 	acc.A += remaining
-	return sample{c: acc}
+	return sample{c: acc}, varies
 }
 
 // sameColour reports whether two resolved colours are indistinguishable.
@@ -1463,6 +1773,7 @@ func pictureEqual(got, want []Op, clip Rect) bool {
 
 	xs := edges(clip.X, clip.X.Add(clip.W), gf, wf)
 	ys := edgesY(clip.Y, clip.Y.Add(clip.H), gf, wf)
+	budget := maxRasterSamples
 
 	for i := 0; i+1 < len(xs); i++ {
 		x0, x1 := xs[i], xs[i+1]
@@ -1478,12 +1789,94 @@ func pictureEqual(got, want []Op, clip Rect) bool {
 				continue
 			}
 			y := y0.Add(y1.Sub(y0).Div(2))
-			if !colourAt(gf, x, y).same(colourAt(wf, x, y)) {
+			g, gv := colourVaryingAt(gf, x, y)
+			w, wv := colourVaryingAt(wf, x, y)
+			if gv || wv {
+				// The cell is not one colour, so its middle does not stand for
+				// it: it is sampled pixel by pixel instead.
+				if !rasterCell(gf, wf, x0, x1, y0, y1, &budget) {
+					return false
+				}
+				continue
+			}
+			if !g.same(w) {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+// Sampling a cell that is not one colour.
+//
+// Everything else in this comparison is exact because a cell is uniform by
+// construction: no edge crosses it. A mark whose colour changes across its own
+// rectangle breaks that, and for such a cell the comparison becomes what the
+// rest of it avoids being — a rasteriser. The cell is sampled at the centre of
+// every device pixel inside it, a pixel being the CSS pixel the whole suite is
+// drawn at, and the two documents are compared sample by sample.
+//
+// Two tolerances, both the ones already in force. A sample's colour is compared
+// with sameColour, half a step of the 8-bit channel. And a sample that differs is
+// forgiven if moving it a sliver in any direction finds the other document's
+// colour — the quarter pixel the edges of fills and the positions of glyphs are
+// already allowed, and for the same reason: the two documents reach their
+// geometry by different arithmetic, and a gradient laid out a unit away from
+// another is a unit away everywhere.
+//
+// It is bounded, because a gradient over a page is half a million samples.
+// Past maxRasterSamples the pages are ruled different, which is the direction
+// an oracle errs in.
+
+// maxRasterSamples bounds the samples one comparison takes.
+const maxRasterSamples = 1 << 22
+
+// rasterCell compares the two documents across one cell, pixel by pixel.
+func rasterCell(gf, wf []coloured, x0, x1, y0, y1 style.Unit, budget *int) bool {
+	xs := pixelCentres(x0, x1)
+	ys := pixelCentres(y0, y1)
+	if *budget -= len(xs) * len(ys); *budget < 0 {
+		return false
+	}
+	for _, y := range ys {
+		for _, x := range xs {
+			if !nearlySame(gf, wf, x, y) || !nearlySame(wf, gf, x, y) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// pixelCentres is the centres of the device pixels in [lo, hi), or the middle
+// of the span when it holds none — a cell narrower than a pixel is still a cell.
+func pixelCentres(lo, hi style.Unit) []style.Unit {
+	var out []style.Unit
+	first := math.Floor(lo.Px()-0.5) + 0.5
+	for c := first; c < hi.Px(); c++ {
+		u, _ := style.FromPx(c)
+		if u >= lo && u < hi {
+			out = append(out, u)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, lo.Add(hi.Sub(lo).Div(2)))
+	}
+	return out
+}
+
+// nearlySame reports whether a's colour at a point is b's there, or within a
+// sliver of there.
+func nearlySame(a, b []coloured, x, y style.Unit) bool {
+	want, _ := colourVaryingAt(a, x, y)
+	for _, dy := range [3]style.Unit{0, -sliver, sliver} {
+		for _, dx := range [3]style.Unit{0, -sliver, sliver} {
+			if got, _ := colourVaryingAt(b, x.Add(dx), y.Add(dy)); got.same(want) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // invisibleInk reports whether a run is the colour of what it is drawn on.
@@ -1661,4 +2054,205 @@ func coversNothingNew(under []coloured, r Rect, c style.RGBA) bool {
 		}
 	}
 	return true
+}
+
+// flattenGroups lays the operations inside every ClipPath out in paint order
+// among the rest, with, for each, the shapes it was clipped to written as a key
+// ("" for an operation inside none). It is what the text comparison reads: a run
+// is a run wherever it was drawn, and what the curve does to it goes into what
+// the mark is.
+func flattenGroups(ops []Op, within string) ([]Op, []string) {
+	var out []Op
+	var paths []string
+	for _, op := range ops {
+		if g, ok := op.(FilterGroup); ok {
+			// A run in a filtered group is a mark of what the filter did to
+			// it: the comparison has no glyph rasteriser to blur one with, so
+			// two documents agree only where they filter the same run the
+			// same way.
+			key := fmt.Sprintf("filter %+v", g.Filters)
+			if g.Clip.Active {
+				key += " cut to " + rectKey(g.Clip.Rect)
+			}
+			if within != "" {
+				key = within + " and " + key
+			}
+			inner, innerPaths := flattenGroups(g.Ops, key)
+			out = append(out, inner...)
+			paths = append(paths, innerPaths...)
+			continue
+		}
+		if g, ok := op.(ClipPath); ok {
+			key := g.Path.String()
+			if within != "" {
+				key = within + " and " + key
+			}
+			inner, innerPaths := flattenGroups(g.Ops, key)
+			out = append(out, inner...)
+			paths = append(paths, innerPaths...)
+			continue
+		}
+		out = append(out, op)
+		paths = append(paths, within)
+	}
+	return out, paths
+}
+
+// Rendering a filtered group.
+//
+// A FilterGroup is one mark: the group composited on a surface of its own,
+// filtered, and composited onto the page. What the group holds that is text is
+// compared as marks, keyed by the filter — see flattenGroups — and what is
+// fills is rendered here.
+//
+// An opacity is exact: the group's colour at a point, with its alpha scaled. A
+// blur is exact too, for the groups the suite draws, because a group of
+// rectangles of solid colour is a piecewise constant picture and a Gaussian
+// blur of one has a closed form. Cut the group into the cells its edges make,
+// each one colour; the blur at a point is the sum over the cells of each cell's
+// premultiplied colour times the Gaussian's weight on it, and that weight is a
+// product of two differences of the normal distribution function, one per axis.
+// There is no sampling and no kernel to truncate.
+//
+// Anything else in a blurred group — a gradient, a picture, a curve — is not a
+// set of flat cells, and the group is then compared as one opaque mark keyed by
+// what it holds, which calls two documents different unless they drew the same
+// thing: the direction this comparison errs in.
+
+// maxBlurCells bounds the cells a blurred group is cut into. The blur at each
+// sample reads every one, and a cell comparison samples every pixel of the
+// blurred area.
+const maxBlurCells = 4096
+
+// groupShade is a filtered group's colour at a point.
+type groupShade struct {
+	marks []coloured
+	sigma float64 // pixels; zero for no blur
+	alpha float64
+	// cells are the group cut into flat pieces, premultiplied, for a blur.
+	cells []blurCell
+}
+
+type blurCell struct {
+	x0, y0, x1, y1 float64
+	r, g, b, a     float64 // premultiplied
+}
+
+func (s groupShade) at(x, y float64) style.RGBA {
+	var r, g, b, a float64
+	if s.sigma <= 0 {
+		c, ok := compositeAt(s.marks, x, y)
+		if !ok {
+			return style.RGBA{}
+		}
+		r, g, b, a = c.R*c.A, c.G*c.A, c.B*c.A, c.A
+	} else {
+		phi := func(z float64) float64 { return 0.5 * math.Erfc(-z/math.Sqrt2) }
+		for _, c := range s.cells {
+			w := (phi((c.x1-x)/s.sigma) - phi((c.x0-x)/s.sigma)) *
+				(phi((c.y1-y)/s.sigma) - phi((c.y0-y)/s.sigma))
+			r, g, b, a = r+c.r*w, g+c.g*w, b+c.b*w, a+c.a*w
+		}
+	}
+	a *= s.alpha
+	if a <= 0 {
+		return style.RGBA{}
+	}
+	k := s.alpha / a
+	return style.RGBA{R: r * k, G: g * k, B: b * k, A: math.Min(a, 1)}
+}
+
+// compositeAt is what a set of flat marks paints at a point on a transparent
+// surface, and false where a picture is there, which has no colour to blend.
+func compositeAt(fs []coloured, x, y float64) (style.RGBA, bool) {
+	ux, _ := style.FromPx(x)
+	uy, _ := style.FromPx(y)
+	var r, g, b, a float64
+	remaining := 1.0
+	for i := len(fs) - 1; i >= 0; i-- {
+		f := fs[i]
+		if ux < f.r.X || ux >= f.r.Right() || uy < f.r.Y || uy >= f.r.Bottom() {
+			continue
+		}
+		if f.img != "" || f.shade != nil || len(f.masks) > 0 {
+			return style.RGBA{}, false
+		}
+		w := f.c.A * remaining
+		r, g, b, a = r+f.c.R*w, g+f.c.G*w, b+f.c.B*w, a+w
+		remaining -= w
+		if remaining <= 0 {
+			break
+		}
+	}
+	if a <= 0 {
+		return style.RGBA{}, true
+	}
+	return style.RGBA{R: r / a, G: g / a, B: b / a, A: a}, true
+}
+
+// filteredFills is the mark a filtered group makes, or false when it makes
+// none.
+func filteredFills(v FilterGroup) (coloured, bool) {
+	marks := picFillsIn(v.Ops, nil)
+	if len(marks) == 0 {
+		return coloured{}, false
+	}
+	ext := v.Extent()
+	if ext.Empty() {
+		return coloured{}, false
+	}
+	sh := groupShade{marks: marks, alpha: 1}
+	// A colour matrix or a drop shadow the engine left for the backend is not
+	// rendered here: the group is one opaque mark keyed by what it holds and
+	// by its chain, which calls two documents different unless they filtered
+	// the same thing the same way.
+	other := false
+	for _, f := range v.Filters {
+		switch f.Kind {
+		case FilterBlur:
+			sh.sigma = f.StdDev.Px()
+		case FilterOpacity:
+			sh.alpha *= f.Amount
+		default:
+			other = true
+		}
+	}
+	flat := true
+	for _, m := range marks {
+		flat = flat && m.img == "" && m.shade == nil && len(m.masks) == 0
+	}
+	if flat && sh.sigma > 0 {
+		xs := edges(ext.X, ext.Right(), marks)
+		ys := edgesY(ext.Y, ext.Bottom(), marks)
+		if (len(xs)-1)*(len(ys)-1) > maxBlurCells {
+			flat = false
+		} else {
+			for i := 0; i+1 < len(xs); i++ {
+				for j := 0; j+1 < len(ys); j++ {
+					mx := xs[i].Px() + (xs[i+1].Px()-xs[i].Px())/2
+					my := ys[j].Px() + (ys[j+1].Px()-ys[j].Px())/2
+					c, _ := compositeAt(marks, mx, my)
+					if c.A <= 0 {
+						continue
+					}
+					sh.cells = append(sh.cells, blurCell{
+						x0: xs[i].Px(), y0: ys[j].Px(), x1: xs[i+1].Px(), y1: ys[j+1].Px(),
+						r: c.R * c.A, g: c.G * c.A, b: c.B * c.A, a: c.A,
+					})
+				}
+			}
+		}
+	}
+	if !flat || other {
+		var b strings.Builder
+		fmt.Fprintf(&b, "filter %+v clip %v:", v.Filters, v.Clip)
+		for _, m := range marks {
+			fmt.Fprintf(&b, " %s %v %s %T", rectKey(m.r), m.c, m.img, m.shade)
+			for _, k := range m.masks {
+				b.WriteString(" in " + k.path.String())
+			}
+		}
+		return coloured{r: ext, c: style.RGBA{A: 1}, img: b.String()}, true
+	}
+	return coloured{r: ext, shade: sh}, true
 }

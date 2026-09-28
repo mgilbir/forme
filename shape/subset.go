@@ -77,6 +77,19 @@ func (f *Face) subset() ([]byte, []int, error) {
 	if f.std != nil {
 		return nil, nil, errors.New("fonts: a standard font has no program to subset")
 	}
+	if f.cff2 != nil || f.cff {
+		if gid, ok := f.usesVARCGlyph(); ok {
+			// A CFF charstring cannot carry the outline VARC draws, so the
+			// program would draw the glyph's placeholder: see varcsubset.go.
+			// A CFF2 face is embedded as the CFF font it draws, and the same
+			// holds for it.
+			return nil, nil, fmt.Errorf("fonts: glyph %d is a variable composite (VARC) in a CFF face, "+
+				"whose drawn outline a CFF program cannot carry", gid)
+		}
+	}
+	if f.cff2 != nil {
+		return f.subsetCFF2()
+	}
 	if f.cff {
 		return f.subsetOpenTypeCFF()
 	}
@@ -111,6 +124,10 @@ func (f *Face) subset() ([]byte, []int, error) {
 	}
 
 	keep := f.keepSet(offsets, glyf, n)
+	flat, err := f.flattenKeptVARC(keep, offsets, glyf)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Rebuild glyf and loca. A dropped glyph gets a zero-length entry at its own
 	// index, which is what makes this a retained-index subset: the numbering is
@@ -120,6 +137,13 @@ func (f *Face) subset() ([]byte, []int, error) {
 	for gid := 0; gid < n; gid++ {
 		newLoca[gid] = uint32(len(newGlyf))
 		if !keep[gid] {
+			continue
+		}
+		if b, ok := flat[gid]; ok {
+			newGlyf = append(newGlyf, b...)
+			for len(newGlyf)%4 != 0 {
+				newGlyf = append(newGlyf, 0)
+			}
 			continue
 		}
 		start, end := offsets[gid], offsets[gid+1]
@@ -140,13 +164,16 @@ func (f *Face) subset() ([]byte, []int, error) {
 		}
 	}
 	out["glyf"] = newGlyf
+	if len(flat) > 0 {
+		out["hmtx"] = flatBearings(out["hmtx"], f.longMetrics, flat)
+	}
 	// And the count that describes what was just taken out. maxp is copied from
 	// the original, so it has to be copied *out* of it before it is written to:
 	// the map holds the caller's own table bytes, and a face is shared.
 	if maxp, ok := out["maxp"]; ok && len(maxp) >= 32 {
 		newMaxp := append([]byte(nil), maxp...)
 		binary.BigEndian.PutUint16(newMaxp[26:], 0) // maxSizeOfInstructions
-		out["maxp"] = newMaxp
+		out["maxp"] = raiseMaxp(newMaxp, flatGlyphs(flat))
 	}
 	// Always write the long loca form: the short form stores offsets halved, so
 	// it cannot represent an odd offset, and choosing between them is one more

@@ -2,6 +2,7 @@ package layout
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -109,17 +110,86 @@ type fontFaceRule struct {
 	family string
 	srcs   []fontSource
 
-	// weightLow and weightHigh are the font-weight descriptor. A single weight
-	// is a range of one, which is what makes the matching below uniform over
-	// "font-weight: 700" and "font-weight: 100 900".
-	weightLow, weightHigh float64
-	italic                bool
+	// weight, width and style are the three descriptors CSS Fonts 4 §5.2
+	// chooses between a family's faces by, each a range: a single value is a
+	// range of one, which is what makes the matching uniform over
+	// "font-weight: 700" and "font-weight: 100 900". A descriptor the rule
+	// leaves out is its initial value, "auto" — selected as the normal value,
+	// and not a range a variable face's axes are clamped to (§4.4).
+	weight, width faceRange
+	style         faceStyle
 
 	// ranges is the unicode-range descriptor: the characters this face is for.
 	// nil means the descriptor was absent or covered the whole of Unicode,
 	// which are the same thing and are the common case — a face with no
 	// restriction is asked no questions.
 	ranges []unicodeSpan
+
+	// features is the font-feature-settings descriptor, in the order it was
+	// written, and featuresAt is where in the sheet it was: the features the
+	// rule asks of every run set in the face it loads, at CSS Fonts 4 §7.2's
+	// second step. nil where the descriptor was absent, "normal", or not a
+	// value that could be read. See withFeatureSettings.
+	features   []shape.FeatureSetting
+	featuresAt int
+
+	// namedInstance is the font-named-instance descriptor, the name of one of
+	// a variable face's named instances, or empty for auto; and variations
+	// the font-variation-settings descriptor. They are §7.2's fifth and sixth
+	// steps, applied where the face is set (fontinstance.go).
+	namedInstance string
+	variations    []variationSetting
+}
+
+// faceRange is a font-weight or font-width descriptor: a range, or auto.
+type faceRange struct {
+	valueRange
+	auto bool
+}
+
+// selected is the range §5.2 selects the face by: its own, or for auto the
+// property's normal value.
+func (r faceRange) selected(normal float64) valueRange {
+	if r.auto {
+		return valueRange{normal, normal}
+	}
+	return r.valueRange
+}
+
+// faceStyle is a font-style descriptor.
+type faceStyle struct {
+	kind faceStyleKind
+	// angles are an oblique face's, in CSS's sign: positive leans right.
+	angles valueRange
+}
+
+type faceStyleKind int
+
+const (
+	styleAuto faceStyleKind = iota
+	styleNormal
+	styleItalic
+	styleOblique
+)
+
+// offer is what the descriptor offers §5.2's style search. See fontmatch.go.
+func (s faceStyle) offer() slopeOffer {
+	switch s.kind {
+	case styleItalic:
+		return slopeOffer{italic: []valueRange{{1, 1}}}
+	case styleOblique:
+		return slopeOffer{oblique: []valueRange{s.angles}}
+	}
+	return slopeOffer{italic: []valueRange{{0, 0}}, oblique: []valueRange{{0, 0}}}
+}
+
+// matchable is the rule as §5.2 sees it.
+func (r fontFaceRule) matchable() matchable {
+	return matchable{
+		width:  r.width.selected(100),
+		weight: r.weight.selected(400),
+		slope:  r.style.offer(),
+	}
 }
 
 // covers reports whether this face may be used for a character.
@@ -191,7 +261,13 @@ func fontFacesOf(rules []style.AtRule) []pendingFontFace {
 // documentFace is one loaded face together with what the rule said about it.
 type documentFace struct {
 	rule fontFaceRule
-	face *shape.Face
+	// match is the rule's descriptors as §5.2 reads them, worked out once.
+	match matchable
+	face  *shape.Face
+	// named is where the rule's font-named-instance is in the face's design
+	// space, found once when the face loads; nil where the rule names none or
+	// the face has none by that name.
+	named map[string]float64
 	// ref is the src entry that produced the face — the url for a url() entry,
 	// the name for a local() one. It is kept so that a caller can say which
 	// file a family came from.
@@ -210,11 +286,21 @@ type documentFonts struct {
 	// byFamily indexes faces by lowercased family, in declaration order.
 	byFamily map[string][]*documentFace
 
-	// mu guards mine, which is filled as families are resolved.
+	// mu guards mine and matched, which are filled as families are resolved.
 	mu sync.Mutex
+	// matched memoizes §5.2 by family and request: the faces it keeps, in
+	// declaration order, and where it came to rest. A paragraph asks the
+	// question once per grapheme cluster where its families carry a
+	// unicode-range, and the answer depends on neither the cluster nor the
+	// paragraph.
+	matched map[familyRequest]familyMatch
 	// mine is this document's own copy of every face it has been handed,
 	// keyed by the face it was made from. See own.
 	mine map[*shape.Face]*shape.Face
+
+	// inst is the document's instances of variable faces, shared by the
+	// cascade and layout. See fontinstance.go.
+	inst *instancer
 }
 
 // own returns this document's copy of a face.
@@ -267,17 +353,28 @@ func (d *documentFonts) own(f *shape.Face, ok bool) (*shape.Face, bool) {
 type fallbackDocumentFonts struct{ *documentFonts }
 
 func (d fallbackDocumentFonts) FaceFor(text string, bold, italic bool) (*shape.Face, bool) {
+	return d.FaceForStyled(text, requestFromFlags(bold, italic))
+}
+
+// FaceForStyled implements StyledFallbackFontSet, asking the base set by the
+// numbers where it takes them.
+func (d fallbackDocumentFonts) FaceForStyled(text string, r FontRequest) (*shape.Face, bool) {
 	// The document's own faces are deliberately not offered here. FaceFor is
 	// the question "what can set this text at all", and answering it with a
 	// face the document loaded for some *other* family would substitute a
 	// webfont for a script it was never chosen for. The base set is the one
 	// that was given coverage as its job.
-	return d.own(d.base.(FallbackFontSet).FaceFor(text, bold, italic))
+	return d.own(fallbackLookup(d.base)(text, r))
 }
 
 // Face answers for a family the document defined, and defers otherwise.
 func (d *documentFonts) Face(family string, bold, italic bool) (*shape.Face, bool) {
-	return d.faceFor(family, "", bold, italic)
+	return d.faceFor(family, "", requestFromFlags(bold, italic))
+}
+
+// FaceStyled implements StyledFontSet: Face, by the numbers.
+func (d *documentFonts) FaceStyled(family string, r FontRequest) (*shape.Face, bool) {
+	return d.faceFor(family, "", r)
 }
 
 // FaceForFamily implements RangedFontSet: the face a family offers for a
@@ -288,7 +385,13 @@ func (d *documentFonts) Face(family string, bold, italic bool) (*shape.Face, boo
 // question cannot be asked through FontSet, which has no text to ask about. See
 // the note on RangedFontSet.
 func (d *documentFonts) FaceForFamily(family, text string, bold, italic bool) (*shape.Face, bool) {
-	return d.faceFor(family, text, bold, italic)
+	return d.faceFor(family, text, requestFromFlags(bold, italic))
+}
+
+// FaceForFamilyStyled implements StyledRangedFontSet: FaceForFamily, by the
+// numbers.
+func (d *documentFonts) FaceForFamilyStyled(family, text string, r FontRequest) (*shape.Face, bool) {
+	return d.faceFor(family, text, r)
 }
 
 // faceFor is the family lookup, optionally narrowed to the faces that may set a
@@ -299,105 +402,91 @@ func (d *documentFonts) FaceForFamily(family, text string, bold, italic bool) (*
 // wants. It is deliberately not the same as "text no face covers": that comes
 // back false, because a family whose every face excludes the text has nothing to
 // offer and the next family in the document's list should be asked.
-func (d *documentFonts) faceFor(family, text string, bold, italic bool) (*shape.Face, bool) {
-	candidates := d.byFamily[familyKey(family)]
-	if len(candidates) == 0 {
-		// A family the document did not define is the caller's, and the
-		// caller's set is asked the question it can answer. A plain FontSet
-		// knows nothing of ranges, so a family it holds covers whatever it has
-		// glyphs for, which is the question faceRunsFor asks next and not this
-		// one. A RangedFontSet does know, and is asked with the text: this
-		// wrapper is built for every document, and answering a ranged caller
-		// from its Face alone made the interface one that Layout honoured and
-		// Build and Compose never did (audit C43). Either way the answer is one
-		// of the caller's faces, and this document takes its own copy of it:
-		// see own.
-		if ranged, ok := d.base.(RangedFontSet); ok && text != "" {
-			return d.own(ranged.FaceForFamily(family, text, bold, italic))
-		}
-		return d.own(d.base.Face(family, bold, italic))
+func (d *documentFonts) faceFor(family, text string, r FontRequest) (*shape.Face, bool) {
+	df, _, defined := d.documentFaceFor(family, text, r)
+	if df != nil {
+		return df.face, true
 	}
-	desired := 400.0
-	if bold {
-		desired = 700
-	}
-	var best *documentFace
-	bestScore := 0.0
-	for _, c := range candidates {
-		if text != "" && !c.rule.coversText(text) {
-			continue
-		}
-		score := faceScore(c.rule, desired, italic)
-		// "<=" rather than "<", so that the last rule declared wins a tie. That
-		// is the cascade's last term, and an @font-face redeclared later in a
-		// document is a document replacing the earlier one.
-		if best == nil || score <= bestScore {
-			best, bestScore = c, score
-		}
-	}
-	if best == nil {
-		// Every face this family has excludes the text. The family has nothing
-		// for it, which is not the same as the document having nothing — the
-		// caller walks on to the next family it named.
+	if defined {
 		return nil, false
 	}
-	return best.face, true
+	// A family the document did not define is the caller's, and the caller's
+	// set is asked the question it can answer. A plain FontSet knows nothing
+	// of ranges, so a family it holds covers whatever it has glyphs for, which
+	// is the question faceRunsFor asks next and not this one. A ranged set
+	// does know, and is asked with the text: this wrapper is built for every
+	// document, and answering a ranged caller from its Face alone made the
+	// interface one that Layout honoured and Build and Compose never did (audit
+	// C43). Either way the answer is one of the caller's faces, and this
+	// document takes its own copy of it: see own.
+	if ranged := rangedLookup(d.base); ranged != nil && text != "" {
+		return d.own(ranged(family, text, r))
+	}
+	return d.own(faceIn(d.base, family, r))
 }
 
-// faceScore ranks one face against what was asked for; lower is better.
+// documentFaceFor is the face the document's own rules give a family for a
+// request, and where §5.2 came to rest choosing it. defined reports whether
+// the document defines the family at all: when it does not, the face is nil
+// and the family is the caller's to answer.
 //
-// Style dominates weight, which is CSS Fonts 4 §5's order: an italic request
-// takes an italic face of the wrong weight over an upright one of the right
-// weight, because the slant is the more visible difference.
-func faceScore(r fontFaceRule, desired float64, italic bool) float64 {
-	score := 0.0
-	if r.italic != italic {
-		score += 1e6
+// §5.2 chooses among the whole family and then, among the faces it kept, the
+// first whose unicode-range covers the text, in reverse order of declaration —
+// the composite face of §4.5.1, and the last rule declared winning a tie, which
+// is the cascade's last term too. So a family whose bold face covers only
+// Latin has nothing for bold Greek: the Greek falls to the next family the
+// document named, as a browser sets it, rather than to the family's regular
+// face, as this used to — it asked which faces covered the text before it asked
+// which was bold.
+func (d *documentFonts) documentFaceFor(family, text string, r FontRequest) (df *documentFace, m faceMatch, defined bool) {
+	key := familyKey(family)
+	candidates := d.byFamily[key]
+	if len(candidates) == 0 {
+		return nil, m, false
 	}
-	return score + weightRank(desired, clampWeight(desired, r.weightLow, r.weightHigh))
+	fm := d.match(key, candidates, r)
+	for i := len(fm.keep) - 1; i >= 0; i-- {
+		c := candidates[fm.keep[i]]
+		if text == "" || c.rule.coversText(text) {
+			return c, fm.at, true
+		}
+	}
+	// Every face the match kept excludes the text. The family has nothing for
+	// it, which is not the same as the document having nothing — the caller
+	// walks on to the next family it named.
+	return nil, fm.at, true
 }
 
-func clampWeight(desired, low, high float64) float64 {
-	if desired < low {
-		return low
-	}
-	if desired > high {
-		return high
-	}
-	return desired
+// familyRequest is what matched is keyed by.
+type familyRequest struct {
+	family string
+	r      FontRequest
 }
 
-// weightRank is CSS Fonts 4 §5.2's weight matching, as a distance.
-//
-// The three cases are the specification's, and the reason it is not simply
-// "closest number" is the middle one: at a desired weight of 400 or 500 a
-// *heavier* face up to 500 is preferred to a lighter one, however much closer
-// the lighter one is, because 400 and 500 are both "normal" and the step down
-// to 300 is a visible change of face where the step up to 500 is not.
-func weightRank(desired, w float64) float64 {
-	if w == desired {
-		return 0
+// familyMatch is one family's §5.2 answer for one request.
+type familyMatch struct {
+	keep []int
+	at   faceMatch
+}
+
+// match is matchFaces over a family's faces, memoized.
+func (d *documentFonts) match(key string, candidates []*documentFace, r FontRequest) familyMatch {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if got, ok := d.matched[familyRequest{key, r}]; ok {
+		return got
 	}
-	switch {
-	case desired >= 400 && desired <= 500:
-		if w > desired && w <= 500 {
-			return w - desired
-		}
-		if w < desired {
-			return 1000 + (desired - w)
-		}
-		return 10000 + (w - 500)
-	case desired < 400:
-		if w < desired {
-			return desired - w
-		}
-		return 1000 + (w - desired)
-	default:
-		if w > desired {
-			return w - desired
-		}
-		return 1000 + (desired - w)
+	faces := make([]matchable, len(candidates))
+	for i, c := range candidates {
+		faces[i] = c.match
 	}
+	keep, at := matchFaces(faces, r)
+	fm := familyMatch{keep: keep, at: at}
+	if d.matched == nil {
+		d.matched = map[familyRequest]familyMatch{}
+	}
+	d.matched[familyRequest{key, r}] = fm
+	return fm
 }
 
 // loadFontFaces turns a document's @font-face rules into the font set it is set
@@ -411,7 +500,7 @@ func weightRank(desired, w float64) float64 {
 // document that declared nothing still sets text in the caller's library, and
 // the caller's library is shared.
 func loadFontFaces(pending []pendingFontFace, res ResourceResolver, base FontSet, rec *Recorder) FontSet {
-	set := &documentFonts{base: base, byFamily: map[string][]*documentFace{}}
+	set := &documentFonts{base: base, byFamily: map[string][]*documentFace{}, inst: newInstancer()}
 	if len(pending) == 0 {
 		return wrapDocumentFonts(set)
 	}
@@ -435,7 +524,9 @@ func loadFontFaces(pending []pendingFontFace, res ResourceResolver, base FontSet
 		if !ok {
 			continue
 		}
-		df := &documentFace{rule: rule, face: face, ref: ref}
+		face = l.withFeatureSettings(p, rule, face)
+		df := &documentFace{rule: rule, match: rule.matchable(), face: face, ref: ref,
+			named: l.namedInstance(p, rule, face)}
 		set.faces = append(set.faces, df)
 		key := familyKey(rule.family)
 		set.byFamily[key] = append(set.byFamily[key], df)
@@ -446,7 +537,7 @@ func loadFontFaces(pending []pendingFontFace, res ResourceResolver, base FontSet
 // wrapDocumentFonts keeps the FallbackFontSet interface where the base had one
 // and does not invent it where it did not. See fallbackDocumentFonts.
 func wrapDocumentFonts(set *documentFonts) FontSet {
-	if _, ok := set.base.(FallbackFontSet); ok {
+	if fallbackLookup(set.base) != nil {
 		return fallbackDocumentFonts{set}
 	}
 	return set
@@ -469,6 +560,9 @@ type fontFaceLoader struct {
 	// failed records the references already reported, so a stylesheet with
 	// twenty rules pointing at one missing file makes one attempt.
 	failed map[string]bool
+	// featured is the copies of loaded faces that font-feature-settings
+	// descriptors asked for. See withFeatureSettings.
+	featured map[featuredFace]*shape.Face
 
 	// budget is how many bytes of font program the document may still read.
 	budget int
@@ -492,7 +586,7 @@ func (p pendingFontFace) at() Source {
 // wrote a rule that cannot mean anything, which is a different thing from this
 // engine not doing something.
 func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
-	out := fontFaceRule{weightLow: 400, weightHigh: 400}
+	out := fontFaceRule{weight: faceRange{auto: true}, width: faceRange{auto: true}}
 	if !p.rule.HasBlock {
 		l.rec.ReportDetail(Finding{
 			Rule:     RuleInvalidCSS,
@@ -518,19 +612,47 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 		case "src":
 			out.srcs = l.parseSrc(p, d)
 		case "font-weight":
-			if low, high, ok := parseWeightDescriptor(d.Value); ok {
-				out.weightLow, out.weightHigh = low, high
+			if r, ok := parseWeightDescriptor(d.Value); ok {
+				out.weight = r
 			} else {
 				l.badDescriptor(p, d, "font-weight")
 			}
+		case "font-width", "font-stretch":
+			// font-stretch is font-width's legacy name, as a descriptor as it
+			// is as a property (§4.4.1): one descriptor, the later declaration
+			// of it winning.
+			if r, ok := parseWidthDescriptor(d.Value); ok {
+				out.width = r
+			} else {
+				l.badDescriptor(p, d, ascii.Lower(d.Name))
+			}
 		case "font-style":
-			if italic, ok := parseStyleDescriptor(d.Value); ok {
-				out.italic = italic
+			if st, ok := parseStyleDescriptor(d.Value); ok {
+				out.style = st
 			} else {
 				l.badDescriptor(p, d, "font-style")
 			}
 		case "unicode-range":
 			out.ranges = l.unicodeRange(p, d)
+		case "font-feature-settings":
+			// A declaration that cannot be read is dropped and the one before
+			// it stands, as it does for the two descriptors above.
+			if settings, ok := l.featureSettings(p, d); ok {
+				out.features, out.featuresAt = settings, d.Offset
+			}
+		case "font-variation-settings":
+			// §7.2's sixth step, between the variations font-weight, font-width
+			// and font-style ask for and the property's. Applied where the face
+			// is set, in that order — see fontinstance.go.
+			if settings, ok := l.variationSettings(p, d); ok {
+				out.variations = settings
+			}
+		case "font-named-instance":
+			if name, ok := parseNamedInstance(d.Value); ok {
+				out.namedInstance = name
+			} else {
+				l.badDescriptor(p, d, "font-named-instance")
+			}
 		case "font-display":
 			// A hint about what to show while a font is downloading. There is
 			// no download here and no moment at which a page is half-drawn, so
@@ -538,9 +660,8 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 		default:
 			// Every other descriptor changes how the face is used —
 			// size-adjust and the override descriptors change its metrics
-			// outright, font-feature-settings changes which glyphs are chosen.
-			// Ignoring one silently would move the text on the page with
-			// nothing saying so.
+			// outright. Ignoring one silently would move the text on the page
+			// with nothing saying so.
 			l.rec.ReportDetail(Finding{
 				Rule:     RuleUnsupportedProperty,
 				Source:   Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
@@ -570,6 +691,182 @@ func (l *fontFaceLoader) parse(p pendingFontFace) (fontFaceRule, bool) {
 		return out, false
 	}
 	return out, true
+}
+
+// featureSettings reads the font-feature-settings descriptor, whose grammar is
+// the property's (CSS Fonts 4 §4.6) and is judged by the same code the cascade
+// judges the property with.
+//
+// ok is false where the value is not one this engine can read — not CSS, or CSS
+// holding something it does not evaluate — and each is reported as such, the
+// rule's earlier value standing. "normal" is read, as asking for nothing.
+func (l *fontFaceLoader) featureSettings(p pendingFontFace, d css.Declaration) ([]shape.FeatureSetting, bool) {
+	valid, unsupported := style.JudgeValue("font-feature-settings", d.Value)
+	switch {
+	case !valid:
+		l.badDescriptor(p, d, "font-feature-settings")
+		return nil, false
+	case unsupported != "":
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
+			Message: "the @font-face descriptor \"font-feature-settings\" uses " + unsupported +
+				", which this engine does not evaluate; the face was loaded with no settings of its own",
+			Property: "font-feature-settings",
+		})
+		return nil, false
+	}
+	settings, unusable := featureSettingsIn(d.Value)
+	if len(unusable) > 0 {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
+			Message: "the @font-face descriptor \"font-feature-settings\" names " +
+				quoteTags(unusable) + ", which cannot name a feature here; the rest of it was applied",
+			Property: "font-feature-settings",
+		})
+	}
+	return settings, true
+}
+
+// withFeatureSettings is the face a rule's font-feature-settings asks for: the
+// face, with the settings stated on it, so that every run set in it — measured
+// here or shaped again by a backend — is shaped with them. See
+// shape.Face.WithFeatureSettings.
+//
+// One per face and settings. A file several rules name is loaded once and
+// shared (see load), and the rules that state the same settings share its
+// copy; a rule that states none keeps the face as it was loaded.
+//
+// A feature the settings turn on that the face has nothing under is reported
+// here, where the face and the rule are both known, for the reason reportKerning
+// reports one the property asks for: the text is set in the letters it was
+// written with, which is not the page the rule asked for.
+func (l *fontFaceLoader) withFeatureSettings(p pendingFontFace, r fontFaceRule, face *shape.Face) *shape.Face {
+	if len(r.features) == 0 {
+		return face
+	}
+	on, off := settleFeatureSettings(r.features)
+	if on == "" && len(off) == 0 {
+		return face
+	}
+	key := featuredFace{face: face, on: on, off: strings.Join(off, ",")}
+	if got := l.featured[key]; got != nil {
+		return got
+	}
+	out := face.WithFeatureSettings(r.features)
+	if l.featured == nil {
+		l.featured = map[featuredFace]*shape.Face{}
+	}
+	l.featured[key] = out
+
+	var lacking []string
+	if on != "" {
+		for _, tag := range strings.Split(on, ",") {
+			if tag == "kern" && face.HasKerning() || faceDeclares(face, tag) {
+				continue
+			}
+			lacking = append(lacking, tag)
+		}
+	}
+	if len(lacking) > 0 {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: Source{HTMLOffset: -1, CSSOffset: r.featuresAt, Sheet: p.sheet},
+			Message: "the @font-face for " + quoteValue(r.family) + " asks for " + quoteTags(lacking) +
+				", which its face does not declare; its text is set in the letters it was written with",
+			Property: "font-feature-settings",
+		})
+	}
+	return out
+}
+
+// variationSettings reads the font-variation-settings descriptor, whose grammar
+// is the property's and is judged by the same code; ok is false, and the
+// rule's earlier value stands, where it cannot be read. A list longer than
+// maxVariationSettings keeps its last entries and says so.
+func (l *fontFaceLoader) variationSettings(p pendingFontFace, d css.Declaration) ([]variationSetting, bool) {
+	valid, unsupported := style.JudgeValue("font-variation-settings", d.Value)
+	switch {
+	case !valid:
+		l.badDescriptor(p, d, "font-variation-settings")
+		return nil, false
+	case unsupported != "":
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
+			Message: "the @font-face descriptor \"font-variation-settings\" uses " + unsupported +
+				", which this engine does not evaluate; the face was given no settings of its own",
+			Property: "font-variation-settings",
+		})
+		return nil, false
+	}
+	settings, over := variationSettingsIn(d.Value)
+	if over > 0 {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleLimit,
+			Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
+			Message: fmt.Sprintf("the @font-face descriptor \"font-variation-settings\" lists %d settings, "+
+				"more than the %d this engine reads; the first %d were not applied",
+				len(settings)+over, maxVariationSettings, over),
+			Property: "font-variation-settings",
+		})
+	}
+	return settings, true
+}
+
+// namedInstance finds the rule's font-named-instance in its face, by §5.1's
+// localized name matching — familyKey, over every spelling the font gives the
+// name. A name the face does not have applies nothing (§7.2) and is reported,
+// since the author asked for an instance and the text is not set at it.
+func (l *fontFaceLoader) namedInstance(p pendingFontFace, r fontFaceRule, face *shape.Face) map[string]float64 {
+	if r.namedInstance == "" {
+		return nil
+	}
+	want := familyKey(r.namedInstance)
+	coords, ok := face.NamedInstance(func(name string) bool { return familyKey(name) == want })
+	if !ok {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleUnsupportedValue,
+			Source: p.at(),
+			Message: "the @font-face for " + quoteValue(r.family) + " names the instance " +
+				quoteValue(r.namedInstance) + ", which its face does not have; no named instance was applied",
+			Property: "font-named-instance",
+		})
+		return nil
+	}
+	return coords
+}
+
+// parseNamedInstance reads the font-named-instance descriptor: auto, which is
+// no instance and the empty string, or a string naming one.
+func parseNamedInstance(vals []css.ComponentValue) (string, bool) {
+	toks, ok := descriptorTokens(vals)
+	if !ok || len(toks) != 1 {
+		return "", false
+	}
+	switch t := toks[0]; {
+	case t.Kind == css.Ident && ascii.EqualFold(t.Value, "auto"):
+		return "", true
+	case t.Kind == css.String:
+		return t.Value, true
+	}
+	return "", false
+}
+
+// featuredFace is what withFeatureSettings keeps a face's copy under.
+type featuredFace struct {
+	face    *shape.Face
+	on, off string
+}
+
+// quoteTags renders feature tags for a message.
+func quoteTags(tags []string) string {
+	quoted := make([]string, len(tags))
+	for i, t := range tags {
+		quoted[i] = quoteValue(t)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 func (l *fontFaceLoader) badDescriptor(p pendingFontFace, d css.Declaration, name string) {
@@ -949,105 +1246,152 @@ func descriptorFamily(vals []css.ComponentValue) string {
 	return ascii.TrimCSSSpace(strings.Join(parts, " "))
 }
 
-// parseWeightDescriptor reads the font-weight descriptor as a range.
-func parseWeightDescriptor(vals []css.ComponentValue) (low, high float64, ok bool) {
-	var nums []float64
+// descriptorTokens is a descriptor's value without its white space, or false
+// where it holds anything that is not a token.
+func descriptorTokens(vals []css.ComponentValue) ([]css.Token, bool) {
+	var out []css.Token
 	for _, v := range vals {
 		if !v.IsToken() {
-			return 0, 0, false
+			return nil, false
 		}
-		switch v.Token.Kind {
-		case css.Whitespace:
+		if v.Token.Kind == css.Whitespace {
 			continue
-		case css.Ident:
-			switch ascii.Lower(v.Token.Value) {
-			case "normal":
-				nums = append(nums, 400)
-			case "bold":
-				nums = append(nums, 700)
-			default:
-				return 0, 0, false
-			}
-		case css.Number:
-			// The descriptor takes a number in [1,1000]; "bolder" and
-			// "lighter" are relative to an inherited value and mean nothing
-			// here, which is why they are not in the switch above.
-			n := v.Token.Number
-			if n < 1 || n > 1000 {
-				return 0, 0, false
-			}
-			nums = append(nums, n)
-		default:
-			return 0, 0, false
 		}
+		out = append(out, v.Token)
 	}
-	switch len(nums) {
-	case 1:
-		return nums[0], nums[0], true
-	case 2:
-		if nums[0] > nums[1] {
-			return 0, 0, false
-		}
-		return nums[0], nums[1], true
-	}
-	return 0, 0, false
+	return out, true
 }
 
-// parseStyleDescriptor reads the font-style descriptor.
-//
-// An oblique with an angle is italic here: this engine has no synthetic slant
-// and no variable slnt axis to set, so what the angle would choose between is
-// two faces it cannot tell apart. An angle of zero is upright, which is the one
-// case where the number decides something.
-func parseStyleDescriptor(vals []css.ComponentValue) (italic bool, ok bool) {
-	var kw string
-	var angles []float64
-	for _, v := range vals {
-		if !v.IsToken() {
-			return false, false
+// isAutoDescriptor reports whether a descriptor's value is the one word
+// "auto", which each of the three range descriptors takes alone.
+func isAutoDescriptor(toks []css.Token) bool {
+	return len(toks) == 1 && toks[0].Kind == css.Ident && ascii.EqualFold(toks[0].Value, "auto")
+}
+
+// rangeOf makes a range of one or two values, swapped where they are given
+// the wrong way round: §4.4 has a user agent "swap the computed value of the
+// startpoint and endpoint of the range in order to forbid decreasing ranges".
+// They were refused, and the rule's face then selected as a normal one.
+func rangeOf(nums []float64) (valueRange, bool) {
+	switch len(nums) {
+	case 1:
+		return valueRange{nums[0], nums[0]}, true
+	case 2:
+		lo, hi := nums[0], nums[1]
+		if lo > hi {
+			lo, hi = hi, lo
 		}
-		switch v.Token.Kind {
-		case css.Whitespace:
-			continue
-		case css.Ident:
-			if kw != "" {
-				return false, false
-			}
-			kw = ascii.Lower(v.Token.Value)
-		case css.Dimension:
-			if !ascii.EqualFold(v.Token.Unit, "deg") {
-				return false, false
-			}
-			angles = append(angles, v.Token.Number)
-		case css.Number:
-			if v.Token.Number != 0 {
-				return false, false
-			}
-			angles = append(angles, 0)
+		return valueRange{lo, hi}, true
+	}
+	return valueRange{}, false
+}
+
+// parseWeightDescriptor reads the font-weight descriptor: auto, or one or two
+// of normal, bold and a number from 1 to 1000. "bolder" and "lighter" are
+// relative to an inherited value and mean nothing here.
+func parseWeightDescriptor(vals []css.ComponentValue) (faceRange, bool) {
+	toks, ok := descriptorTokens(vals)
+	if !ok {
+		return faceRange{}, false
+	}
+	if isAutoDescriptor(toks) {
+		return faceRange{auto: true}, true
+	}
+	var nums []float64
+	for _, t := range toks {
+		switch {
+		case t.Kind == css.Ident && ascii.EqualFold(t.Value, "normal"):
+			nums = append(nums, 400)
+		case t.Kind == css.Ident && ascii.EqualFold(t.Value, "bold"):
+			nums = append(nums, 700)
+		case t.Kind == css.Number && t.Number >= 1 && t.Number <= 1000:
+			nums = append(nums, t.Number)
 		default:
-			return false, false
+			return faceRange{}, false
 		}
 	}
-	switch kw {
-	case "normal":
-		return false, len(angles) == 0
-	case "italic":
-		return true, len(angles) == 0
-	case "oblique":
-		if len(angles) == 0 {
-			return true, true
-		}
-		if len(angles) > 2 {
-			return false, false
-		}
-		for _, a := range angles {
-			if a != 0 {
-				return true, true
+	r, ok := rangeOf(nums)
+	return faceRange{valueRange: r}, ok
+}
+
+// parseWidthDescriptor reads the font-width descriptor, or its legacy name
+// font-stretch: auto, or one or two of font-width's keywords and non-negative
+// percentages.
+func parseWidthDescriptor(vals []css.ComponentValue) (faceRange, bool) {
+	toks, ok := descriptorTokens(vals)
+	if !ok {
+		return faceRange{}, false
+	}
+	if isAutoDescriptor(toks) {
+		return faceRange{auto: true}, true
+	}
+	var nums []float64
+	for _, t := range toks {
+		switch t.Kind {
+		case css.Ident:
+			w, known := fontWidthKeywords[ascii.Lower(t.Value)]
+			if !known {
+				return faceRange{}, false
 			}
+			nums = append(nums, w)
+		case css.Percentage:
+			if !(t.Number >= 0) || math.IsInf(t.Number, 0) {
+				return faceRange{}, false
+			}
+			nums = append(nums, t.Number)
+		default:
+			return faceRange{}, false
 		}
-		return false, true
 	}
-	return false, false
+	r, ok := rangeOf(nums)
+	return faceRange{valueRange: r}, ok
+}
+
+// parseStyleDescriptor reads the font-style descriptor: auto, normal, italic,
+// left, right, or oblique with one or two angles between -90 and 90 degrees,
+// or none — which is 14 degrees, as it is for the property.
+//
+// An oblique face is an oblique face: it used to be read as italic whatever
+// its angle, because there was no slnt axis to set and nothing to choose
+// between. §5.2 distinguishes the two, and a rule declaring "oblique 0deg
+// 20deg" for a variable face is declaring the angles its slnt axis is to be
+// set at.
+func parseStyleDescriptor(vals []css.ComponentValue) (faceStyle, bool) {
+	toks, ok := descriptorTokens(vals)
+	if !ok || len(toks) == 0 || toks[0].Kind != css.Ident {
+		return faceStyle{}, false
+	}
+	kw := ascii.Lower(toks[0].Value)
+	rest := toks[1:]
+	switch kw {
+	case "auto", "normal", "italic", "left", "right":
+		if len(rest) != 0 {
+			return faceStyle{}, false
+		}
+		switch kw {
+		case "auto":
+			return faceStyle{kind: styleAuto}, true
+		case "normal":
+			return faceStyle{kind: styleNormal}, true
+		}
+		return faceStyle{kind: styleItalic}, true
+	case "oblique":
+		if len(rest) == 0 {
+			return faceStyle{kind: styleOblique,
+				angles: valueRange{defaultObliqueAngle, defaultObliqueAngle}}, true
+		}
+		var angles []float64
+		for _, t := range rest {
+			deg, ok := gradientAngle([]css.ComponentValue{{Token: t}})
+			if !ok || deg < -90 || deg > 90 {
+				return faceStyle{}, false
+			}
+			angles = append(angles, deg)
+		}
+		r, ok := rangeOf(angles)
+		return faceStyle{kind: styleOblique, angles: r}, ok
+	}
+	return faceStyle{}, false
 }
 
 // unicodeSpan is one span of the unicode-range descriptor.

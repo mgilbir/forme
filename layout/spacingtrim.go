@@ -1,6 +1,11 @@
 package layout
 
 import (
+	"slices"
+	"strings"
+
+	"github.com/mgilbir/forme/paragraph"
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -86,7 +91,10 @@ func (l *layouter) markClosingPunctuation(items []inlineItem, st spacingTrim) []
 func canTrimAsClosing(item inlineItem) bool {
 	return item.Text != "" && item.Face != nil && !item.Tab && !item.Forced &&
 		!item.Inset && item.AtomicBox == nil && item.Float == nil && item.Abs == nil &&
-		!item.HangStart && !item.HangEnd && !item.MayHangEnd
+		!item.HangStart && !item.HangEnd && !item.MayHangEnd &&
+		// A text-combine-upright composition is one glyph, U+FFFC, and not
+		// the bracket its text may end with. See combine.go.
+		!item.Combine
 }
 
 // trimWidthOf is what the face says the item's last character gives up, in
@@ -137,4 +145,212 @@ func spacingTrimFor(item inlineItem, block spacingTrim) spacingTrim {
 	}
 	st, _ := spacingTrimOf(b.Style.Get("text-spacing-trim"))
 	return st
+}
+
+// markOpeningPunctuation is §8.2's trim at the start of a line, cut into the
+// runs the way markClosingPunctuation cuts the end's: a full-width opening
+// punctuation at a place a line could begin becomes an item of its own,
+// carrying how much narrower its half-width form is. Whether a line does begin
+// there is the fill's to know, and it takes the trim then; see
+// paragraph.Item.TrimStart.
+//
+// # What the half-width form is
+//
+// The font's, and not half of anything: the glyph as 'halt' positions it. For
+// an opening bracket that is a shorter advance *and* the ink moved back into
+// the space the blank vacated, so a trim here is not only a width. The run is
+// drawn with 'halt' asked for (see startTrimmedFeatures) and the width taken
+// off is what the same shaping says the feature takes off, measured rather
+// than read from the face's table: shaping is what picks the glyph — a
+// Chinese "“" is not the glyph its code point maps to in the cmap — and it is
+// the same shaping a backend and the reference's font-feature-settings reach,
+// so the width the line is filled to is the width the run is drawn at.
+//
+// # When it is not taken
+//
+//   - A face that states no 'halt' for the glyph gives the run nothing to take,
+//     and it is not cut out.
+//   - A run whose font-feature-settings already asks for 'halt' is set
+//     half-width wherever it is, and has no blank left to give up. The suite's
+//     references are written that way — text-spacing-trim-start-002-ref sets
+//     each line's bracket in a <halt> element *and* declares trim-start — and
+//     trimming them again took a second half em off each.
+//   - A run whose font-feature-settings turns 'halt' off has refused the
+//     font's half-width forms, and the property's collapsing rules let a user
+//     agent decline to trim by "font features". It is set whole.
+//   - An upright run of vertical text. Its half-width form is the one 'vhal'
+//     states, on the other axis, and nothing here asks for it: that is named
+//     in a finding rather than guessed from the horizontal one. A sideways
+//     run is the horizontal line turned, and is trimmed as one.
+//   - A character that hangs. §8.4 has put it outside the line, where it has no
+//     blank inside the line to give up.
+func (l *layouter) markOpeningPunctuation(items []inlineItem, st spacingTrim) []inlineItem {
+	var out []inlineItem
+	for i, item := range items {
+		head, tail, cut := l.openingCandidate(items, i, st)
+		if !cut {
+			if out != nil {
+				out = append(out, item)
+			}
+			continue
+		}
+		if out == nil {
+			out = make([]inlineItem, 0, len(items)+4)
+			out = append(out, items[:i]...)
+		}
+		out = append(out, head)
+		if tail.Text != "" {
+			out = append(out, tail)
+		}
+	}
+	if out == nil {
+		return items
+	}
+	return out
+}
+
+// openingCandidate is items[i] cut for the trim: the punctuation as an item of
+// its own carrying the trim, and the rest of the run after it, if any. cut is
+// false where the item is not a candidate or its face has no half-width form
+// for the character, and then the item is to be kept as it is.
+func (l *layouter) openingCandidate(items []inlineItem, i int, st spacingTrim) (head, tail inlineItem, cut bool) {
+	item := items[i]
+	if !l.opensALine(items, i, st) {
+		return item, inlineItem{}, false
+	}
+	n := leadingOpeningPunctuation(item.Text)
+	head = item
+	if n < len(item.Text) {
+		head, tail = l.br.SplitItem(item, n)
+	}
+	head.TrimStart = l.openingTrimOf(head)
+	if head.TrimStart == 0 {
+		return item, inlineItem{}, false
+	}
+	head.TrimStartOn = spacingTrimFor(head, st).TrimOpeningAtStart
+	return head, tail, true
+}
+
+// opensALine reports whether items[i] is a candidate for the trim: a run of
+// text starting with a full-width opening punctuation, under a value that
+// trims at some line starts, at a place a line could begin. It reports an
+// upright candidate as not done, once per value.
+func (l *layouter) opensALine(items []inlineItem, i int, st spacingTrim) bool {
+	item := items[i]
+	if !canTrimAsClosing(item) || leadingOpeningPunctuation(item.Text) == 0 {
+		return false
+	}
+	own := spacingTrimFor(item, st)
+	if own.TrimOpeningAtStart == paragraph.OpeningTrimNone || !couldBeginALine(items, i) {
+		return false
+	}
+	if item.Upright {
+		if b := elementBoxOf(heldBox(item.Box)); b != nil {
+			l.reportSpacingTrimUpright(b, b.Style.Get("text-spacing-trim"))
+		}
+		return false
+	}
+	return true
+}
+
+// couldBeginALine reports whether a line could begin at items[i]: at the start
+// of the content, after a forced break, or at a break opportunity. Everything
+// that is not content — an inline box's own edge, a box out of flow, a
+// collapsible space, a bidi control — is stepped back over, because none of it
+// stops what follows it beginning the line.
+//
+// The fill has the last word and this only has to be generous: a candidate
+// that never begins a line is an item cut in two that is set exactly as it was.
+func couldBeginALine(items []inlineItem, i int) bool {
+	if items[i].BreakBefore {
+		return true
+	}
+	for j := i - 1; j >= 0; j-- {
+		it := items[j]
+		switch {
+		case it.Forced:
+			return true
+		case it.Inset || it.Float != nil || it.Abs != nil || it.Collapsible ||
+			paragraph.IsBidiControlOnly(it.Text):
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// elementBoxOf is the box a finding about a run is named by: a text box carries
+// its element's style and has no element of its own to point at.
+func elementBoxOf(b *Box) *Box {
+	for b != nil && b.IsText() && b.Parent != nil {
+		b = b.Parent
+	}
+	return b
+}
+
+// openingTrimOf is how much narrower the item's text is with 'halt' asked for
+// than without, measured by the shaping that will draw it; zero where the
+// feature changes nothing and where the run turns it off. See
+// markOpeningPunctuation.
+//
+// A run that already asks for 'halt' needs no case of its own: it is measured
+// with the feature both times, so the two widths are one and the trim is zero.
+// A run that turns it off does, because asking for the feature again puts the
+// tag in both of its lists, and the shaping then applies it.
+//
+// Measured in the item's own context and without its merge group: the group
+// is shaped as one string under one set of features, and asking it for
+// 'halt' would ask it of every character in it rather than of this one.
+func (l *layouter) openingTrimOf(item inlineItem) style.Unit {
+	if item.Face == nil || item.Text == "" || hasFeatureTag(item.Off.TagsOff, "halt") {
+		return 0
+	}
+	how := shaping{Before: item.PreContext, After: item.PostContext,
+		ContextKerns: item.ContextKerns, Off: item.Off}
+	full := l.br.MeasureSpacedInContext(item.Face, item.Text, item.Size, item.Spacing, how)
+	how.Off = startTrimmedFeatures(item.Off)
+	half := l.br.MeasureSpacedInContext(item.Face, item.Text, item.Size, item.Spacing, how)
+	if half >= full {
+		return 0
+	}
+	return full.Sub(half)
+}
+
+// startTrimmedFeatures is the features a run the fill trimmed at the start of
+// its line is drawn with: its own, and 'halt'.
+func startTrimmedFeatures(off shape.Features) shape.Features {
+	if hasFeatureTag(off.Tags, "halt") {
+		return off
+	}
+	tags := []string{"halt"}
+	if off.Tags != "" {
+		tags = append(tags, strings.Split(off.Tags, ",")...)
+	}
+	// The settled form: sorted, so that two runs asking for the same features
+	// share the shaping memo's entry. See shape.Features.Tags.
+	slices.Sort(tags)
+	off.Tags = strings.Join(tags, ",")
+	return off
+}
+
+// hasFeatureTag reports whether a settled comma-separated tag list names tag.
+func hasFeatureTag(list, tag string) bool {
+	for _, t := range strings.Split(list, ",") {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// runFeatures is what a run is drawn with: its item's features, and 'halt'
+// where the fill set it at the start of a line in its half-width form. The
+// width the line took off it is the width that feature takes off, so drawing
+// it any other way would put the ink half an em from where the line left room
+// for it.
+func runFeatures(item inlineItem) shape.Features {
+	if item.StartTrimmed {
+		return startTrimmedFeatures(item.Off)
+	}
+	return item.Off
 }

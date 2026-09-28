@@ -246,7 +246,13 @@ func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit, viewport Media, m
 		ctx.ViewportWidth, ctx.ViewportHeight, ctx.ViewportKnown =
 			viewport.Width, viewport.Height, true
 	}
-	if m != nil {
+	// Only a size written in "ex" needs the face's x-height, and asking for one
+	// is not free: it chooses the parent's face, and where that is a variable
+	// face it sets it where the parent's style places it — which for layout's
+	// Metrics cuts that instance, one of the few a document is allowed. Asked
+	// of every element that sets a size, it cut instances for parents whose
+	// own text is never set in them.
+	if m != nil && mentionsUnit(vals, "ex") {
 		if xh, ok := m.XHeight(fontStyle, parent); ok {
 			ctx.XHeightPx, ctx.XHeightKnown = xh, true
 		}
@@ -256,6 +262,38 @@ func fontSizeOf(cs ComputedStyle, own bool, parent, root Unit, viewport Media, m
 		return parent, false
 	}
 	return size, true
+}
+
+// fontSize is fontSizeOf, and MathML Core §4.5's "font-size: math" where that
+// is the value: the parent's size scaled by how far math-depth moved from the
+// parent's to this element's (see mathFontSize). parent is the parent's
+// computed style, zero for the root.
+func (s *Styler) fontSize(cs ComputedStyle, own bool, parent ComputedStyle, parentSize, root Unit,
+	m Metrics, fontStyle ComputedStyle) (Unit, bool) {
+
+	if own && isMathFontSize(cs.Get("font-size")) {
+		from := 0
+		if !parent.IsZero() {
+			from, _ = strconv.Atoi(parent.Get("math-depth"))
+		}
+		to, _ := strconv.Atoi(cs.Get("math-depth"))
+		return mathFontSize(parentSize, from, to, m, fontStyle)
+	}
+	return fontSizeOf(cs, own, parentSize, root, s.viewport, m, fontStyle)
+}
+
+// mentionsUnit reports whether a value states a dimension in a unit, at any
+// depth: "calc(1em + 2ex)" mentions ex as much as "2ex" does.
+func mentionsUnit(vals []css.ComponentValue, unit string) bool {
+	for _, v := range vals {
+		if v.Token.Kind == css.Dimension && ascii.EqualFold(v.Token.Unit, unit) {
+			return true
+		}
+		if len(v.Values) > 0 && mentionsUnit(v.Values, unit) {
+			return true
+		}
+	}
+	return false
 }
 
 // pxValue renders an absolute length the way a stylesheet would have written it.

@@ -29,6 +29,10 @@ type Glyph struct {
 	// with a side bearing of zero. It is for a fixture that places marks by
 	// their ink, which is what a shaper does for a face that positions none.
 	Ink [4]int
+	// Unmapped leaves the glyph out of the character map, and Rune is then
+	// ignored: a glyph reachable only by its index, which is what a size
+	// variant or an assembly part in a math font is.
+	Unmapped bool
 }
 
 // SFNTOptions configures a synthetic font. The zero value is a usable
@@ -230,6 +234,9 @@ func sfntCmap(glyphs []Glyph) []byte {
 	maps := make([]mapping, 0, len(glyphs))
 	seen := map[rune]bool{}
 	for i, g := range glyphs {
+		if g.Unmapped {
+			continue
+		}
 		switch r := g.Rune; {
 		case r < 0 || r > 0x10FFFF || (r >= 0xD800 && r <= 0xDFFF):
 			panic(fmt.Sprintf("fonttest: glyph %d maps U+%04X, which is not a character", i+1, r))

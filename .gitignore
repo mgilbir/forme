@@ -24,6 +24,10 @@ testdata/googlefonts/
 # gigabytes.
 testdata/notocjk/
 
+# CFF2 variable fonts and name-keyed CFF fonts from their publishers, fetched
+# by `make cff-fonts`: the kinds of CFF neither library above has.
+testdata/cff-fonts/
+
 # BudouX's phrase models, which cmd/genphrase reads. As with the ICU word lists
 # above, the generated table is committed and the source is fetched.
 testdata/budoux/

@@ -1,6 +1,10 @@
 package layout
 
 import (
+	"fmt"
+	"math"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -249,68 +253,123 @@ func TestTheEndOfTheContentIsAlwaysABreak(t *testing.T) {
 // Where a column may end — forbids and lastAllowed — is asked once per column,
 // and each answer is a search. The defect those guard is a *question* that
 // costs the content: a zone looked for by walking the zones. So what is
-// measured is a fixed number of questions, spread evenly down the content,
-// against a sixteenth of the boxes and against all of them. A search is a
+// measured is a fixed number of questions, spread down the content, against a
+// thousand zones and against sixty-four times as many. A search is a
 // comparison more for every doubling, so the questions cost a little more at
-// the larger size and nothing like sixteen times; a walk costs sixteen times.
-// Eight is a factor of two from each.
+// the larger size, and read 1.0 to 2.1; a walk read 48 to 88. The bound is
+// eight, a factor of four from the searches and of six from a walk. Those are
+// with nothing else running and with memory being streamed on six threads
+// beside the test, which is under two processors: the smaller side asks its
+// questions of sixty-four pours of a thousand zones in turn, as
+// costtest.TimeCopies does with four, so that both sides read as much memory.
+// Asked of one pour, the searches read up to 6.3 contended, because sixty-four
+// thousand zones are more than the cache keeps once something else is using
+// it and a thousand are not.
 //
-// It was the whole pour's questions at n boxes against 4n, which put the
-// searches' cost in with the number of them, and that is a ratio of four with
-// nothing to spare on either side: a search over a thousand zones took twice
-// what one over two hundred and fifty did here although it made two more
-// comparisons, because a processor learns the branches of the smaller search,
-// and the same linear work read 9.8 and 10.2 on GitHub runners. A fixed number
-// of questions leaves the searches' own growth as the whole of the fixed
-// code's ratio, which is a factor of two or three, however the machine takes
-// it.
+// It was sixteen times the zones, asked of one pour at each size, against the
+// same bound, and a walk read 12.5 to 17.3, once not twice the bound: a walk
+// stops at the zone it is looking for, and questions spread down the content
+// walk half of it on average. Before that it was the whole pour's questions at
+// n boxes against 4n, which put the searches' cost in with the number of them:
+// a ratio of four with nothing to spare on either side, since a search over a
+// thousand zones took twice what one over two hundred and fifty did here,
+// because a processor learns the branches of the smaller search, and the same
+// linear work read 9.8 and 10.2 on GitHub runners.
 //
 // The breakpoints the zones leave — allowed — is one walk of the breakpoints
 // beside the zones, and there is no question in it to hold fixed: every
 // breakpoint is asked about, and the answer to each carries the place in the
-// zones to the next. That is measured as the curve it is, four times the boxes
-// against once, and it is a walk down two sorted lists, which reads the same on
-// every cache.
+// zones to the next. That is measured as the curve it is, and across sixteen
+// times the content rather than four: sixteen for the walk down two sorted
+// lists, and two hundred and fifty-six for the defect, a zone cursor that
+// starts again for every breakpoint. The walk read 11.5 to 18.5, contended or
+// not, and the defect 229 to 262. The bound is sixty-four, a factor of three
+// and a half from each; across four times the content the defect read 13.7 to
+// 16.1 against a bound of eight.
 //
-// The breakpoints and the zones are collected from content laid out once,
-// before anything is timed. The collection is one walk of the content, and a
-// fixture of sibling boxes one level deep could not show it walking anything
-// twice. The boxes are held apart by a margin so that their zones stay
-// separate rather than merging into one.
+// The zones and breakpoints of a thousand boxes are laid out, and the larger
+// contents are that pour stacked k times down the page, each copy after the
+// last — the zones and breakpoints layout would draw for k thousand such
+// boxes, without laying out sixty-four thousand of them. The copy of one is
+// held to what layout drew, and every copy's zones stay apart. What is timed
+// is the questions and not the collection of the zones, which is one walk of
+// the content: a fixture of sibling boxes one level deep could not show it
+// walking anything twice, and TestNestedAvoidZonesAreLinearInTheContent times
+// it. The boxes are held apart by a margin so that their zones stay separate
+// rather than merging into one.
 func TestAvoidZonesAreLinearInTheContent(t *testing.T) {
+	const boxes = 1000
+	doc := `<div id="d">` + strings.Repeat(`<div class="k">a<br>b<br>c</div>`, boxes) + `</div>`
+	f := find(t, layoutOf(t, 400, doc, colCSS+`.k { break-inside: avoid; margin-bottom: 10px }`), "d")
+	breaks := sortedBreaks(columnBreaks(f, 0, nil))
+	laid := avoidZonesOf(f, func(b *Box) bool { _, ok := columnCount(b); return ok })
+	if laid == nil || len(laid.zones) != boxes {
+		t.Fatalf("%d boxes asking not to be broken made zones %v; want %d", boxes, laid, boxes)
+	}
+	allowed := slices.Clone(laid.allowed(breaks, nil))
+
+	// The pour stacked k times: each copy begins a box's margin below where
+	// the one before it ends, as the next box would.
 	type pour struct {
 		breaks []style.Unit
 		z      *avoidZones
 	}
-	made := map[int]pour{}
-	content := func(n int) pour {
-		if p, ok := made[n]; ok {
-			return p
+	margin, _ := style.FromPx(10)
+	height := breaks[len(breaks)-1].Add(margin)
+	stacked := func(k int) pour {
+		var p pour
+		z := &avoidZones{}
+		var at style.Unit
+		for range k {
+			for _, r := range laid.zones {
+				z.zones = append(z.zones, avoidZone{r.lo.Add(at), r.hi.Add(at)})
+			}
+			for _, b := range breaks {
+				p.breaks = append(p.breaks, b.Add(at))
+			}
+			at = at.Add(height)
 		}
-		doc := `<div id="d">` + strings.Repeat(`<div class="k">a<br>b<br>c</div>`, n) + `</div>`
-		f := find(t, layoutOf(t, 400, doc, colCSS+`.k { break-inside: avoid; margin-bottom: 10px }`), "d")
-		breaks := sortedBreaks(columnBreaks(f, 0, nil))
-		z := avoidZonesOf(f, func(b *Box) bool { _, ok := columnCount(b); return ok })
-		if z == nil || len(z.zones) != n {
-			t.Fatalf("%d boxes asking not to be broken made zones %v; want %d", n, z, n)
+		if end := p.breaks[len(p.breaks)-1]; end >= style.MaxUnit/2 {
+			t.Fatalf("%d copies end at %v, too near the end of a length's range to "+
+				"be what layout draws", k, end)
 		}
-		z.allowed(breaks, nil)
-		made[n] = pour{breaks, z}
-		return made[n]
+		for i := 1; i < len(z.zones); i++ {
+			if z.zones[i].lo <= z.zones[i-1].hi.Add(1) {
+				t.Fatalf("%d copies: zones %d and %d meet, which layout would have "+
+					"merged into one", k, i-1, i)
+			}
+		}
+		z.allowed(p.breaks, nil)
+		p.z = z
+		return p
+	}
+	if one := stacked(1); !slices.Equal(one.z.zones, laid.zones) ||
+		!slices.Equal(one.z.breaks, allowed) {
+		t.Fatal("one copy of the pour is not the pour layout drew")
 	}
 
-	// The questions: the same number of them at either size, each where a
-	// column of the content's height divided that many ways would end.
+	// The questions: the same number of them at either size, spread down the
+	// content and asked in order, as a pour asks them column by column.
+	//
+	// They are not evenly spaced. The stacked content repeats every box's
+	// height exactly, and questions a whole number of boxes apart all land at
+	// the same place in a box: sixty-four copies divided 512 ways put every
+	// question a hair short of a box's top, and fewer than half fell inside a
+	// zone. Each is at a fraction of the content's height that the golden
+	// ratio's multiples give, which never lines up with any period.
 	const questions = 512
-	ask := func(n int) func() {
-		p := content(n)
+	ask := func(p pour) func() {
 		end := p.breaks[len(p.breaks)-1]
 		step := end.Div(questions)
 		ys := make([]style.Unit, questions)
-		forbidden := 0
 		for i := range ys {
-			ys[i] = step.Mul(float64(i + 1))
-			if p.z.forbids(ys[i]) {
+			_, at := math.Modf(float64(i+1) * (math.Sqrt(5) - 1) / 2)
+			ys[i] = end.Mul(at)
+		}
+		slices.Sort(ys)
+		forbidden := 0
+		for _, y := range ys {
+			if p.z.forbids(y) {
 				forbidden++
 			}
 		}
@@ -329,28 +388,40 @@ func TestAvoidZonesAreLinearInTheContent(t *testing.T) {
 			}
 		}
 	}
-	const small, large = 1000, 16 * 1000
-	c := costtest.Time(t, "a fixed number of questions of n zones and 16n",
-		ask(small), ask(large))
+	// The smaller side goes through sixty-four pours of its own, one after
+	// another, so that both sides read as much memory: see
+	// costtest.TimeCopies, which does this with four.
+	const many = 64
+	var few [many]func()
+	for k := range few {
+		few[k] = ask(stacked(1))
+	}
+	next := 0
+	c := costtest.Time(t, "a fixed number of questions of n zones and 64n",
+		func() {
+			few[next]()
+			next = (next + 1) % many
+		}, ask(stacked(many)))
 	if c.Ratio > 8 {
 		t.Errorf("%d questions of %d zones took %.1f times as long as of %d (%v "+
 			"against %v); a search is a comparison more for every doubling, and "+
-			"a walk of the zones is sixteen", questions, large, c.Ratio, small,
-			c.Large, c.Small)
+			"a walk of the zones is sixty-four", questions, many*boxes, c.Ratio,
+			boxes, c.Large, c.Small)
 	}
 
 	// The breakpoints the zones leave, as the curve it is.
-	leave := func(n int) func() {
-		p := content(n)
+	leave := func(p pour) func() {
 		// A zones value of its own, because allowed keeps what it found and
 		// the questions above read that.
 		z := *p.z
 		return func() { z.allowed(p.breaks, nil) }
 	}
-	c = costtest.Time(t, "the breakpoints n zones leave", leave(small), leave(4*small))
-	if c.Ratio > 8 {
-		t.Errorf("four times the boxes took %.1f times as long to find the "+
-			"breakpoints they leave (%v against %v); linear is about four",
+	c = costtest.Time(t, "the breakpoints n zones leave, and 16n",
+		leave(stacked(1)), leave(stacked(16)))
+	if c.Ratio > 64 {
+		t.Errorf("sixteen times the boxes took %.1f times as long to find the "+
+			"breakpoints they leave (%v against %v); linear is about sixteen, and a "+
+			"walk of the zones for every breakpoint two hundred and fifty-six",
 			c.Ratio, c.Large, c.Small)
 	}
 }
@@ -491,25 +562,72 @@ func TestAnAvoidInsideARefusedNestedMulticolIsHonouredOutside(t *testing.T) {
 // TestNestedAvoidZonesAreLinearInTheContent is the cost of reading the inner
 // columns: one pass over a nested container's children, grouping each run of
 // one column, whatever their number.
+//
+// The pass is timed whole, zones and all, and most of what it costs is reading
+// each child's three break values. So a defect that adds a little per child for
+// every other child is a small part of the time until the children are many:
+// grouping the runs by looking each child up among its siblings
+// (slices.Index, the cheapest walk there is) read 7.2 to 7.9 at five hundred
+// children against two thousand, under a bound of eight, and the test did not
+// see it. Each child's own reading costs as much as looking past some eight
+// hundred siblings. And the fixture avoided every break between two children,
+// so the inner pour put them all in one column and there was one run to group.
+//
+// So the sizes are a hundred and twenty-five children and a hundred and
+// twenty-eight times as many; the children are empty boxes, which have no lines
+// inside to walk, and every second one avoids the break before it, so they are
+// poured into all four columns. The smaller side goes through 128 containers in
+// turn, as costtest.TimeCopies does with four, so that both sides read as much
+// memory: timed on one container, the pass read 325 to 498 with memory being
+// streamed beside it, sixteen thousand children being more than the cache
+// keeps. Linear is 128, and the pass reads 129 to 151, with nothing else
+// running or contended; the defect read 1,307 to 1,692, and 711 to 832
+// contended. The bound is 320, a factor of two from each.
 func TestNestedAvoidZonesAreLinearInTheContent(t *testing.T) {
-	content := func(n int) *Fragment {
-		doc := `<div id="d"><div id="in">` + strings.Repeat(`<div class="k">a</div>`, n) +
-			`</div></div>`
-		return find(t, layoutOf(t, 400, doc, colCSS+
-			`#in { column-count: 4 } .k { break-before: avoid; margin-bottom: 10px }`), "d")
-	}
-	ask := func(f *Fragment) func() {
-		return func() {
-			avoidZonesOf(f, func(b *Box) bool { _, ok := columnCount(b); return ok })
+	const css = `.in { column-count: 4 } .k { height: 20px; margin-bottom: 10px } ` +
+		`.k:nth-child(2n) { break-before: avoid }`
+	// copies containers of n boxes each, laid out in one document, each inside
+	// a box of its own that the zones are asked of.
+	contents := func(copies, n int) []*Fragment {
+		var doc strings.Builder
+		for k := range copies {
+			fmt.Fprintf(&doc, `<div id="d%d"><div class="in" id="in%d">%s</div></div>`,
+				k, k, strings.Repeat(`<div class="k"></div>`, n))
 		}
+		root := layoutOf(t, 400, doc.String(), colCSS+css)
+		out := make([]*Fragment, copies)
+		for k := range out {
+			out[k] = find(t, root, "d"+strconv.Itoa(k))
+			// Poured into all four columns, so that there are runs to group.
+			columns := map[int]bool{}
+			for _, c := range find(t, out[k], "in"+strconv.Itoa(k)).Children {
+				columns[c.column] = true
+			}
+			if len(columns) != 4 {
+				t.Fatalf("%d boxes were poured into %d columns; the fixture needs four",
+					n, len(columns))
+			}
+			if avoidZonesOf(out[k], isMulticolBox) == nil {
+				t.Fatal("the fixture drew no zones, so this measures nothing")
+			}
+		}
+		return out
 	}
-	small, large := content(500), content(2000)
-	if z := avoidZonesOf(small, func(b *Box) bool { _, ok := columnCount(b); return ok }); z == nil {
-		t.Fatal("the fixture drew no zones, so this measures nothing")
-	}
-	c := costtest.Time(t, "the avoid zones of a nested container of n boxes", ask(small), ask(large))
-	if c.Ratio > 8 {
-		t.Errorf("four times the boxes took %.1f times as long (%v against %v); "+
-			"linear is about four", c.Ratio, c.Large, c.Small)
+	const small, large = 125, 128 * 125
+	few, one := contents(large/small, small), contents(1, large)[0]
+	next := 0
+	c := costtest.Time(t, "the avoid zones of a nested container of n boxes, and 128n",
+		func() {
+			avoidZonesOf(few[next], isMulticolBox)
+			next = (next + 1) % len(few)
+		},
+		func() { avoidZonesOf(one, isMulticolBox) })
+	if c.Ratio > 320 {
+		t.Errorf("128 times the boxes took %.1f times as long (%v against %v); "+
+			"linear is about 128", c.Ratio, c.Large, c.Small)
 	}
 }
+
+// isMulticolBox is the context avoidZonesOf is given in these tests: a box that
+// asks for columns.
+func isMulticolBox(b *Box) bool { _, ok := columnCount(b); return ok }

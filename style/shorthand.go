@@ -81,22 +81,47 @@ func borderShorthand(sides ...string) expander {
 // is the one border style that is missing here. The word means "this border
 // loses to its neighbour" in the collapsing table model, and an outline has no
 // neighbours to lose to. And the colour accepts "invert", which no border does.
+//
+// "auto" is both a style and a colour (css-ui-4 §3), and css-ui-4 §3.1 settles
+// which: "In the ambiguous case where a lone auto value is specified, or if
+// auto is specified together with an <'outline-width'> value, but without an
+// explicit <'outline-style'> or <'outline-color'> value, both outline-style and
+// outline-color are set to auto." Otherwise an "auto" beside an explicit style
+// is the colour, and one beside an explicit colour is the style. So each "auto"
+// is set aside until the rest has been read.
 func outlineShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
 	width, styleVal, colour := ident("medium"), ident("none"), ident("invert")
 	var seenWidth, seenStyle, seenColour bool
+	var autos [][]css.ComponentValue
 
 	for _, part := range splitOnWhitespace(vals) {
 		switch {
-		case isOutlineStyle(part) && !seenStyle:
+		case isAuto(part) && len(autos) < 2:
+			autos = append(autos, part)
+		case isOutlineStyle(part) && !isAuto(part) && !seenStyle:
 			styleVal, seenStyle = part, true
 		case isBorderWidth(part) && !seenWidth:
 			width, seenWidth = part, true
-		case judgeValue("outline-color", part).ok && !seenColour:
+		case judgeValue("outline-color", part).ok && !isAuto(part) && !seenColour:
 			colour, seenColour = part, true
 		default:
 			// As for the border: half an outline is not what was asked for.
 			return nil, nil, false
 		}
+	}
+	switch {
+	case len(autos) == 0:
+	case !seenStyle && !seenColour:
+		// A lone "auto", or two: both are "auto".
+		styleVal, colour = autos[0], autos[len(autos)-1]
+		seenStyle, seenColour = true, true
+	case len(autos) == 1 && !seenStyle:
+		styleVal, seenStyle = autos[0], true
+	case len(autos) == 1 && !seenColour:
+		colour, seenColour = autos[0], true
+	case len(autos) > 0:
+		// An "auto" with nowhere left to go.
+		return nil, nil, false
 	}
 	if !seenWidth && !seenStyle && !seenColour {
 		return nil, nil, false
@@ -106,6 +131,12 @@ func outlineShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValu
 		"outline-style": styleVal,
 		"outline-color": colour,
 	}, nil, true
+}
+
+// isAuto reports whether a part of a value is the keyword "auto".
+func isAuto(part []css.ComponentValue) bool {
+	w, ok := singleIdent(part)
+	return ok && w == "auto"
 }
 
 // isOutlineStyle is outline-style's own value: the border styles without
@@ -614,13 +645,13 @@ func isIdentPart(part []css.ComponentValue) bool {
 //	[ <'font-style'> || <font-variant-css2> || <'font-weight'> ||
 //	  <font-width-css3> ]? <'font-size'> [ / <'line-height'> ]? <'font-family'>#
 //
-// The width (font-stretch in CSS 3, font-width in 4) is valid and this engine
-// has no such property, so it is reported as a part it cannot produce and the
-// rest is applied. It was not accepted at all, and nor was a numeric weight
-// other than the nine hundreds or an oblique angle, so "font: condensed 12px
-// serif", "font: 450 12px serif" and "font: oblique 10deg 12px serif" — valid
-// declarations every browser applies — were dropped whole and called the
-// author's mistake (audit C112).
+// The width (font-stretch in CSS 3, font-width in 4) sets font-width. It was
+// not accepted at all, and nor was a numeric weight other than the nine
+// hundreds or an oblique angle, so "font: condensed 12px serif", "font: 450
+// 12px serif" and "font: oblique 10deg 12px serif" — valid declarations every
+// browser applies — were dropped whole and called the author's mistake (audit
+// C112); and then, with no font-width to set, the width was reported as a part
+// this engine could not produce.
 //
 // # What it resets
 //
@@ -628,10 +659,11 @@ func isIdentPart(part []css.ComponentValue) bool {
 // listed above plus font-size-adjust, font-kerning, all subproperties of
 // font-variant, font-feature-settings, font-language-override,
 // font-optical-sizing, font-variation-settings and font-palette" — of which
-// this engine has font-kerning, font-feature-settings and the five variant
-// longhands. It set six longhands, so "font: 12px serif" left an earlier
-// "font-variant-numeric: oldstyle-nums" and "font-kerning: none" in force, and
-// "font: inherit" inherited only six of them.
+// this engine has font-kerning, font-feature-settings, font-optical-sizing,
+// font-variation-settings and the five variant longhands. It set six
+// longhands, so "font: 12px serif" left an earlier "font-variant-numeric:
+// oldstyle-nums" and "font-kerning: none" in force, and "font: inherit"
+// inherited only six of them.
 func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
 	parts := splitOnWhitespace(vals)
 	if len(parts) == 0 {
@@ -646,7 +678,7 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 		}
 	}
 
-	style, weight, caps := ident("normal"), ident("normal"), ident("normal")
+	style, weight, caps, width := ident("normal"), ident("normal"), ident("normal"), ident("normal")
 	var size, lineHeight, family []css.ComponentValue
 	var unsupported []string
 	var seenStyle, seenWeight, seenCaps, seenWidth bool
@@ -683,10 +715,7 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 		case !seenWeight && len(part) == 1 && fontWeight(part[0]).ok:
 			weight, seenWeight = part, true
 		case isIdent && !seenWidth && fontWidthKeywords[name]:
-			seenWidth = true
-			if name != "normal" {
-				unsupported = append(unsupported, "the font width "+name)
-			}
+			width, seenWidth = part, true
 		default:
 			return nil, nil, false
 		}
@@ -735,6 +764,7 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 	out := map[string][]css.ComponentValue{
 		"font-style":        style,
 		"font-weight":       weight,
+		"font-width":        width,
 		"font-size":         size,
 		"font-family":       family,
 		"font-variant-caps": caps,
@@ -745,6 +775,8 @@ func fontShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, 
 		"font-variant-position":   ident("normal"),
 		"font-kerning":            ident("auto"),
 		"font-feature-settings":   ident("normal"),
+		"font-optical-sizing":     ident("auto"),
+		"font-variation-settings": ident("normal"),
 	}
 	// The shorthand resets line-height whether or not it was written, which is
 	// what makes "font: 12px serif" undo an inherited one.
@@ -889,6 +921,51 @@ func isDecorationLine(part []css.ComponentValue) bool {
 		return true
 	}
 	return false
+}
+
+// textEmphasisShorthand expands CSS Text Decoration 3 §3.3's "text-emphasis":
+// <'text-emphasis-style'> || <'text-emphasis-color'>.
+//
+// The colour is one component and is told apart by being a colour, which none
+// of the style's words and no string is. The style may be two words — "filled
+// dot" — and "||" takes each of its two operands whole, so the style's words
+// are one piece of the value and the colour cannot stand between them: "filled
+// red dot" is not a declaration. The style's words are then judged by the
+// longhand's own grammar, which is what refuses "dot circle" and "open 'x'".
+//
+// What the value leaves out is reset, as every shorthand resets: "text-emphasis:
+// red" turns the marks off, since the style it did not name is "none".
+func textEmphasisShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	styleVal, colour := ident("none"), ident("currentcolor")
+	var styleParts [][]css.ComponentValue
+	seenColour, styleClosed := false, false
+	for _, part := range splitOnWhitespace(vals) {
+		if isColour(part) {
+			if seenColour {
+				return nil, nil, false
+			}
+			colour, seenColour = part, true
+			// Whatever style came before the colour is all of it.
+			styleClosed = len(styleParts) > 0
+			continue
+		}
+		if styleClosed {
+			return nil, nil, false
+		}
+		styleParts = append(styleParts, part)
+	}
+	if len(styleParts) > 0 {
+		styleVal = joinParts(styleParts...)
+		if !judgeValue("text-emphasis-style", styleVal).ok {
+			return nil, nil, false
+		}
+	} else if !seenColour {
+		return nil, nil, false
+	}
+	return map[string][]css.ComponentValue{
+		"text-emphasis-style": styleVal,
+		"text-emphasis-color": colour,
+	}, nil, true
 }
 
 // whiteSpaceShorthand is CSS Text 4 §3's white-space: one of the legacy
@@ -1680,4 +1757,62 @@ func slashParts(vals []css.ComponentValue, n int) ([][]css.ComponentValue, bool)
 		}
 	}
 	return parts, true
+}
+
+// borderRadiusShorthand expands "border-radius", CSS Backgrounds 3 §4.1: up to
+// four horizontal radii, and after a "/" up to four vertical ones, each list
+// completed the way "margin"'s is — top-left, top-right, bottom-right,
+// bottom-left, a missing bottom-left taken from top-right, a missing
+// bottom-right from top-left, and a missing top-right from top-left. With no
+// "/" the vertical radii are the horizontal ones.
+//
+// Each longhand is written with both of its radii, so "border-radius: 2em 1em
+// 4em / 0.5em 3em" sets "border-top-left-radius: 2em 0.5em" — the
+// specification's own example. Whether each radius is a non-negative
+// length-percentage is the longhands' grammar's to decide.
+func borderRadiusShorthand(vals []css.ComponentValue) (map[string][]css.ComponentValue, []string, bool) {
+	parts := splitSlashes(splitOnWhitespace(vals))
+	var h, v [][]css.ComponentValue
+	slash := false
+	for _, part := range parts {
+		switch {
+		case isSlash(part):
+			if slash {
+				return nil, nil, false
+			}
+			slash = true
+		case slash:
+			v = append(v, part)
+		default:
+			h = append(h, part)
+		}
+	}
+	if len(h) == 0 || len(h) > 4 || (slash && (len(v) == 0 || len(v) > 4)) {
+		return nil, nil, false
+	}
+	if !slash {
+		v = h
+	}
+	corners := func(list [][]css.ComponentValue) [4][]css.ComponentValue {
+		tl := list[0]
+		tr, br := tl, tl
+		if len(list) > 1 {
+			tr = list[1]
+		}
+		if len(list) > 2 {
+			br = list[2]
+		}
+		bl := tr
+		if len(list) > 3 {
+			bl = list[3]
+		}
+		return [4][]css.ComponentValue{tl, tr, br, bl}
+	}
+	hs, vs := corners(h), corners(v)
+	out := make(map[string][]css.ComponentValue, 4)
+	for i, name := range []string{"border-top-left-radius", "border-top-right-radius",
+		"border-bottom-right-radius", "border-bottom-left-radius"} {
+		out[name] = joinParts(hs[i], vs[i])
+	}
+	return out, nil, true
 }

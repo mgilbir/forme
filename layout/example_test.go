@@ -41,12 +41,24 @@ func Example() {
 		switch op.(type) {
 		case layout.DrawText: // op.Text, op.Face, op.Size, op.At, op.RTL …
 			texts++
+		case layout.DrawTextShadow: // op.Run, op.StdDev — a shadow of text; not text itself
+			texts++
+		case layout.DrawEmphasisMark: // op.Mark — an emphasis mark, drawn as a run; not text itself
+			texts++
 		case layout.FillRect: // op.Rect, op.Color
 			fills++
 		case layout.DrawImage: // op.Image, op.Rect
 			images++
 		case layout.TileImage: // op.Image, op.Clip, op.Tile — a repeated background
 			tiles++
+		case layout.FillGradient: // op.Gradient, op.Clip, op.Tile — a CSS gradient, tiled
+			tiles++
+		case layout.FillPath: // op.Path, op.Color — a shape with curves in it, even-odd
+			fills++
+		case layout.ClipPath: // op.Path, op.Ops — what op.Ops draw, clipped to the shape
+			fills++
+		case layout.FilterGroup: // op.Filters, op.Ops — what op.Ops draw, filtered as one: blurred, faded, recoloured, shadowed
+			fills++
 		case layout.Link: // op.Rects, op.Href — a hyperlink's areas; draws nothing
 			links++
 		}

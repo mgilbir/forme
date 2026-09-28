@@ -251,6 +251,13 @@ var counterHintAttributes = map[string]bool{"value": true}
 // which is what HTML requires: a value this cannot read must not become a
 // length it guessed at.
 func presentationalHints(n *html.Node) map[string][]css.ComponentValue {
+	if n.Namespace == html.NamespaceMathML {
+		// HTML's hints are HTML's elements' (and an <svg>'s, whose width and
+		// height it maps): a MathML element that shares a name with one — a
+		// <td> inside a <math> — takes none of them, and takes MathML's
+		// instead. See mathml.go.
+		return mathMLHints(n)
+	}
 	name := ascii.Lower(n.Name)
 	out := attributeHints(name, n)
 	if name == "table" {

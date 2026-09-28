@@ -2131,9 +2131,21 @@ func extractType1FontMatrix(data []byte) float64 {
 
 // SFNTTables reads an sfnt table directory and returns each table's bytes by
 // tag, sharing the caller's backing array. It returns nil when data is not an
-// sfnt at all or the directory itself is truncated; a single table whose extent
-// lies outside the file is dropped rather than failing the whole font, because
-// a program missing one table still answers questions about the others.
+// sfnt at all or the directory itself is truncated.
+//
+// A table whose stated length runs past the end of the file is the bytes that
+// are there: from its offset to the end of the file. That is what HarfBuzz
+// reads (hb_face_reference_table takes a sub-blob, and
+// hb_blob_create_sub_blob clamps its length to its parent's), and every
+// reader of a table here already has to take a table shorter than the one it
+// wanted, since a font may state any length it likes. A table whose offset
+// is at or past the end of the file has no bytes there and is dropped, as it
+// is by HarfBuzz and by FreeType. (FreeType drops a table that runs past the
+// end too, except hmtx and vmtx, which it clips. Its answer and HarfBuzz's
+// differ, and the layout this package reads is HarfBuzz's.)
+//
+// Each table's capacity ends where the table does, so that nothing appending
+// to one can write over the table after it.
 //
 // This is the one thing a font reader and a font writer share. ParseSFNT reads
 // tables to answer questions about the font; shape's subsetter rewrites them.
@@ -2160,12 +2172,15 @@ func SFNTTables(data []byte) map[string][]byte {
 	for i := 0; i < numTables; i++ {
 		rec := 12 + 16*i
 		name := string(data[rec : rec+4])
-		off := Be32(data, rec+8)
-		length := Be32(data, rec+12)
-		if uint64(off)+uint64(length) > uint64(len(data)) {
-			continue
+		off := uint64(Be32(data, rec+8))
+		end := off + uint64(Be32(data, rec+12))
+		if end > uint64(len(data)) {
+			if off >= uint64(len(data)) {
+				continue
+			}
+			end = uint64(len(data))
 		}
-		tables[name] = data[off : off+length]
+		tables[name] = data[off:end:end]
 	}
 	return tables
 }

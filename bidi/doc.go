@@ -10,10 +10,10 @@
 // is rule L4 over a right-to-left run, and FirstStrong is P2 without P3's
 // default, for the caller that has somewhere else to look.
 //
-// The character properties are Unicode's: ClassOf, MirrorOf and BracketOf read
-// tables.go, which cmd/genbidi generates from the Unicode Character Database
-// release the Makefile pins. Shaping happens in logical order, before any of
-// this reorders anything; bidi.go says why the two cannot be done the other way
-// round, and which of the algorithm's rules are implemented and which are the
-// caller's.
+// The character properties are Unicode's: ClassOf, MirrorOf, Mirrored and
+// BracketOf read tables.go, which cmd/genbidi generates from the Unicode
+// Character Database release the Makefile pins. Shaping happens in logical
+// order, before any of this reorders anything; bidi.go says why the two cannot
+// be done the other way round, and which of the algorithm's rules are
+// implemented and which are the caller's.
 package bidi

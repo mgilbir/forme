@@ -19,15 +19,18 @@ import (
 //
 // §5.12.1 lists what may apply: the font properties, colour, the background
 // properties, word-spacing, letter-spacing, text-decoration, vertical-align,
-// text-transform, line-height and text-shadow. Everything else is not merely
+// text-transform, line-height and text-shadow — and CSS Pseudo 4 §2.1.3 adds
+// "all text decoration properties", which the emphasis marks of CSS Text
+// Decoration 3 §3 are among. Everything else is not merely
 // ignored here, it does not apply at all — "margin" on a ::first-line is not a
 // dropped declaration, it is a declaration CSS says has no meaning, and there is
 // nothing to tell an author about it.
 //
 // Of the ones that do apply, this engine acts on the font properties, the
-// line-height, the two spacings and the colour: the ones that decide how the
-// line is measured and what colour it comes out. The rest are reported, because
-// an author who writes them will not see them and has no other way to find out.
+// line-height, the two spacings, the colour, the text shadow and the emphasis
+// marks: the ones that decide how the line is measured and what it comes out
+// looking like. The rest are reported, because an author who writes them will
+// not see them and has no other way to find out.
 //
 // text-transform is on the reported list and it is worth saying why, since it
 // looks like the others. The transform is applied when the text of a box is
@@ -37,8 +40,10 @@ import (
 
 // firstLineApplies are the properties this engine takes from a ::first-line.
 var firstLineApplies = []string{
-	"font-family", "font-size", "font-weight", "font-style",
-	"line-height", "letter-spacing", "word-spacing", "color",
+	"font-family", "font-size", "font-weight", "font-style", "font-width",
+	"font-variation-settings", "font-optical-sizing",
+	"line-height", "letter-spacing", "word-spacing", "color", "text-shadow",
+	"text-emphasis-style", "text-emphasis-color", "text-emphasis-position",
 }
 
 // firstLinePaints are the ones that are drawn behind the line rather than
@@ -242,6 +247,20 @@ func (l *layouter) firstLineItems(items []inlineItem, block *Box,
 			}
 			it.Width = l.br.MeasureSpacedInContext(it.Face, it.Text, it.Size,
 				it.Spacing, itemShaping(it))
+			// §8.2's trims are widths of the same text in the same face and
+			// size, and they change with them: a first line set at twice the
+			// size gives up twice the blank. Only a candidate is asked again —
+			// which characters are candidates was settled from the box's own
+			// style, and the rule that picks them is about the character and
+			// not its size — and one the restyled face has no half-width form
+			// for, or whose restyled features already ask for it, comes back
+			// as zero and is set whole.
+			if it.TrimStart != 0 {
+				it.TrimStart = l.openingTrimOf(*it)
+			}
+			if it.TrimEnd != 0 {
+				it.TrimEnd = trimWidthOf(*it, it.Text)
+			}
 		}
 		if it.Leads {
 			// Against the face the run is actually set in, which is not always

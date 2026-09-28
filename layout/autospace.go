@@ -211,17 +211,34 @@ func (l *layouter) autospaceBetween(a, b inlineItem, last, first rune) (style.Un
 	if !paragraph.IsAutospaceIdeograph(last) && !paragraph.IsAutospaceIdeograph(first) {
 		return 0, false
 	}
-	// A run set upright takes none, on either side of the boundary. §8.1's gap
-	// is between an ideograph and a *non-ideographic* letter or number, and a
-	// character typeset upright in vertical text is set the way an ideograph is:
+	// A letter or a number set upright takes none. §8.4.1 excludes from its
+	// "non-ideographic letters" and "non-ideographic numerals" a character
+	// that "is upright in vertical text flow using the text-orientation
+	// property", because one set upright is set the way an ideograph is:
 	// standing as it does in the code charts, one em to the next. There is no
 	// boundary of the kind the property spaces, so there is nothing to space.
+	//
+	// It is the letter's side that is asked, and not either side. The
+	// ideograph beside it stands upright under "mixed" too — that is what an
+	// ideograph does on a vertical line — and a Latin word lying along the
+	// line between two of them is exactly the boundary the property is for.
+	// Only one of the two characters is an ideograph where the gap applies,
+	// so whichever is not is the letter.
 	//
 	// The suite writes it as text-autospace-vertical-upright-001, whose
 	// reference is the same four lines with "text-autospace: no-autospace" on
 	// them — both where the whole line is upright and where only a span in the
 	// middle of it is.
-	if a.Upright || b.Upright {
+	if (a.Upright && !paragraph.IsAutospaceIdeograph(last)) ||
+		(b.Upright && !paragraph.IsAutospaceIdeograph(first)) {
+		return 0, false
+	}
+	// A text-combine-upright composition is neither: §9.1.2 treats it as "a
+	// single glyph representing the Object Replacement Character U+FFFC" for
+	// spacing, and that is no letter and no ideograph, whatever its text is.
+	// The same §8.4.1 exclusion names it by name, besides. The suite's
+	// text-autospace-vertical-combine-001 asks for no gap either side of one.
+	if a.Combine || b.Combine {
 		return 0, false
 	}
 	box := commonAncestor(heldBox(a.Box), heldBox(b.Box))

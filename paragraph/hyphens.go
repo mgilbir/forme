@@ -21,9 +21,10 @@ import (
 //
 // "auto" needs a hyphenation dictionary for the document's language — Liang's
 // patterns, one set per language, which cannot be derived from anything and has
-// to be carried. Two are: American English and Dutch, in englishhyphens.go and
-// dutchhyphens.go, read by the algorithm in hyphenate.go. A document in any
-// other language is read as "manual" and reported, which is §6.1's own condition — the UA is required to
+// to be carried. Five are — American English, Dutch, Hungarian, German and
+// pinyin, listed in hyphenate.go's hyphenSources and read by the algorithm
+// there. A document in any other language is read as "manual" and reported,
+// which is §6.1's own condition — the UA is required to
 // hyphenate only text "for which the author has declared a language ... and for
 // which it has an appropriate hyphenation resource" — and is exactly the case
 // the unimplemented-property finding exists for.

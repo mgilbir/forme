@@ -75,6 +75,7 @@ var (
 	hangingPunctuationOf       = paragraph.HangingPunctuationOf
 	spacingTrimOf              = paragraph.SpacingTrimOf
 	trailingClosingPunctuation = paragraph.TrailingClosingPunctuation
+	leadingOpeningPunctuation  = paragraph.LeadingOpeningPunctuation
 	leadingHang                = paragraph.LeadingHang
 	trailingHang               = paragraph.TrailingHang
 )
@@ -100,7 +101,6 @@ var (
 	spacingAfter                  = paragraph.SpacingAfter
 	spacingAfterOffsets           = paragraph.SpacingAfterOffsets
 	uprightUnits                  = paragraph.UprightUnits
-	orientationMix                = paragraph.OrientationMix
 	isCursiveScript               = paragraph.IsCursiveScript
 	cursiveTrackingSuppressesText = paragraph.CursiveTrackingSuppresses
 	isDefaultIgnorable            = paragraph.IsDefaultIgnorable

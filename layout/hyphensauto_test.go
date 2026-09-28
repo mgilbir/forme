@@ -10,7 +10,7 @@ import (
 // "hyphens: auto" and the half of §6.1 that is about what a UA is *required* to
 // do.
 //
-// This engine has a hyphenation resource for four languages, so a word in one of
+// This engine has a hyphenation resource for five languages, so a word in one of
 // them is broken where its dictionary allows and a word in anything else only
 // where a soft hyphen asks — which is "manual" — and it says so. That is a page
 // with looser lines than a browser would set, which a reader cannot see and a
@@ -75,21 +75,38 @@ func TestHyphensAutoIsNotReportedWithoutALanguage(t *testing.T) {
 // the finding keeps, and it is the reason §6.1's second condition matters.
 //
 // The sentence has two: a language the author declared, *and* "an appropriate
-// hyphenation resource". This engine ships four languages' patterns, so a
-// document in German asks for something it will not get — the page really does
+// hyphenation resource". This engine ships five languages' patterns, so a
+// document in French asks for something it will not get — the page really does
 // differ from the one the author asked for and from the one every browser
 // produces, and that is a limitation worth naming.
+//
+// German was the example here until its patterns were added. The cases that
+// stand in for it are a language with no patterns anywhere, and German itself in
+// the spelling its table is not for.
 func TestHyphensAutoIsStillReportedWithALanguageThisHasNoPatternsFor(t *testing.T) {
 	for _, tc := range []struct{ what, html string }{
 		{"a language with no patterns here",
-			`<div lang="de" style="hyphens:auto">Wiedervereinigung</div>`},
+			`<div lang="fr" style="hyphens:auto">anticonstitutionnellement</div>`},
 		{"on an ancestor, which is where a document usually says it",
 			`<div lang="fr"><p style="hyphens:auto">implementation</p></div>`},
 		{"a region subtag, which is a language all the same",
-			`<div lang="de-AT" style="hyphens:auto">Wiedervereinigung</div>`},
+			`<div lang="fr-CA" style="hyphens:auto">anticonstitutionnellement</div>`},
+		// The two the suite asks for and nobody publishes patterns for:
+		// hyphens-i18n-auto-005 and -006.
+		{"Uyghur, which no hyphenation resource covers",
+			`<div lang="ug" style="hyphens:auto">داميدى</div>`},
+		{"Cree, which no hyphenation resource covers",
+			`<div lang="cr" style="hyphens:auto">ᑲᓯᑕᓂᐘᓂᓂᐠ</div>`},
+		// German in the traditional spelling. The table is the reformed one,
+		// and its breaks in the old spelling are wrong ones, so the document is
+		// told it was not hyphenated rather than hyphenated with them.
+		{"German in the spelling its table is not for",
+			`<div lang="de-1901" style="hyphens:auto">Zucker</div>`},
+		{"Swiss German in the traditional spelling",
+			`<div lang="de-CH-1901" style="hyphens:auto">Zucker</div>`},
 		// Chinese in its own characters. There is a table under a tag that
 		// begins "zh" and it is for the *romanisation*; Han text is no more
-		// hyphenated for its sake than German is.
+		// hyphenated for its sake than French is.
 		{"a language whose romanisation has a table and whose own script has none",
 			`<div lang="zh-Hans" style="hyphens:auto">zhongguo</div>`},
 	} {
@@ -125,6 +142,14 @@ func TestHyphensAutoInEnglishIsNotReported(t *testing.T) {
 		{"Hungarian", `<div lang="hu" style="hyphens:auto">magyarorszag</div>`},
 		{"Mandarin in the Latin alphabet, which is the tag read whole",
 			`<div lang="zh-Latn-pinyin" style="hyphens:auto">zhongguo</div>`},
+		{"German", `<div lang="de" style="hyphens:auto">Wiedervereinigung</div>`},
+		{"German with a region", `<div lang="de-AT" style="hyphens:auto">Wiedervereinigung</div>`},
+		{"Swiss German, which writes the reformed spelling",
+			`<div lang="de-CH" style="hyphens:auto">Wiedervereinigung</div>`},
+		{"German naming the reformed spelling",
+			`<div lang="de-1996" style="hyphens:auto">Wiedervereinigung</div>`},
+		{"the tag in any case, which is lang-tag-case-insensitive",
+			`<div lang="De-dE" style="hyphens:auto">Wiedervereinigung</div>`},
 	} {
 		if got := hyphensFindings(t, tc.html); len(got) != 0 {
 			t.Errorf("%s: reported %q — English is hyphenated here", tc.what, got[0].Message)
@@ -182,18 +207,18 @@ func TestTheLanguageDecidesWhetherTheWordIsBroken(t *testing.T) {
 		t.Errorf("the tagged document set %q, want %q", tagged, want)
 	}
 	// And a language with no patterns here is the untagged case again.
-	german := lines(`<div id="d" lang="de" style="hyphens:auto">implementation</div>`)
-	if strings.Join(german, "|") != strings.Join(plain, "|") {
-		t.Errorf("a document tagged de set %q and an untagged one %q; there are no "+
-			"German patterns here, so neither is hyphenated", german, plain)
+	french := lines(`<div id="d" lang="fr" style="hyphens:auto">implementation</div>`)
+	if strings.Join(french, "|") != strings.Join(plain, "|") {
+		t.Errorf("a document tagged fr set %q and an untagged one %q; there are no "+
+			"French patterns here, so neither is hyphenated", french, plain)
 	}
 }
 
 // TestEachLanguageIsBrokenByItsOwnDictionary.
 //
 // A word per language, divided where that language's patterns say and nowhere
-// else. It is the same assertion the English case above makes, made four times
-// because four tables that all answer *something* for a string of Latin letters
+// else. It is the same assertion the English case above makes, made five times
+// because five tables that all answer *something* for a string of Latin letters
 // would otherwise hide a document handed the wrong one.
 func TestEachLanguageIsBrokenByItsOwnDictionary(t *testing.T) {
 	for _, tc := range []struct {
@@ -204,10 +229,15 @@ func TestEachLanguageIsBrokenByItsOwnDictionary(t *testing.T) {
 		{"en", "implementation", 5, []string{"im-", "ple-", "men-", "ta-", "tion"}},
 		{"nl", "woordenlijst", 5, []string{"woor-", "den-", "lijst"}},
 		{"hu", "magyarorszag", 5, []string{"ma-", "gyar-", "or-", "szag"}},
-		// The tag whole: this is the one document of the four whose language
+		// The tag whole: this is the one document here whose language
 		// subtag alone would find no table, and finding one is the whole of what
 		// reading the script does.
 		{"zh-Latn-pinyin", "zhongguo", 7, []string{"zhong-", "guo"}},
+		// hyphens-character and lang-tag-case-insensitive's word, in the tag
+		// the second of them writes. Six characters hold "Donau-" whole, and
+		// "schiff-" is seven with no point inside it, so it overflows.
+		{"De-dE", "Donaudampfschifffahrt", 6,
+			[]string{"Donau-", "dampf-", "schiff-", "fahrt"}},
 	} {
 		got := hyphenatedLines(t, tc.width,
 			`<span lang="`+tc.lang+`">`+tc.word+`</span>`, `#d { hyphens: auto }`)

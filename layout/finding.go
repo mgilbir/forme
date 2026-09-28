@@ -50,6 +50,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/html"
+	"github.com/mgilbir/forme/internal/diag"
 )
 
 // Rule identifies a guardrail.
@@ -138,6 +139,17 @@ const (
 	// It is still reported, and at Warn like the one above, because an author
 	// who asked for a face and did not get it wants to know either way.
 	RuleFontSubstituted Rule = "font-substituted"
+	// RuleMathFallback is a formula set in a face with no MATH table, which
+	// MathML Core §5 lays out by fallback constants — multiples of the rule
+	// thickness, fractions of the x-height, OS/2's script offsets — and in
+	// which no operator can be stretched.
+	//
+	// It is not an unsupported rule, for RuleFontSubstituted's reason: the
+	// fallbacks are the specification's own, and what is drawn is what it
+	// asks for. It is reported because §5 says in as many words that it is no
+	// guarantee of good rendering, and an author who meant a math font to set
+	// the formula wants to know it did not.
+	RuleMathFallback Rule = "math-fallback"
 	// RuleCapsSynthesised is small capitals this engine made out of the
 	// capitals, because the face declares none of its own.
 	//
@@ -338,6 +350,7 @@ var defaultSeverity = map[Rule]Severity{
 	RuleUnsupportedValue:    Warn,
 	RuleFontFallback:        Warn,
 	RuleFontSubstituted:     Warn,
+	RuleMathFallback:        Warn,
 	// Synthesised small capitals warn for the reason the rule's declaration
 	// gives: the page is what CSS asked for and is not what the author chose a
 	// face for, and it carries the uppercase text.
@@ -534,7 +547,7 @@ func (f Finding) Error() string {
 		fmt.Fprintf(&b, " [html byte %d]", src.HTMLOffset)
 	case src.CSSOffset >= 0:
 		if src.Sheet != "" {
-			fmt.Fprintf(&b, " [%s byte %d]", src.Sheet, src.CSSOffset)
+			fmt.Fprintf(&b, " [%s byte %d]", diag.Text(src.Sheet), src.CSSOffset)
 		} else {
 			fmt.Fprintf(&b, " [css byte %d]", src.CSSOffset)
 		}
@@ -713,6 +726,17 @@ func (r *Recorder) record(f Finding, charged bool) bool {
 	}
 	f.Severity = severity
 	f.Source = f.Source.placed()
+	// Every text a reader is shown, made text: see internal/diag. The stages
+	// quote the document and its stylesheets into all four — a value, an
+	// element's id in its path, a selector, a property — and those are bytes
+	// the author chose. A document that is not UTF-8 names its elements in
+	// bytes that are not text, and a stylesheet can write a control character
+	// into a value. Each stage quotes with quoteValue where it can; this is the
+	// one place every finding passes, so it is where the guarantee is kept.
+	// Source.Sheet is not touched: it names a file the caller may look up by
+	// that name, and Error makes it text where it is shown.
+	f.Message, f.Path = diag.Text(f.Message), diag.Text(f.Path)
+	f.Selector, f.Property = diag.Text(f.Selector), diag.Text(f.Property)
 
 	// What deduplicating costs is reading the finding once, so that is what
 	// is charged. It is the only work here that grows with the document, and

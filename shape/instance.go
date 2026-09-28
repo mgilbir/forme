@@ -42,7 +42,10 @@ import (
 //   - Outlines move, by gvar, including the points no tuple lists (glyfpoints.go
 //     and gvar.go).
 //   - Composite components move: their offsets are the points gvar varies for a
-//     composite.
+//     composite. A component placed by matching points is matched among the
+//     points as they are at the location, and kept as a match where the
+//     instance's own points make the same one, and placed at an offset where
+//     they would not (pointmatch.go).
 //   - Advances come from HVAR where the font has it and from gvar's phantom
 //     points otherwise (varstore.go says why that order). A font with neither
 //     keeps the advances hmtx already states.
@@ -55,8 +58,8 @@ import (
 //     gvar moves otherwise, and the point a glyph hangs from with its top
 //     phantom point. vmtx is rewritten to say both, the side bearing measured
 //     from the instanced glyph's box, so that the instance hangs its glyphs
-//     where HarfBuzz hangs them at the location. VORG is not rewritten: it is
-//     a CFF face's, and a CFF face is not instanced here.
+//     where HarfBuzz hangs them at the location. VORG is a CFF face's, and is
+//     moved with its outlines (instanceCFF2).
 //   - A composite that takes its metrics from a component (USE_MY_METRICS)
 //     is given that component's phantom points, as HarfBuzz reads them, both
 //     across the page and down it. fontTools' instancer gives it its own, and
@@ -65,17 +68,22 @@ import (
 //     and 594 by HarfBuzz and 875 and 592 by fontTools. Following HarfBuzz
 //     was chosen, since what a face advances by is what it is shaped with;
 //     testdata/varinstance records the two as fontTools' disagreement.
-//   - The font-wide vertical metrics do *not* move. MVAR — which varies ascent,
-//     descent, cap height and the rest of the font-wide numbers — is dropped
-//     rather than applied, so those stay at the default instance's values. For
-//     the bundled face the whole of MVAR moves the ascent by at most a few
-//     units across the weight axis; it is a real gap and a small one, and it is
-//     stated here rather than guessed at in the code.
+//   - The font-wide numbers move by MVAR: the ascent, descent and line gap,
+//     the x-height and cap height, the underline, the strikeout, the sub- and
+//     superscript boxes and the caret. They are written as HarfBuzz reads them
+//     at the location, which for the ascent, descent and line gap is not where
+//     fontTools' instancer writes them — see mvar.go. The table itself is then
+//     dropped with the other variation tables.
 //   - Hinting is dropped: cvt, fpgm, prep and every glyph's instructions go,
 //     because 'cvar' — which varies the control values — is not read, and hinting
 //     a bold face by a thin one's control values is worse than not hinting it.
-//   - CFF2 is refused. Its outlines vary through a different mechanism entirely
-//     and none of this touches it.
+//   - A font whose outlines are CFF2 is cut by instanceCFF2 (cff2cff.go): its
+//     charstrings blend their own variations, and the instance is written as
+//     the CFF font they draw at the location. VORG, which a CFF face states
+//     its vertical origins in, moves there by VVAR.
+//   - A glyph VARC composes is written out as the glyf outline HarfBuzz draws
+//     for it at the location, and VARC is dropped; its ink stays what
+//     HarfBuzz states there (varcinstance.go).
 
 // maxInstanceAxes bounds fvar's axis count. The format allows 65535; the fonts
 // that exist have between one and five, and every axis multiplies the work each
@@ -103,12 +111,18 @@ const maxComponentDepth = 8
 // instanceDropped are the tables an instance does not carry. The variation
 // tables describe a design space this font no longer has, and would be read by
 // anything downstream as deltas from a default instance that is no longer the
-// stored one — which is worse than their absence. The hinting tables go with the
+// stored one — which is worse than their absence. VARC goes too, its glyphs
+// written out as glyf (varcinstance.go). The hinting tables go with the
 // instructions, see the note above.
 var instanceDropped = map[string]bool{
-	"fvar": true, "gvar": true, "avar": true, "cvar": true,
+	"fvar": true, "gvar": true, "avar": true, "cvar": true, "VARC": true,
 	"HVAR": true, "VVAR": true, "MVAR": true, "STAT": true,
 	"cvt ": true, "fpgm": true, "prep": true,
+	// CFF2 outlines vary by their own blends, and a static font carries none:
+	// a CFF2 font's instance carries them as CFF (instanceCFF2), and a font
+	// with glyf outlines beside a CFF2 table is instanced by its glyf, as
+	// Load draws it.
+	"CFF2": true,
 }
 
 // varAxis is one axis of the design space in user coordinates — the numbers a
@@ -138,7 +152,33 @@ type varAxis struct {
 // location, and it carries no variation tables. Load remains the way to read a
 // font as it stands, which for a variable font is its default instance.
 func LoadInstance(data []byte, coords map[string]float64) (*Face, error) {
-	out, normalized, err := instanceProgram(data, coords)
+	if tables := font.SFNTTables(data); tables != nil && tables["CFF2"] != nil &&
+		tables["glyf"] == nil && tables["CFF "] == nil {
+		// CFF2 outlines, which are cut as the CFF font they draw at the
+		// location: see instanceCFF2.
+		if tables["VARC"] != nil {
+			// VARC is among the tables an instance drops, because the glyf
+			// path writes its glyphs out as outlines first (varcinstance.go).
+			// Nothing writes out a composite whose leaves are CFF2, so
+			// dropping the table here would leave each composite drawing its
+			// empty base glyph with nothing to say so.
+			return nil, errors.New("fonts: the font's variable composite glyphs (VARC) are built on " +
+				"CFF2 outlines, and an instance cannot write them out; the instance is refused rather " +
+				"than drawn without them")
+		}
+		out, normalized, limits, err := instanceCFF2(tables, coords)
+		if err != nil {
+			return nil, err
+		}
+		f, err := loadFace(out, normalized)
+		if err != nil {
+			return nil, err
+		}
+		f.cff2Limits = limits
+		return f, nil
+	}
+	var varcInk map[int]extents
+	out, normalized, err := instanceProgram(data, coords, &varcInk)
 	if err != nil {
 		return nil, err
 	}
@@ -146,18 +186,17 @@ func LoadInstance(data []byte, coords map[string]float64) (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
+	f.varcInk = varcInk
 	return f, nil
 }
 
 // instanceProgram does the rewrite, returning the new font program and the
-// location in normalized coordinates.
-func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, error) {
+// location in normalized coordinates, and setting varcInk to the ink of each
+// glyph it wrote out from VARC (varcinstance.go).
+func instanceProgram(data []byte, want map[string]float64, varcInk *map[int]extents) ([]byte, []float64, error) {
 	tables := font.SFNTTables(data)
 	if tables == nil {
 		return nil, nil, errors.New("fonts: not an sfnt font program (TrueType or OpenType)")
-	}
-	if _, ok := tables["CFF2"]; ok {
-		return nil, nil, errors.New("fonts: CFF2 variable fonts are not supported; their outlines vary by a mechanism this does not read")
 	}
 	fvar := tables["fvar"]
 	if fvar == nil {
@@ -243,6 +282,16 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 	// side bearings are read from these once every glyph has them.
 	phantoms := make([][4][2]float64, numGlyphs)
 	useMetrics := make([]int, numGlyphs)
+	// Every glyph at the location, kept until each has been moved: a component
+	// placed by matching points is placed by the points of other glyphs as
+	// they are there (pointmatch.go).
+	varied := make([]*varGlyph, numGlyphs)
+	// The em, which a font stating one outside the range the format allows
+	// is refused for, as loadFace refuses it (and would refuse the instance).
+	upem, err := headUnitsPerEm(head)
+	if err != nil {
+		return nil, nil, err
+	}
 	for gid := 0; gid < numGlyphs; gid++ {
 		start, end := offsets[gid], offsets[gid+1]
 		if start > end || int(end) > len(glyf) {
@@ -260,6 +309,11 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 		g.setPhantoms(xMin, bearings[gid], advances[gid])
 		if vAdvances != nil {
 			g.setVerticalPhantoms(yMax+vBearings[gid], vAdvances[gid])
+		} else {
+			// Where the face states no vertical metrics HarfBuzz hangs a glyph
+			// from the top of its box, and gives it an em. Nothing reads
+			// these but a match naming one.
+			g.setVerticalPhantoms(yMax, upem)
 		}
 		if gvar != nil {
 			if err := gvar.applyGlyph(gid, g, coords, &budget); err != nil {
@@ -268,6 +322,21 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 		}
 		phantoms[gid] = g.phantoms()
 		useMetrics[gid] = g.metricsComponent()
+		varied[gid] = g
+	}
+	// The VARC glyphs written out as glyf, before anything reads the glyphs
+	// as a whole: they are glyf glyphs of the instance.
+	flat, err := flattenVARC(data, tables, fvar, want, varied, &budget)
+	if err != nil {
+		return nil, nil, err
+	}
+	if flat != nil {
+		*varcInk = flat
+	}
+	if err := placeMatchedComponents(varied, &budget); err != nil {
+		return nil, nil, err
+	}
+	for gid, g := range varied {
 		b, err := encodeVarGlyph(g)
 		if err != nil {
 			return nil, nil, fmt.Errorf("fonts: glyph %d: %w", gid, err)
@@ -296,6 +365,11 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 			ph = metricsPhantoms(phantoms, useMetrics, gid)
 		}
 		origins[gid] = ph[0][0]
+		if _, ok := flat[gid]; ok {
+			// A VARC glyph's outline is drawn from its origin, which its
+			// side bearing is measured from: see varcinstance.go.
+			origins[gid] = 0
+		}
 		switch {
 		case hvar != nil:
 			newAdvances[gid] = advances[gid] + otRound(hvar.advanceDelta(gid, coords))
@@ -343,7 +417,18 @@ func instanceProgram(data []byte, want map[string]float64) ([]byte, []float64, e
 		out["vmtx"], out["vhea"] = buildVerticalMetrics(vhea, newVAdvances, tops, bounds)
 	}
 	out["head"] = instanceHead(head, bounds)
+	if len(flat) > 0 && len(maxp) >= 32 {
+		// The VARC glyphs written out are glyf glyphs maxp's counts must cover.
+		var written [][]byte
+		for gid := range flat {
+			written = append(written, newGlyf[newLoca[gid]:newLoca[gid+1]])
+		}
+		out["maxp"] = raiseMaxp(append([]byte(nil), maxp...), written)
+	}
 	instanceDesign(out, axes, want)
+	if err := applyMVAR(out, tables["MVAR"], coords); err != nil {
+		return nil, nil, err
+	}
 	name, err := instanceName(tables["name"], fvar, axes, want)
 	if err != nil {
 		return nil, nil, err
@@ -416,6 +501,11 @@ func fixed1616At(b []byte, off int) float64 {
 // an ordinary value a caller may have asked for. It is not the same as an axis
 // nobody mentioned — that one is normalized from its own default and also comes
 // out zero, which is why nothing downstream may treat zero as "unset".
+//
+// Every coordinate it returns is a whole number of 2.14 units, as HarfBuzz
+// holds one (f2Dot14Location): it is the one reading of a location for every
+// table of the face — gvar, HVAR, VVAR, MVAR, GPOS's devices, COLR, a CFF2
+// charstring's blends and VARC.
 func normalizeLocation(axes []varAxis, avar []byte, want map[string]float64) ([]float64, error) {
 	known := make(map[string]bool, len(axes))
 	for _, a := range axes {
@@ -434,17 +524,79 @@ func normalizeLocation(axes []varAxis, avar []byte, want map[string]float64) ([]
 		return nil, err
 	}
 	coords := make([]float64, len(axes))
-	for i, a := range axes {
-		v, ok := want[a.tag]
-		if !ok {
-			v = a.def
-		}
-		coords[i] = normalizeAxis(a, v)
-		if segments != nil {
-			coords[i] = piecewiseMap(segments[i], coords[i])
-		}
+	for i, c := range f2Dot14Location(axes, segments, want) {
+		coords[i] = float64(c) / 16384
 	}
 	return coords, nil
+}
+
+// f2Dot14Location is hb_ot_var_normalize_coords: each axis's user coordinate
+// — its own default where the location does not name it — normalized in
+// single precision and rounded to 16.16, mapped by avar's segment maps and
+// rounded to 16.16 again, and then rounded to the 2.14 every variation table
+// states its regions in; every rounding takes a half up, towards +infinity.
+// The result is in 2.14 units.
+//
+// # Why quantized, and why in exactly this order
+//
+// A location between two 2.14 values is not one any table of the font is
+// written against, and it is not one HarfBuzz ever reaches. Noto Sans asked
+// for weight 850 normalizes to 0.894995, which HarfBuzz holds to 14664/16384;
+// read unrounded, the face advanced 75 glyphs and drew the outlines of 704
+// simple glyphs a unit away from where HarfBuzz draws them.
+//
+// The order of the roundings matters as well as their precision. Weight 700
+// of the same face is drawn by HarfBuzz at 9995/16384. fontTools' instancer
+// maps the unrounded coordinate through avar in double precision and rounds
+// once, and lands at 9994: HarfBuzz's first rounding to 16.16 moves the
+// coordinate before avar sees it, and its last rounds a half of a 2.14 unit
+// up. What a reader draws and what this package shapes with is HarfBuzz's,
+// so the location is HarfBuzz's to the bit, and not a rounding error from it.
+//
+// segments is parseAvar's: nil where the font has no avar, and otherwise one
+// map for each axis.
+func f2Dot14Location(axes []varAxis, segments [][]avarSegment, want map[string]float64) []int {
+	coords := make([]int, len(axes))
+	for i, a := range axes {
+		// fvar's 16.16 read into a float, as F16DOT16::to_float reads it.
+		// AxisRecord::get_coordinates also widens an axis's range to take in
+		// its default, which never applies here: parseFvar refuses such an
+		// axis, and every location is normalized for a font it accepted.
+		lo, def, hi := float32(a.min), float32(a.def), float32(a.max)
+		v := def
+		if w, ok := want[a.tag]; ok {
+			v = float32(w)
+		}
+		v = min(max(v, lo), hi)
+		var n float32
+		switch {
+		case v == def:
+		case v < def:
+			n = float32(float32(v-def) / float32(def-lo))
+		default:
+			n = float32(float32(v-def) / float32(hi-def))
+		}
+		coords[i] = roundf(float32(n * 65536))
+	}
+	for i := range segments {
+		mapped := avarMapFloat(segments[i], float32(float32(coords[i])/65536))
+		coords[i] = roundf(float32(mapped * 65536))
+	}
+	for i := range coords {
+		// 16.16 to 2.14. The shift is arithmetic, so a negative half rounds
+		// up too, as it does in HarfBuzz.
+		coords[i] = (coords[i] + 2) >> 2
+	}
+	return coords
+}
+
+// roundf is roundf as HarfBuzz defines it for itself (hb-algs.hh), which is
+// not C's: floorf(v + .5f), so that a half rounds towards +infinity and not
+// away from zero — and the addition is a float's, so a value a hair under a
+// half can round up. -2.5 is -2 here and -3 in C. A float32 widens to a
+// float64 exactly, so the floor of the widened sum is the floor of the float.
+func roundf(v float32) int {
+	return int(math.Floor(float64(float32(v + 0.5))))
 }
 
 func axisTags(axes []varAxis) string {
@@ -455,32 +607,10 @@ func axisTags(axes []varAxis) string {
 	return strings.Join(tags, ", ")
 }
 
-func normalizeAxis(a varAxis, v float64) float64 {
-	switch {
-	case v > a.max:
-		v = a.max
-	case v < a.min:
-		v = a.min
-	}
-	switch {
-	case v == a.def:
-		return 0
-	case v < a.def:
-		if a.def == a.min {
-			return 0
-		}
-		return (v - a.def) / (a.def - a.min)
-	default:
-		if a.max == a.def {
-			return 0
-		}
-		return (v - a.def) / (a.max - a.def)
-	}
-}
-
 // avarSegment is one point of an axis's mapping: a normalized coordinate, and
-// the normalized coordinate it stands for.
-type avarSegment struct{ from, to float64 }
+// the normalized coordinate it stands for, each an F2DOT14 read into a float
+// as HarfBuzz reads it (exactly: fourteen fractional bits fit a float).
+type avarSegment struct{ from, to float32 }
 
 // parseAvar reads the axis variations table, which bends the normalized scale so
 // that the middle of an axis need not be the middle of what it draws — the point
@@ -517,53 +647,89 @@ func parseAvar(t []byte, axisCount int) ([][]avarSegment, error) {
 		if at+4*n > len(t) {
 			return nil, errors.New("fonts: avar's segment maps are cut short")
 		}
-		seg := make([]avarSegment, n)
-		for j := range seg {
-			seg[j] = avarSegment{from: f2Dot14At(t, at), to: f2Dot14At(t, at+2)}
-			at += 4
-		}
-		out[i] = seg
+		out[i] = readSegmentMap(t, at, n)
+		at += 4 * n
 	}
 	return out, nil
 }
 
-// piecewiseMap applies one axis's segment map: an exact match takes its value, a
-// coordinate between two takes the line between them, and one outside the map
-// keeps its distance from the nearest end.
-func piecewiseMap(seg []avarSegment, v float64) float64 {
-	if len(seg) == 0 {
-		return v
+// readSegmentMap reads n AxisValueMaps from t at off, which the caller has
+// checked lie inside it.
+func readSegmentMap(t []byte, off, n int) []avarSegment {
+	seg := make([]avarSegment, n)
+	for j := range seg {
+		seg[j] = avarSegment{from: f2dot14f(t, off+4*j), to: f2dot14f(t, off+4*j+2)}
 	}
-	lo, hi := seg[0], seg[0]
-	var below, above *avarSegment
-	for i := range seg {
-		s := seg[i]
-		if s.from == v {
-			return s.to
+	return seg
+}
+
+// f2dot14f is F2DOT14::to_float.
+func f2dot14f(b []byte, at int) float32 {
+	return float32(float32(signed16(font.Be16(b, at))) * float32(1.0/16384))
+}
+
+// avarMapFloat applies one axis's segment map as SegmentMaps::map_float does,
+// in single precision: an exact match takes its value, a coordinate between
+// two takes the line between them, and one outside the map keeps its distance
+// from the nearest end. The cases the specification leaves open — fewer than
+// two maps, several maps from one coordinate, a redundant -1 or +1 at an end —
+// are answered as HarfBuzz answers them, which is as CoreText does.
+func avarMapFloat(m []avarSegment, value float32) float32 {
+	if len(m) < 2 {
+		if len(m) == 0 {
+			return value
 		}
-		if s.from < lo.from {
-			lo = s
-		}
-		if s.from > hi.from {
-			hi = s
-		}
-		if s.from < v && (below == nil || s.from > below.from) {
-			below = &seg[i]
-		}
-		if s.from > v && (above == nil || s.from < above.from) {
-			above = &seg[i]
+		return float32(float32(value-m[0].from) + m[0].to)
+	}
+	start, end := 0, len(m)
+	if m[start].from == -1 && m[start].to == -1 && m[start+1].from == -1 {
+		start++
+	}
+	if m[end-1].from == 1 && m[end-1].to == 1 && m[end-2].from == 1 {
+		end--
+	}
+	i := start
+	for ; i < end; i++ {
+		if value == m[i].from {
+			break
 		}
 	}
-	if v < lo.from {
-		return v + lo.to - lo.from
+	if i < end {
+		j := i
+		for ; j+1 < end; j++ {
+			if value != m[j+1].from {
+				break
+			}
+		}
+		switch {
+		case i == j:
+			return m[i].to
+		case i+2 == j:
+			return m[i+1].to
+		case value < 0:
+			return m[j].to
+		case value > 0:
+			return m[i].to
+		}
+		if float32(math.Abs(float64(m[i].to))) < float32(math.Abs(float64(m[j].to))) {
+			return m[i].to
+		}
+		return m[j].to
 	}
-	if v > hi.from {
-		return v + hi.to - hi.from
+	for i = start; i < end; i++ {
+		if value < m[i].from {
+			break
+		}
 	}
-	if below == nil || above == nil {
-		return v
+	if i == start {
+		return float32(float32(value-m[start].from) + m[start].to)
 	}
-	return below.to + float64((above.to-below.to)*(v-below.from)/(above.from-below.from))
+	if i == end {
+		return float32(float32(value-m[end-1].from) + m[end-1].to)
+	}
+	before, after := m[i-1], m[i]
+	denom := float32(after.from - before.from)
+	return float32(before.to + float32(float32(float32(after.to-before.to)*float32(value-before.from))/denom))
 }
 
 // parseHmtx reads the advance and left side bearing of every glyph. The table
@@ -616,6 +782,7 @@ type glyphBounds struct {
 // measure it from.
 func fillCompositeBounds(glyf []byte, loca []uint32, numGlyphs int, budget *int64) ([]glyphBounds, error) {
 	bounds := make([]glyphBounds, numGlyphs)
+	matches := &matchIndex{glyf: glyf, loca: loca, numGlyphs: numGlyphs, known: make([]int8, numGlyphs)}
 	for gid := 0; gid < numGlyphs; gid++ {
 		start, end := loca[gid], loca[gid+1]
 		if start >= end {
@@ -633,7 +800,18 @@ func fillCompositeBounds(glyf []byte, loca []uint32, numGlyphs int, budget *int6
 			continue
 		}
 		var box floatBounds
-		if err := accumulateBounds(glyf, loca, numGlyphs, gid, identityTransform, &box, 0, budget); err != nil {
+		matched, err := matches.has(gid, 0)
+		if err != nil {
+			return nil, fmt.Errorf("fonts: glyph %d: %w", gid, err)
+		}
+		if matched {
+			// A component placed by matching points is placed by points,
+			// which a transform composed down the tree does not have.
+			box, err = matchedBounds(glyf, loca, numGlyphs, gid, budget)
+		} else {
+			err = accumulateBounds(glyf, loca, numGlyphs, gid, identityTransform, &box, 0, budget)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("fonts: glyph %d: %w", gid, err)
 		}
 		if !box.set {

@@ -19,9 +19,11 @@ import (
 // CIDFontType0, a CFF with no CID-keyed Top DICT has its CIDs used directly as
 // glyph indices (ISO 32000-2 9.7.4.2), and Encode wrote glyph indices into the
 // content stream before anything knew which glyphs would survive. So the
-// charset, the encoding and both subroutine INDEXes are copied through
-// untouched, and the only structure that changes is the one whose size
-// changed.
+// charset and the encoding are copied through untouched. The subroutines are
+// not: both INDEXes lose every subroutine no kept glyph reaches, and the calls
+// that remain are renumbered, as a CID-keyed font's are (cffrenumber.go). The
+// numbering a document addresses is the glyphs', and a subroutine's number is
+// the font's own business.
 //
 // A CID-keyed CFF is renumbered, and was not always. The same rule was applied
 // to it, for the reason above — renumbering means rewriting the charset, the
@@ -136,7 +138,7 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 	// renumbered — a CID-keyed font, see cffrenumber.go — and nil when the
 	// numbering is kept. .notdef is glyph 0 either way.
 	var order []int
-	var csBlob, charsetBlob []byte
+	var csBlob, charsetBlob, privBlob []byte
 	if isCID {
 		if n == 0 {
 			return nil, nil, errors.New("fonts: a CID-keyed CFF holds no glyphs, not even .notdef")
@@ -171,6 +173,49 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 			}
 			newCharStrings[i] = []byte{14} // endchar
 		}
+		// And the subroutines, cut down to the ones a kept glyph reaches, as
+		// a CID-keyed font's are below and by the same walk. Keeping the
+		// numbering of the glyphs does not mean keeping the numbering of the
+		// subroutines: a charstring names a subroutine by a number pushed in
+		// front of the call, and the walk rewrites exactly those numbers.
+		//
+		// They were copied whole, and in a font built by a subroutinizer that
+		// is most of the program: three glyphs of Source Sans 3 carried every
+		// one of its 738 global and 648 local subroutines, the outlines of
+		// the rest of the font factored into shared pieces.
+		if privSize > 0 {
+			if privBlob, err = cffPrivateRegion(data, privOff, privSize, budget); err != nil {
+				return nil, nil, err
+			}
+		}
+		var privParts privateRegion
+		regions := make([]int, n)
+		var locals [][][]byte
+		if privSize > 0 {
+			ops, raw, subrs, err := privateParts(privBlob, privSize)
+			if err != nil {
+				return nil, nil, err
+			}
+			privParts = privateRegion{ops, raw, subrs}
+			locals = [][][]byte{subrs}
+		} else {
+			// No Private DICT: no local subroutines to call, and a call to one
+			// names nothing, which the walk refuses rather than renumbers.
+			for i := range regions {
+				regions[i] = -1
+			}
+		}
+		prunedGlyphs, prunedGlobal, prunedLocals, pruned, err := pruneSubrs(
+			newCharStrings, regions, gsubrs, locals, budget)
+		if err != nil {
+			return nil, nil, err
+		}
+		if pruned {
+			newCharStrings, gsubrs = prunedGlyphs, prunedGlobal
+			if privSize > 0 {
+				privBlob, privSize = rebuildPrivate(privParts.ops, privParts.raw, prunedLocals[0])
+			}
+		}
 		csBlob = writeCFFIndex(newCharStrings)
 
 		// The charset, copied through unchanged. Its contents do not depend on
@@ -184,9 +229,10 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 	if err != nil {
 		return nil, nil, err
 	}
-	var privBlob []byte
-	if privSize > 0 {
-		var err error
+	if isCID && privSize > 0 {
+		// A Top DICT Private in a CID-keyed font, where each glyph's Private
+		// DICT is reached through its Font DICT instead: it is held to the
+		// same checks as any other, as it always was.
 		if privBlob, err = cffPrivateRegion(data, privOff, privSize, budget); err != nil {
 			return nil, nil, err
 		}

@@ -25,13 +25,14 @@
 #
 # The three implementations do not agree to the last unit, and cannot: each
 # arrives at a scalar by its own arithmetic. HarfBuzz quantizes the location to
-# the fourteen fractional bits the format stores, fontTools' instancer routes a
-# pinned axis through its partial-instancing solver, and both land a whole font
-# unit from the other on a few points in a hundred.
+# the fourteen fractional bits the format stores, rounding twice on the way;
+# fontTools' instancer quantizes it once, and routes a pinned axis through its
+# partial-instancing solver; and the two land a whole font unit from each
+# other on a few points in a hundred.
 #
 # The 'noise' header is that floor, measured: how far fontTools' instancer is
-# from fontTools' *own* supportScalar and IUP applied directly, over the whole
-# font. It is the amount of disagreement the oracle has with itself, and it is
+# from fontTools' *own* supportScalar and IUP applied directly at the location
+# HarfBuzz reaches — the one the Go package cuts at — over the whole font. It is the amount of disagreement the oracle has with itself, and it is
 # what the Go test's allowance for each case is set from. A case whose noise is
 # zero is one where every implementation agrees exactly, and the test demands
 # exactly that.
@@ -48,7 +49,7 @@ ft_version = fonttools().version
 from fontTools.ttLib import TTFont  # noqa: E402
 from fontTools.varLib import instancer
 from fontTools.varLib.iup import iup_delta
-from fontTools.varLib.models import normalizeLocation, piecewiseLinearMap, supportScalar
+from fontTools.varLib.models import supportScalar
 from fontTools.varLib.varStore import VarStoreInstancer
 from fontTools.ttLib.tables._g_l_y_f import GlyphCoordinates
 from fontTools.misc.fixedTools import otRound
@@ -72,23 +73,29 @@ CASES = [
 ]
 
 
-def normalized(ft, loc):
-    axes = {a.axisTag: (a.minValue, a.defaultValue, a.maxValue) for a in ft["fvar"].axes}
-    n = normalizeLocation(loc, axes)
-    if "avar" in ft:
-        for tag, seg in ft["avar"].segments.items():
-            if tag in n and seg:
-                n[tag] = piecewiseLinearMap(n[tag], seg)
-    return [n[a.axisTag] for a in ft["fvar"].axes]
+def normalized(raw, ft, loc):
+    """The location in normalized coordinates as HarfBuzz reaches it, which is
+    the location the Go package cuts an instance at: normalized in single
+    precision, rounded to 16.16, mapped by avar, rounded to 16.16 again and
+    then to 2.14. fontTools' own normalizeLocation and piecewiseLinearMap work
+    in double precision and round once, and the two land a 2.14 unit apart at
+    some locations — at weight 700 of Noto Sans HarfBuzz reaches 9995/16384
+    and fontTools 9994/16384 — so the reference below is computed at
+    HarfBuzz's, and the noise measures the instancer's distance from it."""
+    font = hb.Font(hb.Face(raw))
+    font.set_variations(loc)
+    coords = list(font.get_var_coords_normalized())
+    axes = len(ft["fvar"].axes)
+    return coords + [0.0] * (axes - len(coords))
 
 
-def reference(ft, loc):
+def reference(raw, ft, loc):
     """Where every point lands when fontTools' supportScalar and IUP are applied
     directly, with the partial-instancing solver out of the way.
 
     It is a second assembly of fontTools' own parts, and it exists to measure the
     oracle's disagreement with itself. Nothing is written out from it."""
-    n = dict(zip([a.axisTag for a in ft["fvar"].axes], normalized(ft, loc)))
+    n = dict(zip([a.axisTag for a in ft["fvar"].axes], normalized(raw, ft, loc)))
     glyf, gvar, hmtx = ft["glyf"], ft["gvar"], ft["hmtx"]
     out = {}
     for gid, name in enumerate(ft.getGlyphOrder()):
@@ -176,7 +183,7 @@ def write_case(name, rel, loc, nohvar, out_path):
 
     ft = TTFont(io.BytesIO(raw))
     order = ft.getGlyphOrder()
-    coords = normalized(ft, loc)
+    coords = normalized(raw, ft, loc)
 
     advances = None
     if not nohvar:
@@ -186,7 +193,7 @@ def write_case(name, rel, loc, nohvar, out_path):
         hbfont.set_variations(loc)
         advances = [hbfont.get_glyph_h_advance(gid) for gid in range(len(order))]
 
-    ref = reference(ft, loc)
+    ref = reference(raw, ft, loc)
     ref_glyf, ref_hmtx = reference_font(raw, ft, ref, coords)
     gids = sample(ft, ft["gvar"])
     instancer.instantiateVariableFont(ft, loc, inplace=True, optimize=False, updateFontNames=False)

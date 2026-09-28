@@ -26,6 +26,13 @@ import (
 // what to do when none of them is there are decisions the engine makes and
 // reports on, and a set that made them silently would be a set that could hide
 // a substitution.
+//
+// Face's two booleans are what CSS Fonts 4 §5.2 chooses from a family of a
+// regular and a bold face, an upright and an italic one (FontRequest.Bold and
+// Italic say how a request comes to them). A set that has more to offer — a
+// range of weights, condensed faces, oblique angles — implements StyledFontSet
+// as well, and is asked the numbers instead; RangedFontSet and FallbackFontSet
+// have numeric forms too.
 type FontSet interface {
 	// Face returns the face for a family in a weight and style, and whether the
 	// set has it. The family is matched case-insensitively, as CSS matches one.
@@ -203,13 +210,18 @@ func standardName(base string, bold, italic bool) string {
 // does not fall back the way fontFor does: a size resolved against a substituted
 // face is a size the author never asked for, and CSS Values §5.1.1 already says
 // what to do when no x-height can be determined, which is to assume half an em.
-func faceForStyle(fonts FontSet, cs style.ComputedStyle) *shape.Face {
+//
+// The face is set where the style places it in a variable face's design space,
+// at size, as layout will set it (fontinstance.go): an "ex" is the x-height of
+// the instance the text is drawn in, which MVAR can move. The instance is the
+// document's, so the cascade and layout cut it once between them.
+func faceForStyle(fonts FontSet, rec *Recorder, cs style.ComputedStyle, size style.Unit) *shape.Face {
 	if fonts == nil || cs.IsZero() {
 		return nil
 	}
-	bold, italic := isBold(cs.Get("font-weight")), isItalic(cs.Get("font-style"))
+	ask, _ := variationAskOf(cs, fontRequestOf(cs), size.Px())
 	for _, family := range parseFamilyList(cs.Get("font-family")) {
-		if f, ok := fonts.Face(family, bold, italic); ok {
+		if f, ok := styledFace(fonts, instancerOf(fonts), rec, NoSource, family, "", ask); ok {
 			return f
 		}
 	}
@@ -226,18 +238,16 @@ func faceForStyle(fonts FontSet, cs style.ComputedStyle) *shape.Face {
 // metrics and different line breaks, and nothing about the resulting page says
 // so.
 func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
-	key := fontKey{
-		families: b.Style.Get("font-family"),
-		bold:     isBold(b.Style.Get("font-weight")),
-		italic:   isItalic(b.Style.Get("font-style")),
-	}
+	key := fontKeyOf(b)
 	if got, ok := l.fonts[key]; ok {
 		return got.face, got.face != nil
 	}
+	ask := l.variationAsk(b)
+	src := sourceOf(boxElement(b))
 
 	families := parseFamilyList(key.families)
 	for _, family := range families {
-		if face, ok := l.fontSet.Face(family, key.bold, key.italic); ok {
+		if face, ok := styledFace(l.fontSet, l.inst, l.rec, src, family, "", ask); ok {
 			l.fonts[key] = resolvedFont{face: face}
 			l.noteFace(face)
 			return face, true
@@ -257,7 +267,7 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	//
 	// Taking it silently is what this whole design is against, which is what the
 	// finding below is for.
-	face, ok := l.fontSet.Face(initialFamily, key.bold, key.italic)
+	face, ok := styledFace(l.fontSet, l.inst, l.rec, src, initialFamily, "", ask)
 	l.fonts[key] = resolvedFont{face: face}
 	l.noteFace(face)
 	if !ok {
@@ -293,10 +303,28 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 // value the cascade hands out.
 const initialFamily = "serif"
 
+// fontKey is what fontFor's answer depends on: the family list, the three
+// properties a face is chosen by, and the three more that place a variable one
+// in its design space (fontinstance.go), as the cascade wrote them. The
+// strings and not the request they are read into, so that a box whose answer
+// is known is not read again.
 type fontKey struct {
-	families string
-	bold     bool
-	italic   bool
+	families             string
+	weight, width, slope string
+	optical, variations  string
+	size                 style.Unit
+}
+
+func fontKeyOf(b *Box) fontKey {
+	return fontKey{
+		families:   b.Style.Get("font-family"),
+		weight:     b.Style.Get("font-weight"),
+		width:      b.Style.Get("font-width"),
+		slope:      b.Style.Get("font-style"),
+		optical:    b.Style.Get("font-optical-sizing"),
+		variations: b.Style.Get("font-variation-settings"),
+		size:       b.FontSize,
+	}
 }
 
 type resolvedFont struct{ face *shape.Face }
@@ -336,34 +364,6 @@ func parseFamilyList(value string) []string {
 	return out
 }
 
-// isBold reads font-weight. The numeric scale runs 100 to 900 and 400 is
-// normal; the boundary is at 600, which is where every renderer puts it.
-func isBold(value string) bool {
-	switch v := ascii.Lower(ascii.TrimCSSSpace(value)); v {
-	case "bold", "bolder":
-		return true
-	case "", "normal", "lighter":
-		return false
-	default:
-		n := 0
-		for i := 0; i < len(v); i++ {
-			if v[i] < '0' || v[i] > '9' {
-				return false
-			}
-			n = n*10 + int(v[i]-'0')
-		}
-		return n >= 600
-	}
-}
-
-func isItalic(value string) bool {
-	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
-	case "italic", "oblique":
-		return true
-	}
-	return false
-}
-
 // fontMetrics answers style.Metrics from a font set: the cascade's one font
 // question, asked of the faces this package has already loaded.
 //
@@ -371,10 +371,39 @@ func isItalic(value string) bool {
 // x-height rather than six times the half-em CSS Values §5.1.1 says to assume
 // when none can be determined. The suite's numbers-units-012 sets 6ex against
 // Ahem, whose x-height is eight tenths of an em, and asks for an inch.
-type fontMetrics struct{ fonts FontSet }
+type fontMetrics struct {
+	fonts FontSet
+	rec   *Recorder
+}
 
 func (m fontMetrics) XHeight(cs style.ComputedStyle, size style.Unit) (float64, bool) {
-	return xHeightIn(faceForStyle(m.fonts, cs), size)
+	return xHeightIn(faceForStyle(m.fonts, m.rec, cs, size), size)
+}
+
+// MathScaleDowns answers style.MathMetrics: what the first available font of
+// a style says a script and a script's script are scaled by (MathML Core
+// §5.1's scriptPercentScaleDown and scriptScriptPercentScaleDown, over a
+// hundred, or 0.71 and 0.5041 where the font states nought or no constants),
+// and whether it has a MATH table at all. A font whose table cannot be read
+// is one with none: the table's own report is layout's, where the text set in
+// the font is.
+func (m fontMetrics) MathScaleDowns(cs style.ComputedStyle, size style.Unit) (script, scriptScript float64, hasMath bool) {
+	script, scriptScript = 0.71, 0.5041
+	face := faceForStyle(m.fonts, m.rec, cs, size)
+	if face == nil {
+		return script, scriptScript, false
+	}
+	t, err := face.MathTable()
+	if err != nil || t == nil {
+		return script, scriptScript, false
+	}
+	if v, ok := t.Constant(shape.MathScriptPercentScaleDown); ok && v != 0 {
+		script = float64(v) / 100
+	}
+	if v, ok := t.Constant(shape.MathScriptScriptPercentScaleDown); ok && v != 0 {
+		scriptScript = float64(v) / 100
+	}
+	return script, scriptScript, true
 }
 
 // faceWithGlyph is the first of a box's families whose face has a glyph for a
@@ -391,9 +420,9 @@ func (m fontMetrics) XHeight(cs style.ComputedStyle, size style.Unit) (float64, 
 // past the families the document named into the fallback set, because the
 // question is which of *those* sets the character.
 func (l *layouter) faceWithGlyph(b *Box, r rune) (*shape.Face, bool) {
-	bold, italic := isBold(b.Style.Get("font-weight")), isItalic(b.Style.Get("font-style"))
+	ask := l.variationAsk(b)
 	for _, family := range parseFamilyList(b.Style.Get("font-family")) {
-		face, ok := l.fontSet.Face(family, bold, italic)
+		face, ok := styledFace(l.fontSet, l.inst, l.rec, sourceOf(boxElement(b)), family, "", ask)
 		if !ok {
 			continue
 		}

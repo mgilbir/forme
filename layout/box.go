@@ -6,6 +6,7 @@ import (
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/diag"
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/style"
 )
@@ -79,6 +80,9 @@ const (
 	InnerTableColumn
 	// InnerText is a run of text, which has no children and no context.
 	InnerText
+	// InnerMath is a MathML element whose display is math: its children are
+	// placed by the element's MathML Core algorithm. See mathlayout.go.
+	InnerMath
 )
 
 func (i Inner) String() string {
@@ -105,6 +109,8 @@ func (i Inner) String() string {
 		return "table-column"
 	case InnerText:
 		return "text"
+	case InnerMath:
+		return "math"
 	}
 	return "flow"
 }
@@ -736,29 +742,28 @@ func (b *boxBuilder) fontSizeOf(n *html.Node, parent style.Unit) style.Unit {
 }
 
 // quoteValue renders a value for a diagnostic without letting a hostile
-// stylesheet put control characters into a caller's log.
-func quoteValue(s string) string {
-	const max = 40
-	var out strings.Builder
-	out.WriteByte('"')
-	for i, r := range s {
-		if i >= max {
-			out.WriteString("...")
-			break
-		}
-		if r < 0x20 || r == 0x7F {
-			out.WriteByte('?')
-			continue
-		}
-		out.WriteRune(r)
-	}
-	out.WriteByte('"')
-	return out.String()
-}
+// stylesheet put control characters, or bytes that are not text, into a
+// caller's log. See internal/diag.
+func quoteValue(s string) string { return diag.Quote(s, 40) }
 
 func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	cs := b.styles[n]
 	outer, inner, listItem := displayOf(cs)
+	if n.Namespace == html.NamespaceMathML && mathDisplayOf(cs) {
+		// MathML Core §4.1: a MathML element whose display is block math or
+		// inline math is laid out by its own algorithm. An <mtable>, <mtr>
+		// and <mtd> with that display compute to the table boxes they are.
+		switch n.Name {
+		case "mtable":
+			inner = InnerTable
+		case "mtr":
+			inner = InnerTableRow
+		case "mtd":
+			inner = InnerTableCell
+		default:
+			inner = InnerMath
+		}
+	}
 	if outer == OuterNone {
 		// Nothing inside is laid out either, which is the difference between
 		// display:none and visibility:hidden.
@@ -767,10 +772,21 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	if !b.room(n) {
 		return nil
 	}
+	if n.Namespace == html.NamespaceMathML {
+		// What of MathML 3 the element uses that Core does not draw: see
+		// mathlegacy.go. An element that is not displayed shows nothing
+		// either way, and is not reported.
+		b.reportMathLegacy(n)
+	}
 	order := b.count
 
 	fontSize := b.fontSizeOf(n, parentFontSize)
 	float := floatOf(cs)
+	if b.inMathParent(n) {
+		// §2.2.2: float does not float an element whose parent's display is
+		// block math or inline math, and does not take it out of the flow.
+		float = FloatNone
+	}
 	position := positionOf(cs)
 	if position.outOfFlow() {
 		// §9.7's first row: a box that is absolutely positioned does not float.
@@ -900,7 +916,16 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	}
 	b.appendChildren(box, n, cs, fontSize)
 	b.addGenerated(box, n, "after", fontSize)
-	if isBlockContainer(box) {
+	if box.Inner == InnerTableCell && n.Namespace == html.NamespaceMathML && n.Name == "mtd" {
+		b.mathCellRow(box)
+	}
+	if box.Inner == InnerMath {
+		b.mathChildren(box)
+		// §2.2.2: ::first-line and ::first-letter do not apply to a box whose
+		// display is math.
+		box.FirstLine = style.ComputedStyle{}
+	}
+	if isBlockContainer(box) && box.Inner != InnerMath {
 		// §5.12.2's ::first-letter, which applies to a block container and is
 		// done here because the letter is a stretch of text that has already
 		// been collapsed and transformed. See firstletter.go.
@@ -937,6 +962,77 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	return box
 }
 
+// inMathParent reports whether an element's parent is a MathML element whose
+// display is block math or inline math.
+func (b *boxBuilder) inMathParent(n *html.Node) bool {
+	p := n.Parent
+	return p != nil && p.Type == html.ElementNode && p.Namespace == html.NamespaceMathML &&
+		mathDisplayOf(b.styles[p])
+}
+
+// mathChildren keeps what a MathML box lays out of its children.
+//
+// A token's content is text, and HTML inside a text integration point: all of
+// it is kept, and laid out as the line or the block it is. Every other MathML
+// element places boxes, and text written straight inside one — "<mrow>x</mrow>"
+// — is not one of its children: MathML Core's algorithms are written in terms
+// of child boxes, and a browser draws no such text. White space between the
+// elements of a formula is what almost all of it is, and goes unremarked; any
+// other text is reported, since the author meant it to show. An <mspace> is
+// empty by definition, and what is written inside it is not laid out.
+func (b *boxBuilder) mathChildren(box *Box) {
+	if isMathToken(box) {
+		return
+	}
+	space := mathName(box) == "mspace"
+	kept := box.Children[:0]
+	for _, c := range box.Children {
+		if !space && !c.IsText() {
+			kept = append(kept, c)
+			continue
+		}
+		if c.IsText() && onlyDocumentWhiteSpace([]*Box{c}) {
+			continue
+		}
+		why := "text written directly inside <" + boxElement(box).Name + "> is not laid out: MathML places " +
+			"only elements there, and text belongs in a token element such as <mi>, <mn>, <mo> or <mtext>"
+		if space {
+			why = "an <mspace> is empty, and what is written inside it is not laid out"
+		}
+		b.rec.ReportDetail(Finding{
+			Rule:    RuleInvalidMarkup,
+			Source:  sourceOf(boxElement(box)),
+			Message: why,
+			Path:    PathOf(boxElement(box)),
+		})
+	}
+	box.Children = kept
+}
+
+// mathCellRow is MathML Core §3.5.3's anonymous <mrow>: an <mtd>'s children
+// are laid out as one row — side by side on a baseline, operators spaced —
+// in an anonymous box that is the cell's only child, and not stacked one over
+// another as a table cell's blocks are. Text written straight into the cell
+// is dropped and reported as in any row. The row is block-level, so it is
+// centred in the cell as a block formula is.
+func (b *boxBuilder) mathCellRow(cell *Box) {
+	if len(cell.Children) == 0 || !b.roomAt(offsetOf(cell)) {
+		return
+	}
+	row := &Box{
+		Outer: OuterBlock, Inner: InnerMath,
+		Style:    style.Inherited(cell.Style),
+		FontSize: cell.FontSize, fontSizeKnown: cell.fontSizeKnown,
+		Parent:   cell,
+		Children: cell.Children,
+	}
+	for _, c := range row.Children {
+		c.Parent = row
+	}
+	cell.Children = []*Box{row}
+	b.mathChildren(row)
+}
+
 // replacedFallback reports whether an element's children are the content a user
 // agent shows *instead* of the element, so this one — which draws the element —
 // lays none of them out.
@@ -953,6 +1049,9 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 // rule and is recorded in html.contentSkippedElements.
 func replacedFallback(n *html.Node) bool {
 	if n == nil || n.Type != html.ElementNode {
+		return false
+	}
+	if n.Namespace != html.NamespaceHTML {
 		return false
 	}
 	return ascii.EqualFold(n.Name, "canvas") || ascii.EqualFold(n.Name, "video")
@@ -1247,12 +1346,20 @@ func displayOf(cs style.ComputedStyle) (Outer, Inner, bool) {
 	return d.outer, d.inner, d.listItem
 }
 
+// mathDisplayOf is whether a computed display's inner type is "math".
+func mathDisplayOf(cs style.ComputedStyle) bool {
+	return parseDisplay(cs.Get("display")).math
+}
+
 // displayType is a display value read into what the box tree is built from, and
 // what of it this engine does not lay out as asked.
 type displayType struct {
 	outer    Outer
 	inner    Inner
 	listItem bool
+	// math says the inner display type is MathML Core's "math", which a
+	// MathML element is laid out by and anything else computes to flow for.
+	math bool
 	// gap names the part of the value this engine lays out as something else,
 	// or is displayGapNone. See reportUnsupportedDisplays, which is what says
 	// so.
@@ -1359,12 +1466,6 @@ func parseDisplay(raw string) displayType {
 		// of its own and lifted above an empty base, and is reported itself.
 		// See unlaidBoxIsNotTheBoxAsked.
 		return displayType{outer: OuterInline, inner: InnerFlow, gap: displayGapAnnotation}
-	case "math":
-		// MathML Core: on an element that is not MathML, "math" computes to
-		// "flow", and with no outside value that is an inline box. The one
-		// MathML element this engine meets is <math> itself, which it draws as
-		// a replaced element whatever its display says.
-		return displayType{outer: OuterInline, inner: InnerFlow}
 	}
 
 	// The multi-keyword grammar, whose single keywords "block", "inline",
@@ -1382,7 +1483,7 @@ func parseDisplay(raw string) displayType {
 				return displayType{outer: OuterInline, inner: InnerFlow}
 			}
 			outer, haveOuter = w, true
-		case "flow", "flow-root", "table", "flex", "grid", "ruby":
+		case "flow", "flow-root", "table", "flex", "grid", "ruby", "math":
 			if inner != "" {
 				return displayType{outer: OuterInline, inner: InnerFlow}
 			}
@@ -1405,6 +1506,12 @@ func parseDisplay(raw string) displayType {
 	switch inner {
 	case "", "flow":
 		out.inner = InnerFlow
+	case "math":
+		// MathML Core §4.1's inner display type, and "math" alone is "block
+		// math", as an inside value alone is a block. On an element that is
+		// not MathML it computes to flow; a MathML element's is InnerMath,
+		// which elementBox decides, since only it knows the element.
+		out.inner, out.math = InnerFlow, true
 	case "flow-root":
 		out.inner = InnerFlowRoot
 	case "table":
@@ -1475,12 +1582,15 @@ func replacesItsOwnContent(n *html.Node) bool {
 	if n == nil {
 		return false
 	}
-	switch ascii.Lower(n.Name) {
-	case "img", "object":
-		return true
-	case "svg", "math":
-		// A foreign root is a replaced element: it has a box, and its content is
-		// not HTML but a picture the element carries with it. The parser keeps
+	switch n.Namespace {
+	case html.NamespaceHTML:
+		switch ascii.Lower(n.Name) {
+		case "img", "object":
+			return true
+		}
+	case html.NamespaceSVG:
+		// An <svg> is a replaced element: it has a box, and its content is not
+		// HTML but a picture the element carries with it. The parser keeps
 		// that content as source rather than parsing it — see html.Node.Foreign
 		// — and layout reads it exactly as it reads an SVG an <img> points at.
 		return true
@@ -1541,10 +1651,11 @@ func outOfFlowDisplay(outer Outer, inner Inner, float FloatSide, position Positi
 	switch inner {
 	case InnerFlow, InnerFlowRoot:
 		return OuterBlock, InnerFlowRoot
-	case InnerTable, InnerFlex, InnerGrid:
+	case InnerTable, InnerFlex, InnerGrid, InnerMath:
 		// The two-value forms whose inner half survives blockification: an
 		// inline-table floats as a table, an inline-flex as a flex container,
-		// an inline-grid as a grid.
+		// an inline-grid as a grid — and "inline math" is "block math"
+		// (MathML Core §4.1), a formula laid out by its own algorithm still.
 		return OuterBlock, inner
 	}
 	// The table-internal displays. §9.7 turns each into its block-level
@@ -1790,6 +1901,10 @@ func isBlockContainer(b *Box) bool {
 		return true
 	case InnerFlow:
 		return b.Outer == OuterBlock
+	case InnerMath:
+		// A token's text is laid out as the line of a block container: see
+		// mathtoken.go. Every other MathML box places its children itself.
+		return isMathToken(b)
 	}
 	return false
 }
@@ -1806,7 +1921,7 @@ func isBlockContainer(b *Box) bool {
 // lifted out as a block, which is the opposite of what "inline" asked for.
 func laysOutOwnChildren(b *Box) bool {
 	switch b.Inner {
-	case InnerTable, InnerFlex, InnerGrid:
+	case InnerTable, InnerFlex, InnerGrid, InnerMath:
 		return true
 	}
 	return isBlockContainer(b)

@@ -97,7 +97,7 @@ func documentBaseOf(doc *html.Node) documentBase {
 		stack = stack[:len(stack)-1]
 		// The name as the document's language gives it: HTML lowercases it as
 		// it parses, and in XHTML only "base" is HTML's element.
-		if n.Type == html.ElementNode && n.Name == "base" {
+		if n.Type == html.ElementNode && n.Namespace == html.NamespaceHTML && n.Name == "base" {
 			if href, ok := n.AttrExact("href"); ok {
 				return documentBase{href: referenceText(href)}
 			}

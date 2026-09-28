@@ -122,7 +122,12 @@ func cffSeac(code []byte, local, global [][]byte, budget *font.Budget) (bchar, a
 			n := operands[len(operands)-1] + font.CFFSubrBias(len(idx))
 			operands = operands[:len(operands)-1]
 			f.at++
-			if n < 0 || n >= len(idx) || len(stack) >= maxCharstringDepth {
+			// The stack holds the glyph's own charstring as well as the
+			// subroutines it has called, so ten subroutines deep is eleven
+			// frames — and ten deep is allowed. This stopped at nine, where
+			// the seac of a glyph nested exactly ten deep went unfound and
+			// the subset dropped the two glyphs it is drawn from.
+			if n < 0 || n >= len(idx) || len(stack) > maxCharstringDepth {
 				return 0, 0, false
 			}
 			stack = append(stack, frame{code: idx[n]})
@@ -176,7 +181,9 @@ func cffSeac(code []byte, local, global [][]byte, budget *font.Budget) (bchar, a
 	return 0, 0, false
 }
 
-// maxCharstringDepth is the subroutine nesting Type 2 allows.
+// maxCharstringDepth is the subroutine nesting Type 2 allows: ten subroutines
+// may be running at once, and a call that would make eleven is an error, as it
+// is in HarfBuzz (kMaxCallLimit).
 const maxCharstringDepth = 10
 
 // cffSeacClosure adds to keep every glyph a kept charstring's seac names.

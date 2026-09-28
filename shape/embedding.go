@@ -219,7 +219,9 @@ func (f *Face) IsCFF() bool { return f.cff }
 // parse Load already did, so it cannot disagree with the codes Encode writes:
 // true here is exactly the case in which those codes are CIDs. Re-reading the
 // program to find out would be a second parse that could reach a second
-// answer. A face from LoadSimple or Standard is never CID-keyed.
+// answer. A face from LoadSimple or Standard is never CID-keyed. A face whose
+// outlines are CFF2 is: it is embedded as a CID-keyed CFF in Adobe-Identity-0,
+// each glyph's CID its index (cff2cff.go).
 func (f *Face) IsCIDKeyed() bool { return f.gidToCID != nil }
 
 // FSType is a font's OS/2 fsType: what its licence says a document may do with
@@ -283,15 +285,25 @@ func (f *Face) EmbeddingPermissions() (fsType FSType, stated bool) {
 // its own tables from. A face loaded from a WOFF or WOFF 2 returns the sfnt
 // the container held, since that is the program and a document format carries
 // the program; a face from LoadInstance returns the instance it cut, which is
-// what it draws. A standard face has no program and returns nil. A clone
-// returns its face's.
+// what it draws. A face whose outlines are CFF2 returns the CFF font it draws
+// at its default instance, which is what a document format that predates CFF2
+// can carry (cff2cff.go): its CFF2 table written as CFF, and its variation
+// tables dropped. It is written the first time it is asked for, which for a
+// large face is a noticeable part of a second, and kept. Its own bytes are what
+// LoadInstance cuts other instances from. A standard face has no program and
+// returns nil. A clone returns its face's.
 //
 // It is not a copy, because a CJK program is megabytes and a document may ask
 // for it once per face it embeds. For a face from Load it is the very slice
 // Load was given, which Load keeps rather than copies. So it must not be
 // modified: the face goes on reading it, and a change shows up as a font that
 // says something else.
-func (f *Face) Program() []byte { return f.data }
+func (f *Face) Program() []byte {
+	if f.cff2 != nil {
+		return f.cff2.programBytes()
+	}
+	return f.data
+}
 
 // CharacterCollection is the collection this face's CIDs are numbered in — the
 // CFF's ROS — and whether it has one to state.

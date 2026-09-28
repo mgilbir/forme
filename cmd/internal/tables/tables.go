@@ -138,6 +138,9 @@ var Manifest = []Table{
 	// whose notice the table carries.
 	withMPL(hyphenation("hungarian", "hu", "hyph-hu")),
 	hyphenation("pinyin", "zh-latn", "hyph-zh-latn-pinyin"),
+	// The reformed spelling, which is what "de" means with no variant subtag;
+	// see paragraph.HyphenationOf.
+	hyphenation("german", "de", "hyph-de-1996"),
 
 	// The standard fonts' metrics, from matplotlib's copies of Adobe's AFM files
 	// at MATPLOTLIB_COMMIT.

@@ -1423,7 +1423,112 @@ const wptEnv = "WPT_TESTS"
 //
 // Where the browsers do not agree the engine keeps UAX #14 rather than pick
 // one of them, and the two are accepted failures.
-const wptCleanPassBaseline = 5984
+//
+// **5984 to 5985, for a space a nowrap box collapses**.
+// floats/floats-line-wrap-shifted-001 writes "1111 <nobr> 2222 ... 3333"
+// in a box twelve characters wide, and the line never broke after "1111":
+// the paragraph's space is kept and the nobr's collapses into it, and only
+// the nobr was asked whether a line may end after the run. CSS Text §5.1
+// gives an opportunity made by a space to the box the space is in, and
+// §4.1.1 lets a collapsed space keep its own, so either box may allow it.
+// See layout/flatten.go's spaceRunWraps. wpt.fyi: Chrome and Firefox pass,
+// Safari fails.
+//
+// **5985 to 5987, for the glyph a stand-in draws**. The comparison, not the
+// engine. line-break/line-break-anywhere-overrides-uax-behavior-013 and -014
+// set U+2011 in Ahem, which has none; the shaper draws Ahem's U+2010 for it,
+// as HarfBuzz does, and that is an em square. The oracle's table of Ahem's
+// rectangles was keyed by character, so the run stayed text and did not match
+// the reference's square. It is keyed by glyph as well now. See
+// layout/blockglyph_test.go. wpt.fyi: all three browsers pass both.
+//
+// **5987 to 5988, for rounded corners** (issue #26). letter-spacing/letter-
+// spacing-trim-start-001 and its reference both draw six inline-blocks with a
+// two-pixel border and "border-radius: 5px", and the two pages matched while
+// border-radius was an unimplemented property: both had square corners, and
+// both carried the finding. The corners are drawn now — a ring between the
+// border edge's curve and the padding edge's, a FillPath — and the comparison
+// renders them, so the pair is compared as what it paints and passes clean.
+// wpt.fyi: all three browsers pass.
+//
+// **5988 to 5989, for filter** (issue #26). normal-flow/block-in-inline-float-
+// in-layer-001 puts "filter: blur(1px)" on a <span> around a block, and its
+// reference on a <div>; both pages matched while filter was unimplemented,
+// with the finding on both. The blur is drawn now, as a FilterGroup around
+// everything the element paints — including, for the <span>, the block
+// §9.2.1.1 lifted out of it, which is in the box tree nowhere under the span
+// — and the two groups hold the same run. wpt.fyi: Chrome and Firefox pass,
+// Safari fails.
+//
+// **5989 to 5990, for text-shadow** (issue #26). hyphens/shy-styling-001 asks
+// for a hyphen made at a soft hyphen to take the soft hyphen's style — large,
+// red, and "text-shadow: 3px 3px 3px black" — and its references draw a
+// hyphen so styled. The pages matched while text-shadow was unimplemented, and
+// both carried the finding. The shadow is drawn now, a DrawTextShadow under the
+// run, and the two hyphens cast the same one. wpt.fyi: all three browsers pass.
+//
+// **5990 to 5991, for text-emphasis** (issue #26). letter-spacing/
+// letter-spacing-211 asks for emphasis marks to be centred on a character and
+// not on the character and the letter-spacing after it: "ABC" spaced by an em
+// against a reference that writes "A B C", both under "text-emphasis: dot".
+// The pages matched while emphasis marks were unimplemented, since neither drew
+// any, and both carried the finding. The marks are drawn now — a
+// DrawEmphasisMark per character, in Ahem a 10px square over each 20px one —
+// and each lands over its own letter on both pages. wpt.fyi: all three
+// browsers pass.
+//
+// **5991 to 5992, for text-spacing-trim at the start of a line**.
+// text-spacing-trim/text-spacing-trim-start-002 is a box three and a half
+// ideographs wide under trim-start, holding "（国国国" on each of three lines —
+// the first, one a soft wrap began, and one after a <br> — which fits only if
+// each line's bracket is set in its half-width form. That form is the one the
+// face's 'halt' states, so the bracket is drawn with the feature asked for, as
+// the reference draws it with font-feature-settings. See
+// layout/spacingtrim.go's markOpeningPunctuation. text-spacing-trim-start-oof-
+// 001 moves from failed to passed with something unsupported: it loads a
+// script. wpt.fyi: Chrome passes both, Firefox and Safari fail both.
+//
+// **5992 to 5993, for a glyph's ink across the line**. The comparison, not
+// the engine. line-break/line-break-anywhere-001 breaks after every character
+// in a column 1ch wide — 7.8px of Courier at 13px — under an opaque green box
+// of that width, and one of its characters is a full-width "）" from the
+// Japanese fallback face, 13px of advance whose ink is 0.6px to 4.0px of it.
+// The comparison took a run's ink to be its advance, so the red bracket poked
+// 5.2px out of the box it is wholly under. It reads each glyph's own box now,
+// as HarfBuzz states it (markInk in picture_test.go, over
+// shape.Face.GlyphExtents). wpt.fyi: all three browsers pass.
+//
+// **5993 to 5994, for two orientations on one line**.
+// text-autospace/text-autospace-vertical-upright-001 sets "国X国" in a
+// vertical-rl box, once with the whole box upright and once with only the X
+// in an upright span, and asks for no §8.4.1 spacing either way. The second
+// half was refused: a box whose text under "mixed" needed characters standing
+// and characters lying at once was laid out across the page, since one box was
+// one orientation. Orientation is per run now — the text is cut where UAX #50
+// changes its answer and each run is set the way it faces — and an upright run
+// is hung from the central baseline, CSS Writing Modes §4.2's dominant one on
+// a vertical line. See layout/writingmode.go. wpt.fyi: Chrome and Firefox
+// pass, Safari fails.
+//
+// **5994 to 5995, for text-combine-upright**.
+// text-autospace/text-autospace-vertical-combine-001 sets "国<span>XX</span>国"
+// in a vertical-rl box with the span at "text-combine-upright: all", and asks
+// for no §8.4.1 spacing either side of it. The box was refused, the property
+// being one this engine did not lay out. It is laid out now: the span's text is
+// one composition, an em along the line and one U+FFFC for every rule that
+// asks about a character, drawn across the page squeezed into its em square.
+// See layout/combine.go. wpt.fyi: Chrome and Firefox pass, Safari fails.
+//
+// **5995 to 5996, for a vertical inline-block**. text-fit/writing-mode and its
+// reference set four inline-blocks in the four vertical modes on a horizontal
+// line, each "inline-size: 120px" with two lines of Ahem; the test scales its
+// text with "text-fit: grow consistent" and the reference sets it at the size
+// that fits. Every one was refused, an inline-block not being a box this
+// engine turned. It is one now — CSS Writing Modes §7.3's orthogonal flow, as
+// wide as its lines stack and sitting on its bottom margin edge — and text-fit
+// fits the lines it breaks against its height. wpt.fyi: Chrome passes,
+// Firefox and Safari fail.
+const wptCleanPassBaseline = 5996
 
 // linkRe finds the reference link that makes a document a reftest.
 var linkRe = regexp.MustCompile(`(?i)<link\s+[^>]*rel\s*=\s*["']?(match|mismatch)["']?[^>]*>`)
@@ -2031,6 +2136,7 @@ var suiteBlockFonts = map[string]*blockFont{}
 // overlap, and which no comparison of unordered marks can ever satisfy, because
 // the test has a red rectangle in it and the reference does not.
 func normaliseOps(ops []Op) string {
+	ops, _ = flattenGroups(ops, "")
 	lines := make([]string, 0, len(ops))
 	for _, op := range ops {
 		switch v := op.(type) {
@@ -2089,6 +2195,35 @@ func normaliseOps(ops []Op) string {
 			// drawing the same file draw the same key, and comparing decoded
 			// images pixel by pixel would make this a rasterizer.
 			lines = append(lines, fmt.Sprintf("image %s %s", v.Key, rectKey(v.Rect)))
+		case FillPath:
+			if len(v.Path) == 0 || v.Color.A == 0 {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("path %s %s", v.Path, v.Color))
+		case DrawGlyphs:
+			if len(v.Glyphs) == 0 || v.Color.A == 0 {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("glyphs %v at %s,%s size %s",
+				v.Glyphs, num(v.At.X), num(v.At.Y), num(v.Size)))
+		case DrawEmphasisMark:
+			if strings.TrimSpace(v.Mark.Text) == "" || v.Mark.Color.A == 0 {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("mark %q at %s,%s size %s",
+				v.Mark.Text, num(v.Mark.At.X), num(v.Mark.At.Y), num(v.Mark.Size)))
+		case DrawTextShadow:
+			if strings.TrimSpace(v.Run.Text) == "" || v.Run.Color.A == 0 {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("shadow %q at %s,%s blur %s",
+				v.Run.Text, num(v.Run.At.X), num(v.Run.At.Y), num(v.StdDev)))
+		case FillGradient:
+			// Only the blank-page check reads this too: a gradient that shows
+			// anywhere is something painted.
+			for _, f := range gradientFills(v) {
+				lines = append(lines, fmt.Sprintf("gradient %s", rectKey(f.r)))
+			}
 		case TileImage:
 			// Only the blank-page check reads this, so a tiling contributes one
 			// line however many tiles it puts down: what matters here is that

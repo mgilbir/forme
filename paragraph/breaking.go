@@ -523,6 +523,27 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			continue
 		}
 
+		// §8.2's trim at the start of a line: a full-width opening punctuation
+		// that is the first thing a reader sees on the line is set in its
+		// half-width form, on the lines the value names. It is taken before
+		// anything below measures the item, because it is not "only if it does
+		// not otherwise fit" as the end's is — the start of a line is where the
+		// value says the blank goes, and the room it gives back is room the line
+		// has. text-spacing-trim-start-002 is a box three and a half ideographs
+		// wide that holds four of them only because each line's bracket gives up
+		// its half.
+		//
+		// "The first thing a reader sees" is content, as for §4.1.2 above: an
+		// inline box's own edge, a float, a box out of flow and the collapsible
+		// space the line began at all come before the bracket and none of them
+		// stops it beginning the line. text-spacing-trim-start-oof-001 writes
+		// the float, the positioned box and the empty span in front of it.
+		if item.TrimStart != 0 && !content &&
+			item.TrimStartOn.Trims(from == 0 && fromByte == 0, afterForcedBreak(items, from, fromByte)) {
+			item.Width = item.Width.Sub(item.TrimStart)
+			item.TrimStart, item.StartTrimmed = 0, true
+		}
+
 		if item.Tab {
 			// The distance to the next tab stop, plus whatever letter-spacing adds
 			// after the character — a tab is a character like any other for that
@@ -1353,6 +1374,32 @@ func contentOnLine(line []Item) bool {
 		case item.Text != "" || item.Atomic != nil || item.Tab || item.Forced:
 			return true
 		}
+	}
+	return false
+}
+
+// afterForcedBreak reports whether the line that begins at from follows a
+// forced break, which is what §8.2's space-first spares along with the first
+// line.
+//
+// The item before the line is the break itself, or an inline box's closing
+// edge the fill carried onto the line that ended there — see the forced-break
+// branch of fillOneLine, which is the only place a line after one begins — so
+// those edges are stepped back over to reach it. A line that begins inside an
+// item began at a soft wrap in the middle of a word, and follows nothing
+// forced.
+func afterForcedBreak(items []Item, from, fromByte int) bool {
+	if fromByte > 0 {
+		return false
+	}
+	for j := from - 1; j >= 0; j-- {
+		switch it := items[j]; {
+		case it.Forced:
+			return true
+		case it.Inset && !it.InsetLead:
+			continue
+		}
+		return false
 	}
 	return false
 }

@@ -16,9 +16,7 @@
 // no vertical feature, so the fallback is what it would draw, and the fallback
 // is what the table records.
 //
-// # Why an engine that lays out one writing mode needs it
-//
-// It does not need it to *set* upright text. It needs it to know that it cannot.
+// # Why an engine that turns its pages needs it
 //
 // A vertical-rl box is laid out by turning a horizontal one ninety degrees
 // clockwise — see layout/writingmode.go — and that produces a page where every
@@ -28,11 +26,13 @@
 // wrong, because ideographs are U and stand upright, and no rotation of a
 // horizontal line produces an upright one.
 //
-// The table is what lets the engine tell the two apart and report the second
-// rather than drawing it wrong. Erring towards upright is therefore the safe
-// direction: a character wrongly called upright costs a finding on a page that
-// would have been right, and a character wrongly called rotated costs a page
-// that is wrong with nothing said about it.
+// The table is what lets the engine tell the two apart. A run of characters it
+// calls upright is set standing on the turned line — measured by its vertical
+// advances and drawn with DrawText.Upright — and the rest lie along it, so a
+// paragraph that mixes the two is cut into runs where the answer changes.
+// Either mistake is now a page drawn wrong: a character wrongly called upright
+// stands where it should lie, and one wrongly called rotated lies where it
+// should stand.
 //
 // # The code points the data does not list
 //
@@ -195,8 +195,9 @@ package paragraph
 // which the data lists explicitly. A "default" count would be code points the
 // data is silent on and an @missing line calls upright — see cmd/genvertical.
 //
-// What reads it is a gate rather than a typesetting rule: this engine sets no
-// upright text, and the table is how it knows to say so. See IsUpright.`, *version)
+// What reads it is the typesetter: under "text-orientation: mixed" a character
+// in it is set upright, in a run of its own, and the rest lie along the line.
+// See IsUpright and SplitAtOrientation.`, *version)
 	fmt.Print(w.String())
 }
 

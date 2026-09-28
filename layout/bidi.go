@@ -741,7 +741,11 @@ func (l *layouter) splitByLevel(item inlineItem, para *bidi.Paragraph) []inlineI
 			break
 		}
 	}
-	if uniform || item.Text == "" {
+	if uniform || item.Text == "" || item.Combine {
+		// A text-combine-upright composition is one character to the
+		// algorithm around it — §9.1.2 bidi-isolates its text and reorders it
+		// "the same as a typographic character unit with text-orientation:
+		// upright" — so it takes its first character's level and is not cut.
 		return []inlineItem{item}
 	}
 

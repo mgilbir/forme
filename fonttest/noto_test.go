@@ -186,3 +186,28 @@ func TestTheCIDKeyedCorpusFollowsTheSameRule(t *testing.T) {
 			"(skipped: %q, failed: %q)", rec.skipped, rec.failed)
 	}
 }
+
+// The CFF2 and name-keyed faces are the same rule again, with a marker of their
+// own: a corpus helper that skipped where it should fail would let a run that
+// fetched none of them report their tests as passing.
+func TestTheCFFCorpusFollowsTheSameRule(t *testing.T) {
+	t.Setenv(CFFEnv, filepath.Join(t.TempDir(), "no-such-directory"))
+	rec := run(func(tb TB) { CFFDir(tb) })
+	if rec.skipped != "" {
+		t.Errorf("a CFF_FONTS that is set and wrong skipped: %s", rec.skipped)
+	}
+	if !strings.Contains(rec.failed, CFFEnv) {
+		t.Errorf("the failure does not name %s: %q", CFFEnv, rec.failed)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, cff.marker), []byte("not a font"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(CFFEnv, dir)
+	rec = run(func(tb TB) { CFFFile(tb, "NotoSansJP-VF.otf") })
+	if rec.skipped != "" || !strings.Contains(rec.failed, "NotoSansJP-VF.otf") {
+		t.Errorf("a face missing from a present corpus skipped or said nothing "+
+			"(skipped: %q, failed: %q)", rec.skipped, rec.failed)
+	}
+}

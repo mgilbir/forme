@@ -392,13 +392,14 @@ type userFeature struct {
 //
 //  1. The features on by default, and the ones a script requires. Those are
 //     the model's, asked for before this list (see buildPlan).
-//  2. An @font-face rule's font-feature-settings descriptor. This engine does
-//     not read the descriptor — layout reports it where it is written — so
-//     there is nothing at this step.
+//  2. An @font-face rule's font-feature-settings descriptor: the settings the
+//     face was loaded with (see Face.WithFeatureSettings), which reach this
+//     value as faceOff and faceOn. No tag is in both, so the order between
+//     the two decides nothing.
 //  3. The font-variant properties and font-kerning: the ligatures and
 //     contextual alternates font-variant-ligatures turns off, the kerning
-//     font-kerning: none turns off, and what caps, numeric, east-asian and
-//     position turn on.
+//     font-kerning: none turns off or font-kerning: normal turns on, and
+//     what caps, numeric, east-asian and position turn on.
 //  4. The properties other than those two that turn features off: CSS Text
 //     §8.2's letter-spacing rule, which turns the optional ligatures off. It
 //     shares NoOptionalLigatures with step 3, and both only turn features
@@ -419,6 +420,12 @@ type userFeature struct {
 // is not for it.
 func (f Features) requested(extra []string) []userFeature {
 	var out []userFeature
+	for _, tag := range splitTags(f.faceOff) {
+		out = append(out, userFeature{tag, false})
+	}
+	for _, tag := range splitTags(f.faceOn) {
+		out = append(out, userFeature{tag, true})
+	}
 	for _, tag := range [...]string{"liga", "clig", "dlig", "hlig", "calt"} {
 		if f.suppresses(tag) {
 			out = append(out, userFeature{tag, false})
@@ -426,6 +433,8 @@ func (f Features) requested(extra []string) []userFeature {
 	}
 	if f.NoKerning {
 		out = append(out, userFeature{"kern", false})
+	} else if f.KerningOn {
+		out = append(out, userFeature{"kern", true})
 	}
 	for _, tag := range f.adds() {
 		out = append(out, userFeature{tag, true})

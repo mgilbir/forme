@@ -115,6 +115,13 @@ func oracleReleaseProblems(pin pinnedOracle, path string, header map[string][]st
 	case filepath.Base(filepath.Dir(path)) == "varinstance":
 		want["fonttools"] = pin.fonttools
 	}
+	// A file that says fontTools answered it is held to the pinned fontTools
+	// wherever it is: the CFF oracles here ask fontTools' subsetter and
+	// instancer, and those answers move with its release as HarfBuzz's move
+	// with HarfBuzz's.
+	if _, says := header["fonttools"]; says {
+		want["fonttools"] = pin.fonttools
+	}
 	var problems []string
 	for _, k := range slices.Sorted(maps.Keys(want)) {
 		v := want[k]
@@ -172,6 +179,7 @@ func TestTheOraclePinRefusesAnotherRelease(t *testing.T) {
 		"two HarfBuzzes": func(h map[string][]string) {
 			h["harfbuzz"] = []string{pin.harfbuzz, "14.4.0"}
 		},
+		"another fontTools": func(h map[string][]string) { h["fonttools"] = []string{"4.60.0"} },
 	} {
 		h := maps.Clone(good)
 		edit(h)

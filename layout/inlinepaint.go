@@ -364,10 +364,11 @@ func (d *inlineDecor) finish(parent *Fragment) {
 		startsRight := beginsAtRight(b)
 		keepLeft := (!startsRight && i == c.start) || (startsRight && i == c.end)
 		keepRight := (startsRight && i == c.start) || (!startsRight && i == c.end)
-		if !keepLeft || noLeft {
+		slicedLeft, slicedRight := !keepLeft || noLeft, !keepRight || noRight
+		if slicedLeft {
 			margin.Left, border.Left, padding.Left = 0, 0, 0
 		}
-		if !keepRight || noRight {
+		if slicedRight {
 			margin.Right, border.Right, padding.Right = 0, 0, 0
 		}
 		// §8.3: margin-top and margin-bottom do not apply to a non-replaced
@@ -388,7 +389,7 @@ func (d *inlineDecor) finish(parent *Fragment) {
 		x := p.left.Add(margin.Left)
 		frag := &Fragment{
 			Box: b, Margin: margin, Border: border, Padding: padding,
-			Outline: d.l.outlineWidth(b),
+			Outline: d.l.outlineWidth(b), outlineOffset: d.l.outlineOffsetOf(b),
 			BorderRect: Rect{
 				X: x,
 				Y: p.baseline.Sub(st.Ascent).Sub(padding.Top).Sub(border.Top),
@@ -402,6 +403,9 @@ func (d *inlineDecor) finish(parent *Fragment) {
 			// background image is placed against the rectangle the box is drawn
 			// at and this is the only rectangle it has.
 			Offset: d.l.inlineOffsets[b],
+			// And its corners, which the same model rounds only at the ends of
+			// the box: see radius.go.
+			slicedLeft: slicedLeft, slicedRight: slicedRight,
 		}
 		if b.areaLink() != nil {
 			// The link's area on this line, which is this fragment's border
@@ -410,19 +414,20 @@ func (d *inlineDecor) finish(parent *Fragment) {
 			// absolutise. See LineFragment.links.
 			lf := *frag
 			parent.Lines[p.line].links = append(parent.Lines[p.line].links, &lf)
-			if !d.l.inlinePaints(b) && !b.Position.positioned() {
+			if !d.l.inlinePaints(b) && !containsAbsolutes(b) {
 				// In the chain for its link and for nothing else: it has no
 				// ink, and a Boxes entry is ink to everything that reads one.
 				continue
 			}
 		}
 		parent.Lines[p.line].Boxes = append(parent.Lines[p.line].Boxes, frag)
-		if b.Position.positioned() {
+		if containsAbsolutes(b) {
 			// Recorded for §10.1: an absolutely positioned descendant of this
 			// box is placed against the bounding box of its first and last
-			// fragments. They are in the line's coordinates here and are made
-			// absolute with everything else — see absolutise — and the
-			// candidates that read them are placed after that.
+			// fragments, and so is a fixed one of a box that containsFixed. They
+			// are in the line's coordinates here and are made absolute with
+			// everything else — see absolutise — and the candidates that read
+			// them are placed after that.
 			//
 			// Through the journal, because a pass that is thrown away has to take
 			// them back: an item laid out to be measured recorded its fragments
@@ -591,11 +596,13 @@ func (l *layouter) paintedInlines(b *Box) []*Box {
 			if cur.contentsLink != nil {
 				out = append(out[:len(out):len(out)], cur)
 			}
-		case l.inlinePaints(cur) || cur.Position.positioned() || cur.areaLink() != nil:
+		case l.inlinePaints(cur) || containsAbsolutes(cur) || cur.areaLink() != nil:
 			// A *positioned* inline box is kept whether or not it draws
 			// anything, because §10.1 forms the containing block of an
 			// absolutely positioned descendant from the padding boxes of this
-			// box's own fragments — so the fragments have to exist. It paints
+			// box's own fragments — so the fragments have to exist. So is one
+			// with a filter, or a will-change asking for one, which is a
+			// containing block as well (see containsAbsolutes). It paints
 			// nothing extra: a fragment with no background and no border draws
 			// nothing, exactly as it did when there was no fragment at all.
 			//

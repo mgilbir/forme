@@ -133,6 +133,17 @@ var properties = map[string]property{
 	"outline-width": {false, "medium"},
 	"outline-style": {false, "none"},
 	"outline-color": {false, "invert"},
+	// css-ui-4 §3.5: how far outside the border edge the outline is drawn, and
+	// inside it when negative. See layout's joinedOutline.
+	"outline-offset": {false, "0"},
+
+	// CSS Backgrounds 3 §4.1: the four corners, each a horizontal and a
+	// vertical radius of a quarter ellipse. Neither inherits, and zero is a
+	// square corner. See layout/radius.go for what they round.
+	"border-top-left-radius":     {false, "0"},
+	"border-top-right-radius":    {false, "0"},
+	"border-bottom-right-radius": {false, "0"},
+	"border-bottom-left-radius":  {false, "0"},
 
 	"border-top-color":    {false, "currentcolor"},
 	"border-right-color":  {false, "currentcolor"},
@@ -141,11 +152,18 @@ var properties = map[string]property{
 
 	// Text and fonts. Most of these inherit, which is the whole reason
 	// inheritance exists: setting a font on <body> has to reach the text.
-	"color":          {true, "black"},
-	"font-family":    {true, "serif"},
-	"font-size":      {true, "medium"},
-	"font-style":     {true, "normal"},
-	"font-weight":    {true, "normal"},
+	"color":       {true, "black"},
+	"font-family": {true, "serif"},
+	"font-size":   {true, "medium"},
+	"font-style":  {true, "normal"},
+	"font-weight": {true, "normal"},
+	// CSS Fonts 4 §2.3: how condensed or expanded a face to choose, as a
+	// percentage of its normal width. It inherits like the rest of the font,
+	// and font-stretch is its legacy name (see the shorthands table). Layout
+	// chooses a face by it — §5.2 tries it before the style and the weight —
+	// and a variable face's 'wdth' axis is set from it; nothing geometrically
+	// stretches a face that has no width to offer, which §2.3 forbids.
+	"font-width":     {true, "normal"},
 	"line-height":    {true, "normal"},
 	"letter-spacing": {true, "normal"},
 	"word-spacing":   {true, "normal"},
@@ -170,8 +188,16 @@ var properties = map[string]property{
 	// ask for; "none" turns justification off and is acted on; the rest are
 	// read as auto and reported, because a page justified the wrong way is a
 	// page that looks right and is not.
-	"text-justify":   {true, "auto"},
-	"text-indent":    {true, "0"},
+	"text-justify": {true, "auto"},
+	"text-indent":  {true, "0"},
+	// MathML Core §4.3–§4.5: whether a formula is set as display
+	// mathematics or kept compact, which of two heights a superscript rises
+	// to, and how many levels of script deep a part of a formula is. All
+	// three inherit, and math-depth computes to an integer (see mathml.go),
+	// which is what "font-size: math" scales by.
+	"math-style":     {true, "normal"},
+	"math-shift":     {true, "normal"},
+	"math-depth":     {true, "0"},
 	"text-transform": {true, "none"},
 	// CSS Text 4 §8.2. Inherited, and its initial value is "normal" — which is
 	// not "do nothing": it trims a full-width closing bracket at the end of a
@@ -250,6 +276,12 @@ var properties = map[string]property{
 	// font's own rules, applied as the font states them.
 	"font-variant-ligatures": {true, "normal"},
 	"font-feature-settings":  {true, "normal"},
+	// CSS Fonts 4 §8.2 and §8.1: the axes of a variable face set by tag, and
+	// whether its optical size axis follows the font size. Both inherit, and
+	// both are the last of §7.2's steps that place a variable face in its
+	// design space — see layout/fontinstance.go, which applies them.
+	"font-variation-settings": {true, "normal"},
+	"font-optical-sizing":     {true, "auto"},
 	// CSS Fonts 4 §6.6. It inherits like the rest of the family, and its
 	// initial value is "normal" — the letters the text is written with.
 	//
@@ -333,6 +365,20 @@ var properties = map[string]property{
 	"text-fit":              {true, "none"},
 	"text-decoration-line":  {false, "none"},
 	"text-decoration-color": {false, "currentcolor"},
+	// CSS Text Decoration 3 §4. It inherits, unlike a decoration: a <span>'s
+	// shadow replaces its paragraph's rather than adding to it. See
+	// layout/textshadow.go.
+	"text-shadow": {true, "none"},
+	// CSS Text Decoration 3 §3: emphasis marks. All three inherit, which is
+	// what sets them apart from the decorations beside them — a <span> with
+	// "text-emphasis: none" inside an emphasised paragraph has no marks, where
+	// a span cannot take its paragraph's underline off. The position is a
+	// property of its own and not part of the shorthand, because it is a fact
+	// about the language rather than about the emphasis. See
+	// layout/emphasis.go.
+	"text-emphasis-style":    {true, "none"},
+	"text-emphasis-color":    {true, "currentcolor"},
+	"text-emphasis-position": {true, "over right"},
 	// CSS Text Decoration 4 §2.2 and §2.3, and the two of them do not inherit
 	// the same way: the thickness is part of the decoration, which reaches a
 	// descendant by being *drawn across* it rather than by being inherited,
@@ -349,14 +395,19 @@ var properties = map[string]property{
 	// lines stack, which way each character faces on one, and whether a short run
 	// is set across the line. Two of them inherit — a rule on the root turns the
 	// whole document, which is how every document that uses them is written — and
-	// text-combine-upright does not, because it is about one run and not about a
-	// paragraph.
+	// so does text-combine-upright, whose §9.1 table says "Inherited: yes". It
+	// was registered as not inheriting, on the reading that a composition is
+	// about one run; but §9.1.1's run rules are written *because* it inherits —
+	// "<tcy>12<span>34</span></tcy>" combines nothing, the 34 inheriting "all"
+	// and making one sequence with the 12 — and a span inside a composing
+	// element was being set as though nothing had been asked of it.
 	//
-	// Registering them is not a claim that all their values are laid out. Only
-	// "vertical-rl" is, and only for boxes turnable() accepts; everything else is
-	// reported per box rather than per stylesheet, because whether the page is
-	// wrong is a question about the box and not about the declaration. See
-	// layout/writingmode.go for the whole of that argument.
+	// Registering them is not a claim that all their values are laid out, and
+	// not all of them are: a box the turn will not take, and
+	// "text-combine-upright: digits", are reported per box rather than per
+	// stylesheet, because whether the page is wrong is a question about the box
+	// and not about the declaration. See layout/writingmode.go for the whole of
+	// that argument.
 	// CSS Multi-column Layout 1 §3 and §4. None of them inherits: a multicol
 	// container's columns are its own, and a block inside one is not itself
 	// divided into columns because its parent was.
@@ -465,7 +516,7 @@ var properties = map[string]property{
 
 	"writing-mode":         {true, "horizontal-tb"},
 	"text-orientation":     {true, "mixed"},
-	"text-combine-upright": {false, "none"},
+	"text-combine-upright": {true, "none"},
 	"unicode-bidi":         {false, "normal"},
 
 	// Generated content. It does not inherit — a ::before on a parent must not
@@ -533,6 +584,15 @@ var properties = map[string]property{
 	// — the value has to travel by the keyword rather than by default.
 	"clip":    {false, "auto"},
 	"opacity": {false, "1"},
+	// Filter Effects 1 §5. It does not inherit, and "none" filters nothing. See
+	// layout/filter.go for which functions are applied.
+	"filter": {false, "none"},
+	// css-will-change 1 §3. It does not inherit. Layout reads it for what it
+	// does to a page: naming a property some value of which would make the box
+	// a stacking context or a containing block makes it one — "will-change:
+	// filter" the stacking context and the containing block a filter does. See
+	// layout/willchange.go.
+	"will-change": {false, "auto"},
 	// CSS Images 3 §5.5 and §5.6. They are about a replaced element's *content*
 	// rather than about its box: the box is sized by the rules above, and these
 	// two say what the picture inside it does with the rectangle it was given
@@ -600,7 +660,10 @@ var shorthands = map[string]shorthand{
 		"border-bottom-style", "border-left-style"),
 	"border-color": boxShorthand("border-top-color", "border-right-color",
 		"border-bottom-color", "border-left-color"),
-	"overflow":  boxShorthand("overflow-x", "overflow-y"),
+	"overflow": boxShorthand("overflow-x", "overflow-y"),
+	// CSS Backgrounds 3 §4.1. See borderRadiusShorthand.
+	"border-radius": {borderRadiusShorthand, []string{"border-top-left-radius",
+		"border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"}},
 	"flex":      {flexShorthand, []string{"flex-grow", "flex-shrink", "flex-basis"}},
 	"flex-flow": {flexFlowShorthand, []string{"flex-direction", "flex-wrap"}},
 	// "gap" is Box Alignment §8.3, and it is the two-slot box shorthand: one
@@ -649,10 +712,10 @@ var shorthands = map[string]shorthand{
 	"list-style": {listStyleShorthand,
 		[]string{"list-style-type", "list-style-position", "list-style-image"}},
 	"font": {fontShorthand, []string{
-		"font-style", "font-weight", "font-size", "font-family", "line-height",
+		"font-style", "font-weight", "font-width", "font-size", "font-family", "line-height",
 		"font-variant-caps", "font-variant-ligatures", "font-variant-numeric",
 		"font-variant-east-asian", "font-variant-position", "font-kerning",
-		"font-feature-settings"}},
+		"font-feature-settings", "font-optical-sizing", "font-variation-settings"}},
 
 	// CSS Fonts 4 §6.10, for the five longhands this engine has. See
 	// fontVariantShorthand for why the property is expanded rather than read.
@@ -662,6 +725,10 @@ var shorthands = map[string]shorthand{
 	"text-decoration": {textDecorationShorthand,
 		[]string{"text-decoration-line", "text-decoration-color",
 			"text-decoration-thickness"}},
+	// CSS Text Decoration 3 §3.3. The position is not among its longhands:
+	// "text-emphasis: dot" leaves text-emphasis-position as it was.
+	"text-emphasis": {textEmphasisShorthand,
+		[]string{"text-emphasis-style", "text-emphasis-color"}},
 
 	// CSS Text 4 makes white-space a shorthand, and that is not a reshuffle for
 	// its own sake: "text-wrap: nowrap" and "white-space: nowrap" set the same
@@ -683,6 +750,9 @@ var shorthands = map[string]shorthand{
 	// could not tell which was written later (audit C111). The fix is the one
 	// white-space and text-align already had.
 	"word-wrap": {aliasOf("overflow-wrap"), []string{"overflow-wrap"}},
+	// CSS Fonts 4 §2.3.1: font-stretch is "a legacy name alias" of
+	// font-width, for the reason word-wrap is one of overflow-wrap's.
+	"font-stretch": {aliasOf("font-width"), []string{"font-width"}},
 
 	// CSS Grid 2 §8.4's three placement shorthands. See gridLineShorthand.
 	"grid-row":    gridLineShorthand("grid-row-start", "grid-row-end"),

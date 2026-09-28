@@ -44,16 +44,20 @@ import (
 //
 // The three implementations do not agree to the last font unit and cannot: each
 // reaches the weight of a tuple by its own arithmetic. HarfBuzz quantizes the
-// location to the fourteen fractional bits the format stores; fontTools' full
-// instancer routes a pinned axis through its partial-instancing solver, which
-// multiplies where a direct computation divides once.
+// location to the fourteen fractional bits the format stores, rounding it twice
+// on the way (f2Dot14Location), and this package reaches the location exactly
+// as HarfBuzz does; fontTools' full instancer quantizes it once, and can land a
+// 2.14 unit away — and routes a pinned axis through its partial-instancing
+// solver, which multiplies where a direct computation divides once.
 //
 // So each expectation file carries a measurement of that floor, made by the
 // oracle about itself: 'noise-sampled' is how many values fontTools' instancer
-// differs from fontTools' *own* supportScalar and IUP over the very glyphs the
-// file lists. This test allows this package no more disagreement than that, and
-// none of it by more than one unit — and where the floor is zero, which is five
-// of the eight cases, it demands exact agreement on every number.
+// differs from fontTools' *own* supportScalar and IUP, applied at the location
+// HarfBuzz reaches, over the very glyphs the file lists; and 'normalized' is
+// that location, which this package must reach to the bit. This test allows
+// this package no more disagreement than that, and none of it by more than one
+// unit — and where the floor is zero, which is six of the eight cases, it
+// demands exact agreement on every number.
 //
 // # Where HarfBuzz is followed over fontTools
 //
@@ -103,18 +107,19 @@ var varInstanceCases = []struct {
 	// Google's faces.
 	{name: "noto-thin"},
 	{name: "noto-bold", allow: 61,
-		why: "wght 700 normalizes to 0.61000732, which fontTools' instancer reaches\n" +
-			"through its solver and this package by one division. The file's\n" +
-			"noise-sampled header measures the same 61 values, so this package is\n" +
-			"exactly as far from the instancer as fontTools' own direct computation."},
-	{name: "noto-thin-condensed", allow: 1199,
-		why: "two axes off their defaults at once, which is where the solver's\n" +
-			"arithmetic differs most; the file's noise-sampled header measures the\n" +
-			"same 1199 values."},
+		why: "wght 700 normalizes, through avar, to 9995/16384 as HarfBuzz reaches it\n" +
+			"and so as this package does, and to 9994/16384 as fontTools' instancer\n" +
+			"rounds it. The file's noise-sampled header measures the same 61 values\n" +
+			"between the instancer and fontTools' own arithmetic at HarfBuzz's\n" +
+			"location; at the instancer's own, the two agree on every point."},
+	// Two axes off their defaults at once. This allowed 1199 values while
+	// this package read the location unquantized: the instancer and HarfBuzz
+	// both hold it to 2.14, and land on the same 2.14 value here.
+	{name: "noto-thin-condensed"},
 	{name: "noto-bold-nohvar", allow: 62,
-		why: "the same location as noto-bold, so the same solver difference, plus\n" +
-			"the advances — which here come from the phantom points, HVAR having\n" +
-			"been taken out of the font.",
+		why: "the same location as noto-bold, so the same difference of location,\n" +
+			"plus the advances — which here come from the phantom points, HVAR\n" +
+			"having been taken out of the font.",
 		// Two composites that take their metrics from a component
 		// (USE_MY_METRICS). HarfBuzz gives them the component's phantom
 		// points and fontTools' instancer their own, which gvar moved
@@ -126,9 +131,9 @@ var varInstanceCases = []struct {
 		}},
 	{name: "arabic-black"},
 	{name: "tibetan-light"},
-	{name: "khmer-light-condensed", allow: 2,
-		why: "two axes off their defaults; the file's noise-sampled header measures\n" +
-			"the same two values."},
+	// Two axes off their defaults, and allowed two values while the location
+	// was read unquantized, as noto-thin-condensed was.
+	{name: "khmer-light-condensed"},
 }
 
 // harfBuzzOverFontTools is one value where fontTools, whose answer an

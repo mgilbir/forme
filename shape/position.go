@@ -523,16 +523,26 @@ func valueYAdvance(rec []byte, format int) int {
 }
 
 // readAnchor reads an anchor table. All three formats begin with the same two
-// coordinates; the later formats add hinting information this ignores, which
-// affects rendering at small sizes and not where the anchor is.
-func readAnchor(base []byte, off int) (anchor, bool) {
+// coordinates. Format 2 adds a contour point, which is hinting and is ignored;
+// format 3 adds a Device table for each coordinate, which is hinting too
+// unless it is a VariationIndex, and then says how the anchor moves across a
+// variable font's design space — see gposvar.go. Its offsets are from the
+// anchor table itself.
+func readAnchor(base []byte, off int, dv *deviceDeltas) (anchor, bool) {
 	if off <= 0 || off+6 > len(base) {
 		return anchor{}, false
 	}
 	a := base[off:]
 	switch font.Be16(a, 0) {
-	case 1, 2, 3:
+	case 1, 2:
 		return anchor{x: signed16(font.Be16(a, 2)), y: signed16(font.Be16(a, 4))}, true
+	case 3:
+		out := anchor{x: signed16(font.Be16(a, 2)), y: signed16(font.Be16(a, 4))}
+		if dv != nil && len(a) >= 10 {
+			out.x += dv.at(a, font.Be16(a, 6))
+			out.y += dv.at(a, font.Be16(a, 8))
+		}
+		return out, true
 	}
 	return anchor{}, false
 }

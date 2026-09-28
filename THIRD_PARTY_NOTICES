@@ -464,6 +464,7 @@ hyph-utf8 hyphenation patterns
 
 Files:   paragraph/dutchhyphens.go
          paragraph/englishhyphens.go
+         paragraph/germanhyphens.go
          paragraph/hungarianhyphens.go
          paragraph/pinyinhyphens.go
 Source:  https://github.com/hyphenation/tex-hyphen, hyph-utf8/tex/generic/hyph-utf8/patterns/tex
@@ -1066,6 +1067,74 @@ Quoted whole from ${MPL}:
          the notices in the Source Code files of the Original Code. You should
          use the text of this Exhibit A rather than the text found in the
          Original Code Source Code for Your Modifications.]
+
+German, reformed spelling, hyph-de-1996.tex, under the MIT licence, whose
+text the file quotes. Its header, whole:
+
+Quoted from ${HYPHEN_DIR}/hyph-de-1996.tex:
+
+    title: German Hyphenation Patterns (Reformed Orthography, 2006)
+
+    notice: TeX-Trennmuster für die reformierte (2006) deutsche Rechtschreibung
+
+    version: 2024-02-28
+
+    authors:
+      -
+        name:    Deutschsprachige Trennmustermannschaft
+        contact: trennmuster@dante.de
+
+    copyright: Copyright (c) 2013-2024
+               Stephan Hennig, Werner Lemberg, Günter Milde,
+               Sander van Geloven, Georg Pfeiffer, Gisbert W. Selke,
+               Tobias Wendorf, Keno Wehr
+
+    licence:
+        name: MIT
+        url:  https://opensource.org/licenses/mit-license.php
+        text: >
+              Permission is hereby granted, free of charge, to any person
+              obtaining a copy of this software and associated documentation
+              files (the “Software”), to deal in the Software without
+              restriction, including without limitation the rights to use,
+              copy, modify, merge, publish, distribute, sublicense, and/or
+              sell copies of the Software, and to permit persons to whom the
+              Software is furnished to do so, subject to the following
+              conditions:
+
+              The above copyright notice and this permission notice shall be
+              included in all copies or substantial portions of the Software.
+
+              THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND,
+              EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+              OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+              NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+              HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+              WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+              FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+              OTHER DEALINGS IN THE SOFTWARE.
+
+    source: https://repo.or.cz/w/wortliste.git?a=commit;h=304aaa2188a75e57afe36bad0443d90a9c715b8e
+
+    language:
+        name: German, reformed spelling
+        tag:  de-1996
+
+    hyphenmins:
+        generation:
+            left:  2
+            right: 2
+        typesetting:
+            left:  2
+            right: 2
+
+    texlive:
+        encoding: ec
+        babelname: ngerman
+        use_old_patterns_comment: Kept for the sake of backward compatibility, but newer and better patterns by WL are available.
+        legacy_patterns: dehyphn.tex
+        message: German hyphenation patterns (reformed orthography)
+        package: german
 
 Mandarin pinyin, hyph-zh-latn-pinyin.tex, under the MIT licence:
 
@@ -1942,6 +2011,48 @@ listed here because every font the repository keeps is, and for where it came
 from; no third party's work is in it.
 
 ============================================================================
+Font built for the CFF2 oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/CFF2Blend.otf
+Source:  testdata/harfbuzz/cff2_fixture.py, in this repository, which
+         writes its CFF2 table byte by byte and builds the rest with fontTools
+Licence: the licence in LICENSE; it is not anyone else's work
+
+A small variable face made from nothing by the script named above, a glyph for
+each thing a CFF2 font can ask of a reader and of an instancer that the
+published ones do not. It is listed here because every font the repository
+keeps is, and for where it came from; no third party's work is in it.
+
+============================================================================
+Font built for the MATH table oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/MathTable.ttf
+Source:  testdata/harfbuzz/mathtable_fixture.py, in this repository, which
+         builds it with fontTools
+Licence: the licence in LICENSE; it is not anyone else's work
+
+A small face made from nothing by the script named above, with every part of
+an OpenType MATH table in it that no published face at hand states. It is
+listed here because every font the repository keeps is, and for where it came
+from; no third party's work is in it.
+
+============================================================================
+Font built for the mirrored form ('rtlm') oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/MirroredForms.ttf
+Source:  testdata/harfbuzz/mirroredform_fixture.py, in this repository, which
+         builds it with fontTools
+Licence: the licence in LICENSE; it is not anyone else's work
+
+A small face made from nothing by the script named above, stating an 'rtlm'
+feature in each way what it makes of a glyph depends on. It is listed here
+because every font the repository keeps is, and for where it came from; no
+third party's work is in it.
+
+============================================================================
 Fonts built for the variable vertical metrics and vertical kerning oracle
 ============================================================================
 
@@ -1960,22 +2071,81 @@ repository keeps is, and for where they came from; no third party's work is
 in them.
 
 ============================================================================
+Fonts built for the instance metrics and positioning oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/VariedLayout.ttf
+         testdata/harfbuzz/fonts/VariedLayoutTypo.ttf
+         testdata/harfbuzz/fonts/VariedAxes.ttf
+Source:  testdata/harfbuzz/variedlayout_fixture.py, in this repository,
+         which builds them with fontTools
+Licence: the licence in LICENSE; they are not anyone else's work
+
+Three small faces made from nothing by the script named above: a variable face
+stating every MVAR value tag and a VariationIndex device on every kind of GPOS
+record, with USE_TYPO_METRICS clear and set, and one with five axes and two
+named instances for layout's tests of where CSS sets a variable face. They
+are listed here because
+every font the repository keeps is, and for where they came from; no third
+party's work is in them.
+
+============================================================================
 Fonts built for the colour ink oracle
 ============================================================================
 
 Files:   testdata/harfbuzz/fonts/ColourInk.ttf
          testdata/harfbuzz/fonts/ColourInkStatic.ttf
          testdata/harfbuzz/fonts/BitmapInk.ttf
+         testdata/harfbuzz/fonts/SbixInk.ttf
+         testdata/harfbuzz/fonts/SbixInkLarge.ttf
+         testdata/harfbuzz/fonts/SbixInkRejected.ttf
+         testdata/harfbuzz/fonts/SbixInkOps.ttf
+         testdata/harfbuzz/fonts/SbixInkOpsEdge.ttf
 Source:  testdata/harfbuzz/colrink_fixture.py, in this repository, which
          builds them with fontTools
 Licence: the licence in LICENSE; they are not anyone else's work
 
-Three small faces made from nothing by the script named above: one painting
-with every paint format a COLR table has, variable and not, and one whose
+Small faces made from nothing by the script named above: one painting
+with every paint format a COLR table has, variable and not, one whose
 CBLC and CBDT tables
-say each thing a bitmap face's extents are read from, its images
-placeholders. They are listed here because every font the repository keeps
+say each thing a bitmap face's extents are read from, and sbix faces that do
+the same for that table and for what HarfBuzz's sanitizer refuses in it, their
+images placeholders. They are listed here because every font the repository keeps
 is, and for where they came from; no third party's work is in them.
+
+============================================================================
+Fonts built for the matched components oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/PointMatch.ttf
+         testdata/harfbuzz/fonts/PointMatchPhantom.ttf
+Source:  testdata/harfbuzz/pointmatch_fixture.py, in this repository, which
+         builds them with fontTools
+Licence: the licence in LICENSE; they are not anyone else's work
+
+Two small variable faces made from nothing by the script named above, whose
+composite glyphs place components by matching points. They are listed here
+because every font the repository keeps is, and for where they came from; no
+third party's work is in them.
+
+============================================================================
+Fonts built for the variable composites oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/VarComposite.ttf
+         testdata/harfbuzz/fonts/VarCompositeDeep64.ttf
+         testdata/harfbuzz/fonts/VarCompositeDeep65.ttf
+         testdata/harfbuzz/fonts/VarCompositeBroken.ttf
+         testdata/harfbuzz/fonts/VarCompositeStatic.ttf
+         testdata/harfbuzz/fonts/VarCompositeCFF.otf
+Source:  testdata/harfbuzz/varc_fixture.py, in this repository, which
+         builds them with fontTools, the last from CFFInk.otf above
+Licence: the licence in LICENSE; they are not anyone else's work
+
+Small faces made from nothing by the script named above, whose VARC tables
+compose glyphs from others, and one that adds such a table to the CFF ink
+face. They are listed here because every font the repository keeps is, and
+for where they came from; no third party's work is in them.
 
 ============================================================================
 Font built for the ignorable characters corpus

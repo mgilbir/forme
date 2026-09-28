@@ -31,7 +31,8 @@ import (
 //
 // The ink of a glyph is read from the glyph header of a TrueType face, by
 // running the charstring of a CFF one (cffink.go), by painting a colour glyph
-// (colrink.go), and from a colour bitmap's metrics (bitmapink.go). Where a
+// (colrink.go), and from a bitmap's size or metrics (sbixink.go,
+// bitmapink.go). Where a
 // glyph's ink cannot be had at all, the marks' advances are cancelled and they
 // are left where they are, which is what HarfBuzz itself does for a glyph
 // whose extents it cannot get.
@@ -142,6 +143,30 @@ func fallbackClass(r rune, class uint8) uint8 {
 	return class
 }
 
+// GlyphExtents is a glyph's ink box in font units, as HarfBuzz's
+// hb_font_get_glyph_extents answers it: how far right of the pen the ink
+// begins, how far above the baseline it reaches, how wide it is, and its
+// height — negative, since it is measured down from the top. gid is a glyph
+// index, as Glyph.GID is.
+//
+// It is InkExtent's per-glyph answer and it carries the horizontal half that
+// InkExtent leaves to the advance: where a glyph's ink sits within its advance
+// and how far past either end of it it reaches. A full-width closing bracket is
+// a mark in the left quarter of an em and blank for the rest; its advance says
+// nothing about which quarter.
+//
+// ok is false where the face cannot say: a standard face, which has no glyph
+// program and states its boxes by character name, a glyph index the face does
+// not have, and the cases glyphExtents gives. An empty glyph answers zeros and
+// true: it is known to put no ink anywhere.
+func (f *Face) GlyphExtents(gid int) (xBearing, yBearing, width, height int, ok bool) {
+	e, ok := f.glyphExtents(gid)
+	if !ok {
+		return 0, 0, 0, 0, false
+	}
+	return e.xBearing, e.yBearing, e.width, e.height, true
+}
+
 // extents is a glyph's ink in font units, as HarfBuzz measures it: the left
 // side bearing, the top of the ink, its width, and its height — negative,
 // since HarfBuzz measures down from the top.
@@ -151,14 +176,21 @@ type extents struct {
 
 // glyphExtents is a glyph's ink, where the face can say.
 //
-// A colour bitmap glyph's is what its metrics state, and a colour glyph's the
-// box it paints, which HarfBuzz asks before the outline, in that order
-// (bitmapink.go, colrink.go). For a TrueType face it is the glyph header's box with
+// A bitmap glyph's is the box its sbix image covers or its CBDT metrics state,
+// a colour glyph's the box it paints, and in a face with a VARC table every
+// glyph's the box VARC draws it in, which HarfBuzz asks before the outline,
+// in that order (sbixink.go, bitmapink.go, colrink.go, varc.go). For a
+// TrueType face it is the glyph header's box with
 // the left side bearing hmtx states, which is how HarfBuzz reads a TrueType
 // glyph at the instance a face was cut at. An empty glyph has no ink and says
 // so. For a CFF face it is the box the glyph's charstring draws, measured as
 // HarfBuzz measures it (see cffink.go). A face with neither cannot answer.
 func (f *Face) glyphExtents(gid int) (extents, bool) {
+	if f.sbix != nil {
+		if e, ok := f.sbix.extents(gid); ok {
+			return e, true
+		}
+	}
 	if f.bitmap != nil {
 		if e, ok := f.bitmap.extents(gid); ok {
 			return e, true
@@ -169,26 +201,16 @@ func (f *Face) glyphExtents(gid int) (extents, bool) {
 			return e, true
 		}
 	}
-	if f.ink != nil {
-		return f.ink.extents(gid)
+	if f.varc != nil {
+		if gid < 0 {
+			return extents{}, false
+		}
+		return f.varc.extents(gid)
 	}
-	if f.prog == nil || f.prog.GlyphBBox == nil || gid < 0 || gid >= len(f.prog.GlyphBBox) {
-		return extents{}, false
+	if e, ok := f.varcInk[gid]; ok {
+		return e, true
 	}
-	if !f.prog.GlyphNonEmpty[gid] {
-		return extents{}, true
-	}
-	b := f.prog.GlyphBBox[gid]
-	lsb := min(b[0], b[2])
-	if v, ok := f.leftSideBearing(gid); ok {
-		lsb = v
-	}
-	return extents{
-		xBearing: lsb,
-		yBearing: max(b[1], b[3]),
-		width:    max(b[0], b[2]) - min(b[0], b[2]),
-		height:   min(b[1], b[3]) - max(b[1], b[3]),
-	}, true
+	return f.outlineExtents(gid)
 }
 
 // leftSideBearing is a glyph's left side bearing as hmtx states it.

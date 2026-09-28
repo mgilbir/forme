@@ -197,7 +197,7 @@ func (l *layouter) clampedChildren(b *Box, frag *Fragment, width style.Unit,
 		// caught them apart.
 		c.ellipsis = l.br.MeasureSpacedInContext(face, blockEllipsis, b.FontSize,
 			paragraph.TextSpacing{},
-			shaping{ContextKerns: true, Upright: l.uprightText(b), Off: l.featuresFor(b)})
+			shaping{ContextKerns: true, Upright: l.uprightRun(b, blockEllipsis), Off: l.featuresFor(b)})
 	}
 	l.clamps = append(l.clamps, c)
 	height, top, bottom, placed = l.children(b, frag, width, topOpen, bottomOpen, inner)

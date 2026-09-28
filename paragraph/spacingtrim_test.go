@@ -11,26 +11,227 @@ func TestSpacingTrimOfReadsTheValue(t *testing.T) {
 	for _, tc := range []struct {
 		value     string
 		trims     bool
+		start     OpeningTrim
 		unhandled string
 		what      string
 	}{
-		{"normal", true, "", "the initial value trims at the end of a line"},
-		{"space-all", false, "", "space-all keeps every full-width form"},
-		{"space-first", true, "space-first",
-			"space-first is normal at the end of a line and differs at the start"},
-		{"trim-start", true, "trim-start", "and so is trim-start"},
-		{"NORMAL", true, "", "values are matched case-insensitively"},
-		{"  space-all  ", false, "", "and with the space around them ignored"},
-		{"wibble", true, "",
+		{"normal", true, OpeningTrimNone, "", "the initial value trims at the end of a line"},
+		{"space-all", false, OpeningTrimNone, "", "space-all keeps every full-width form"},
+		{"space-first", true, OpeningTrimAfterSoftWrap, "",
+			"space-first trims at the start of a line a soft wrap began"},
+		{"trim-start", true, OpeningTrimEveryLine, "", "trim-start at the start of every line"},
+		{"trim-both", true, OpeningTrimEveryLine, "trim-both",
+			"trim-both at the start of every line, and its end clause is named"},
+		{"trim-all", true, OpeningTrimNone, "trim-all", "trim-all is named and set as normal"},
+		{"auto", true, OpeningTrimNone, "", "auto is the user agent's choice, and it chooses normal"},
+		{"NORMAL", true, OpeningTrimNone, "", "values are matched case-insensitively"},
+		{"  space-all  ", false, OpeningTrimNone, "", "and with the space around them ignored"},
+		{"wibble", true, OpeningTrimNone, "",
 			"an invalid value is dropped by the cascade, so this is asked as the initial one"},
-		{"", true, "", "and so is an empty one"},
+		{"", true, OpeningTrimNone, "", "and so is an empty one"},
 	} {
 		got, unhandled := SpacingTrimOf(tc.value)
-		if got.TrimClosingAtEnd != tc.trims || unhandled != tc.unhandled {
-			t.Errorf("%s: %q gave trims=%v unhandled=%q, want %v and %q",
-				tc.what, tc.value, got.TrimClosingAtEnd, unhandled,
-				tc.trims, tc.unhandled)
+		if got.TrimClosingAtEnd != tc.trims || got.TrimOpeningAtStart != tc.start ||
+			unhandled != tc.unhandled {
+			t.Errorf("%s: %q gave trims=%v start=%v unhandled=%q, want %v, %v and %q",
+				tc.what, tc.value, got.TrimClosingAtEnd, got.TrimOpeningAtStart, unhandled,
+				tc.trims, tc.start, tc.unhandled)
 		}
+	}
+}
+
+// TestWhichLineStartsAreTrimmed is OpeningTrim.Trims over the three kinds of
+// line start, which is the whole of what separates space-first from
+// trim-start.
+func TestWhichLineStartsAreTrimmed(t *testing.T) {
+	for _, tc := range []struct {
+		o                   OpeningTrim
+		first, forced, soft bool
+	}{
+		{OpeningTrimNone, false, false, false},
+		{OpeningTrimEveryLine, true, true, true},
+		{OpeningTrimAfterSoftWrap, false, false, true},
+	} {
+		if got := tc.o.Trims(true, false); got != tc.first {
+			t.Errorf("%v on the first line: %v, want %v", tc.o, got, tc.first)
+		}
+		if got := tc.o.Trims(false, true); got != tc.forced {
+			t.Errorf("%v after a forced break: %v, want %v", tc.o, got, tc.forced)
+		}
+		if got := tc.o.Trims(false, false); got != tc.soft {
+			t.Errorf("%v after a soft wrap: %v, want %v", tc.o, got, tc.soft)
+		}
+	}
+}
+
+// TestWhichCharactersAreTrimmedAtTheStartOfALine is §8.2's fullwidth
+// opening punctuation: Ps in the CJK Symbols and Punctuation block or of East
+// Asian Width F, and the two opening quotation marks.
+func TestWhichCharactersAreTrimmedAtTheStartOfALine(t *testing.T) {
+	for _, tc := range []struct {
+		r    rune
+		want bool
+		what string
+	}{
+		{'（', true, "a fullwidth left parenthesis, East Asian Width F"},
+		{'「', true, "a left corner bracket, in the CJK block"},
+		{'〔', true, "a left tortoise shell bracket, in the CJK block"},
+		{'“', true, "a left double quotation mark, named by the class"},
+		{'‘', true, "a left single quotation mark, named by the class"},
+		{'(', false, "an ASCII parenthesis, which is Ps and neither F nor in the block"},
+		{'［', true, "a fullwidth left square bracket"},
+		{'）', false, "a closing bracket, which is the other end of the line"},
+		{'”', false, "a closing quotation mark"},
+		{'国', false, "an ideograph"},
+		{'〝', true, "a reversed double prime quotation mark, Ps in the block"},
+	} {
+		if got := TrimsAsOpeningPunctuation(tc.r); got != tc.want {
+			t.Errorf("%s (U+%04X): %v, want %v", tc.what, tc.r, got, tc.want)
+		}
+	}
+	if got := LeadingOpeningPunctuation("（国国"); got != len("（") {
+		t.Errorf("the leading bracket of %q is %d bytes, want %d", "（国国", got, len("（"))
+	}
+	if got := LeadingOpeningPunctuation("国（国"); got != 0 {
+		t.Errorf("%q begins with an ideograph and nothing is trimmed; got %d", "国（国", got)
+	}
+	if got := LeadingOpeningPunctuation(""); got != 0 {
+		t.Errorf("an empty run has nothing to trim; got %d", got)
+	}
+}
+
+// TestAnOpeningBracketIsTrimmedWhereItBeginsALine is the fill's half of §8.2's
+// line-start clause, over items built directly: "(aa (aa (aa" in Courier at
+// 20px, where every character is 12px and the brackets carry a 6px trim.
+//
+// Courier's "(" is not a fullwidth bracket, and that is not what is under
+// test: the fill takes a trim an item carries, and which items carry one is
+// the layout package's question. What is under test is which lines take it —
+// only the one that begins with the bracket, on the lines the value names —
+// and that the line is narrower by exactly the trim when it does.
+func TestAnOpeningBracketIsTrimmedWhereItBeginsALine(t *testing.T) {
+	br := NewBreaker(nil)
+	face := courier(t)
+	build := func(on OpeningTrim, forced bool) []Item {
+		var out []Item
+		for i := 0; i < 3; i++ {
+			if i > 0 {
+				if forced && i == 2 {
+					out = append(out, Item{Face: face, Size: u(size20), Forced: true})
+				} else {
+					out = append(out, Item{
+						Text: " ", Face: face, Size: u(size20), Space: true, Collapsible: true,
+						Width: br.MeasureSpaced(face, " ", u(size20), TextSpacing{}),
+					})
+				}
+			}
+			out = append(out, Item{
+				Text: "(", Face: face, Size: u(size20), BreakBefore: i > 0,
+				Width: u(12), TrimStart: u(6), TrimStartOn: on,
+			}, Item{
+				Text: "aa", Face: face, Size: u(size20),
+				Width: br.MeasureSpaced(face, "aa", u(size20), TextSpacing{}),
+			})
+		}
+		return out
+	}
+	// lines breaks into lines of 30px, one "(aa" each: 36px whole and 30
+	// trimmed, so a line that does not take the trim does not hold its own
+	// bracket group and overflows. What each line measures says which did.
+	lines := func(items []Item, width float64) []style.Unit {
+		var out []style.Unit
+		i, iByte := 0, 0
+		for n := 0; i < len(items) && n < 10; n++ {
+			line, next, nextByte, _, _, _ := br.BreakOneLine(items, i, iByte, u(width), 0)
+			var used style.Unit
+			for _, it := range line {
+				if !it.Collapsible && !it.Forced {
+					used = used.Add(it.Width)
+				}
+			}
+			out = append(out, used)
+			i, iByte = next, nextByte
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		what   string
+		on     OpeningTrim
+		forced bool
+		want   []float64
+	}{
+		{"trim-start trims every line", OpeningTrimEveryLine, false, []float64{30, 30, 30}},
+		{"and every line after a forced break", OpeningTrimEveryLine, true, []float64{30, 30, 30}},
+		{"space-first spares the first line", OpeningTrimAfterSoftWrap, false, []float64{36, 30, 30}},
+		{"and the line after a forced break", OpeningTrimAfterSoftWrap, true, []float64{36, 30, 36}},
+		{"normal trims none", OpeningTrimNone, false, []float64{36, 36, 36}},
+	} {
+		got := lines(build(tc.on, tc.forced), 30)
+		var want []style.Unit
+		for _, w := range tc.want {
+			want = append(want, u(w))
+		}
+		if len(got) != len(want) {
+			t.Errorf("%s: %d lines %v, want %v", tc.what, len(got), got, want)
+			continue
+		}
+		for k := range got {
+			if got[k] != want[k] {
+				t.Errorf("%s: line %d measures %v, want %v", tc.what, k+1, got[k], want[k])
+			}
+		}
+	}
+}
+
+// TestAnOpeningBracketInsideALineIsNotTrimmed: "a (aa" on one line has the
+// bracket after a word, and §8.2 trims it only at the start of a line. A fill
+// that trimmed every candidate would measure the line 6px short.
+func TestAnOpeningBracketInsideALineIsNotTrimmed(t *testing.T) {
+	br := NewBreaker(nil)
+	face := courier(t)
+	items := words(t, br, face, "a (aa")
+	// words gives "(aa" as one item; the bracket is cut out as layout cuts it.
+	head, tail := br.SplitItem(items[2], 1)
+	head.TrimStart, head.TrimStartOn = u(6), OpeningTrimEveryLine
+	items = append(items[:2], head, tail)
+
+	line, _, _, _, _, _ := br.BreakOneLine(items, 0, 0, u(600), 0)
+	var used style.Unit
+	for _, it := range line {
+		used = used.Add(it.Width)
+		if it.StartTrimmed {
+			t.Errorf("%q was set trimmed in the middle of a line", it.Text)
+		}
+	}
+	if want := u(60); used != want {
+		t.Errorf("the line measures %v, want %v — the bracket is not at its start", used, want)
+	}
+}
+
+// TestASplitKeepsATrimOnTheEndThatHasTheCharacter: a cut at an item's edge
+// leaves one half empty, and a trim copied onto the empty half would be a trim
+// of a character that is not there.
+func TestASplitKeepsATrimOnTheEndThatHasTheCharacter(t *testing.T) {
+	br := NewBreaker(nil)
+	face := courier(t)
+	item := Item{Text: "(", Face: face, Size: u(size20), Width: u(12),
+		TrimStart: u(6), TrimEnd: u(3)}
+	head, tail := br.SplitItem(item, 0)
+	if head.TrimStart != 0 || tail.TrimStart != u(6) {
+		t.Errorf("cut at its start: head trims %v and tail %v at the start, want 0 and 6px",
+			head.TrimStart, tail.TrimStart)
+	}
+	if head.TrimEnd != 0 || tail.TrimEnd != u(3) {
+		t.Errorf("cut at its start: head trims %v and tail %v at the end, want 0 and 3px",
+			head.TrimEnd, tail.TrimEnd)
+	}
+	head, tail = br.SplitItem(item, len(item.Text))
+	if head.TrimEnd != u(3) || tail.TrimEnd != 0 {
+		t.Errorf("cut at its end: head trims %v and the empty tail %v at the end, "+
+			"want 3px and 0", head.TrimEnd, tail.TrimEnd)
+	}
+	if head.TrimStart != u(6) {
+		t.Errorf("cut at its end: the head, which is the whole of it, lost its start trim")
 	}
 }
 

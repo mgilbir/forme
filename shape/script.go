@@ -1124,11 +1124,18 @@ func (f *Face) LayoutLimits() []string {
 		}
 	}
 	add(f.layout)
+	out = append(out, f.cff2Limits...)
+	if f.cff2 != nil {
+		out = append(out, f.cff2.limits()...)
+	}
 	if f.ink != nil {
 		out = append(out, f.ink.limits()...)
 	}
 	if f.colr != nil {
 		out = append(out, f.colr.limits()...)
+	}
+	if f.varc != nil {
+		out = append(out, f.varc.limits()...)
 	}
 	if f.cache != nil {
 		f.cache.mu.Lock()

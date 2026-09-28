@@ -241,24 +241,26 @@ func TestASidewaysModeIgnoresTheTwoPropertiesThatCannotApply(t *testing.T) {
 			}
 		}
 	}
-	// The control: the same declaration in a *vertical* mode still refuses,
-	// because there it does mean something. Without this the test above passes
+	// The controls: the same declarations in a *vertical* mode do something,
+	// because there they mean something. Without these the test above passes
 	// for an engine that has stopped reading either property at all.
-	for _, decl := range []string{
-		"text-orientation: upright",
-		"text-combine-upright: all",
-	} {
-		runs := turnedRuns(t, `<div id="d">a<span style="`+decl+`">b</span></div>`, turnedCSS)
-		if len(runs) == 0 {
-			t.Fatalf("%q in a vertical box drew nothing", decl)
-		}
-		for _, r := range runs {
-			if r.Sideways {
-				t.Errorf("%q inside a vertical-rl box was turned anyway, so the "+
-					"case above proves nothing about sideways modes", decl)
-				break
-			}
-		}
+	//
+	// text-orientation stands the span's letter up on the turned line.
+	runs := turnedRuns(t, `<div id="d">a<span style="text-orientation: upright">b</span></div>`,
+		turnedCSS)
+	if len(runs) != 2 || runs[0].Upright || !runs[1].Upright || !runs[1].Sideways {
+		t.Errorf("\"text-orientation: upright\" inside a vertical-rl box drew %+v, want "+
+			"\"a\" lying along the line and \"b\" standing on it, so the case above "+
+			"proves nothing about sideways modes", runs)
+	}
+	// text-combine-upright sets the span's letter across the page, as a
+	// composition: a run that is neither turned nor stood up, on a turned line.
+	runs = turnedRuns(t, `<div id="d">a<span style="text-combine-upright: all">b</span></div>`,
+		turnedCSS)
+	if len(runs) != 2 || !runs[0].Sideways || runs[1].Sideways || runs[1].Upright {
+		t.Errorf("\"text-combine-upright: all\" inside a vertical-rl box drew %+v, want "+
+			"\"a\" lying along the line and \"b\" set across the page, so the case "+
+			"above proves nothing about sideways modes", runs)
 	}
 }
 

@@ -1068,7 +1068,7 @@ func (p *painter) paintCollapsed(f *Fragment) {
 	// would erase the frame of every collapsing table that also declared an
 	// overflow, which is not what §11.1.1 clips: the outer grid lines are the
 	// table's own border by another name.
-	p.grouped(f, func() { p.clipping(f.clipSelf, func() { p.paintCollapsedBands(f) }) })
+	p.grouped(f, func() { p.clippingRound(f.clipSelf, f.roundSelf, func() { p.paintCollapsedBands(f) }) })
 }
 
 func (p *painter) paintCollapsedBands(f *Fragment) {

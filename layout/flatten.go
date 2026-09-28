@@ -51,7 +51,7 @@ import (
 // root, and the first test catches it.
 func isAtomicInline(b *Box) bool {
 	return b.Outer == OuterInline &&
-		(b.Inner == InnerFlowRoot || b.Inner == InnerFlex || b.Inner == InnerGrid)
+		(b.Inner == InnerFlowRoot || b.Inner == InnerFlex || b.Inner == InnerGrid || b.Inner == InnerMath)
 }
 
 // atomicItem lays out an atomic inline and makes the line item for it.
@@ -105,6 +105,37 @@ func (l *layouter) atomicItem(b *Box, frame inlineFrame) inlineItem {
 	if b.Replaced == nil {
 		baseline, ok := lastLineBaseline(frag)
 		switch {
+		case l.turnedBack[b].vertical():
+			// A horizontal inline-block on a vertical line: its lines run across
+			// the page and none of them is along the line it stands on. §4.3
+			// synthesizes its central baseline halfway between its over and
+			// under margin edges, and on a vertical line under "mixed" or
+			// "upright" the central is the dominant baseline (§4.2), so its
+			// middle goes on the parent's central baseline, which is
+			// centralShift above the alphabetic one the line is laid out on.
+			// Under "sideways", and in a sideways mode, the alphabetic baseline
+			// is the dominant one, and that is its under margin edge, which the
+			// item already says.
+			ok = false
+			if parent := b.Parent; parent != nil {
+				if face, found := l.fontFor(parent); found {
+					if facing, vertical := l.facingOf(parent); vertical &&
+						facing != orientationSideways {
+						central, _ := l.centralShift(parent, face, parent.FontSize, true)
+						item.Ascent = box.H.Div(2).Sub(central)
+						item.Descent = box.H.Sub(item.Ascent)
+					}
+				}
+			}
+		case l.turnedMode[b].vertical():
+			// An inline-block whose own writing mode is vertical, on a
+			// horizontal line: its lines run down the page, and none of them
+			// has a baseline across it for the words beside it to sit on. CSS
+			// Writing Modes §4.3 synthesizes one for an atomic inline that has
+			// none — "the alphabetic baseline is assumed to be at the under
+			// margin edge" — and the under edge of a horizontal line is its
+			// bottom, which is what the item already says.
+			ok = false
 		case b.TableWrapper:
 			// §10.8.1 again, and a different sentence of it: "the baseline of an
 			// 'inline-table' is the baseline of the first row of the table".
@@ -161,7 +192,7 @@ func (l *layouter) replacedFragment(b *Box, frame inlineFrame) *Fragment {
 
 	frag := &Fragment{
 		Box: b, Margin: margin, Border: border, Padding: padding,
-		Outline: l.outlineWidth(b),
+		Outline: l.outlineWidth(b), outlineOffset: l.outlineOffsetOf(b),
 		BorderRect: Rect{
 			W: size.W.Add(padding.Horizontal()).Add(border.Horizontal()),
 			H: size.H.Add(padding.Vertical()).Add(border.Vertical()),
@@ -198,15 +229,23 @@ func (l *layouter) inlineBlockFragment(b *Box, frame inlineFrame) *Fragment {
 	border := l.borderWidths(b)
 	padding := l.edges(b, "padding", frame.Containing)
 
-	width, ok := l.explicitWidth(b, frame.Containing)
+	// A horizontal inline-block on a turned line is sized across the page in
+	// its own writing mode, and the room it has there is not the line's: see
+	// turnsBack. Its edges are its own, physical, already (insideTurn).
+	backMode, back := l.turnedBack[b]
+	containing := frame.Containing
+	if back {
+		containing = l.avail.W
+	}
+	width, ok := l.explicitWidth(b, containing)
 	if !ok {
-		room := frame.Containing.
+		room := containing.
 			Sub(margin.Horizontal()).
 			Sub(border.Horizontal()).
 			Sub(padding.Horizontal())
 		width = l.shrinkToFit(b, maxZero(room))
 	}
-	width = l.clampWidth(b, width, frame.Containing)
+	width = l.clampWidth(b, width, containing)
 
 	// A fresh formatting context, because an inline-block establishes one:
 	// no float inside it escapes and none outside reaches in. That is not a
@@ -222,6 +261,9 @@ func (l *layouter) inlineBlockFragment(b *Box, frame inlineFrame) *Fragment {
 		frag.Offset = Point{X: frame.Offset.X.Add(d.X), Y: frame.Offset.Y.Add(d.Y)}
 	} else {
 		frag.Offset = frame.Offset
+	}
+	if back {
+		standBack(frag, backMode)
 	}
 	return frag
 }
@@ -271,6 +313,11 @@ func containerFirstBaseline(f *Fragment) (style.Unit, bool) {
 // does an absolutely positioned caption hanging off it.
 func lastLineBaseline(f *Fragment) (style.Unit, bool) {
 	inset := f.Border.Top.Add(f.Padding.Top)
+	if f.hasMathBaseline {
+		// A formula's baseline is its alphabetic baseline, which its layout
+		// decided; the lines inside it are its tokens', each in its place.
+		return inset.Add(f.mathBaseline), true
+	}
 	for i := len(f.Children) - 1; i >= 0; i-- {
 		c := f.Children[i]
 		if c.Box == nil || c.Box.outOfFlow() {
@@ -391,9 +438,19 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 			// Item.NoWrap conflates the two: the rewind branch in the fill reads
 			// it and would decline to go back to the space before the span,
 			// where a break is perfectly legal.
+			//
+			// Except where the picture follows a run of collapsible spaces
+			// whose own opportunity a box lets a line take: then there are two
+			// opportunities at this one place, the picture's and the spaces',
+			// and §5.1 gives the second to the boxes the spaces are in. "1111
+			// <nobr> <img></nobr>" collapses the nobr's space into the
+			// paragraph's, and the paragraph's space may end the line in front
+			// of the picture whatever the nobr says about the boundary. See
+			// spaceRunWraps.
 			if prev, ok := state.AfterBox.(*Box); ok && item.BreakBefore {
 				if anc := commonAncestor(prev, child); anc != nil &&
-					!whiteSpaceFor(anc.Style).Wrap {
+					!whiteSpaceFor(anc.Style).Wrap &&
+					!(state.AfterCollapsibleSpace && spaceRunWraps(state)) {
 					item.BreakBefore = false
 				}
 			}
@@ -569,7 +626,13 @@ func (l *layouter) collectInline(b *Box, out []inlineItem, state inlineState, fr
 				// before it is a different question and is left alone. §4.1.1's
 				// fourth rule collapses across an inline boundary, and a margin
 				// on the boundary does not make two spaces into one space each.
-				lead.BreakBefore = state.BreakOpportunity
+				//
+				// And the opportunity is still governed by white-space where it
+				// is taken, as it would have been at the first character: the
+				// margin moves where the line ends, not whether it may. "<nobr>a
+				// <span style='margin-left: 5px'>b</span></nobr>" broke in front
+				// of the margin, inside a box that says no line of it wraps.
+				lead.BreakBefore = state.BreakOpportunity && boundaryWraps(state, child)
 				state.BreakOpportunity = false
 				// And the boundary is spent: the text inside the box would
 				// otherwise ask UAX #14 about it again from AfterContext, and put
@@ -898,6 +961,9 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 	if unhandledAutospace != "" {
 		l.reportAutospace(b, unhandledAutospace)
 	}
+	// Whether the box's text is cut where its orientation changes, which is a
+	// question about the box and asked once. See splitsByOrientation.
+	splitsOrientation := l.splitsByOrientation(b)
 	orthography := l.orthographyAt(boxElement(b))
 	boundaryNoWrap, boundaryBreakSpaces := l.boundaryWhiteSpace(b, ws, in)
 	carried := paragraph.Carried{
@@ -1023,6 +1089,13 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		pieceNoWrap := noWrap
 		if i == 0 {
 			pieceNoWrap = boundaryNoWrap
+		} else if noWrap && state.AfterCollapsibleSpace && boxWraps(state.AfterSpaceBox) {
+			// Inside the box, after a run of spaces that began in a box before
+			// it: the box's first piece was a space that collapsed into that
+			// one, and the kept space's opportunity is the paragraph's to allow
+			// even where this box refuses its own. See spaceRunWraps; the space
+			// that collapsed is this box's, so its answer is noWrap already.
+			pieceNoWrap = false
 		}
 		if p.Segment {
 			// A segment break that survived Phase I is a break the author
@@ -1104,6 +1177,16 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		if !p.Tab && !p.Space {
 			if parts := splitAtAutospace(p.Text, autospace); len(parts) > 1 {
 				runs = cutRunsAt(runs, parts)
+			}
+			// And where "text-orientation: mixed" on a vertical line stops
+			// standing its characters up and starts laying them along the line,
+			// or the other way: a run is measured and drawn one way, so a word
+			// of Latin beside an ideograph is two runs. Each is then asked which
+			// way it faces, in textItem. See writingmode.go.
+			if splitsOrientation {
+				if parts := paragraph.SplitAtOrientation(p.Text); len(parts) > 1 {
+					runs = cutRunsAt(runs, parts)
+				}
 			}
 			// And again where §8.2's cursive tracking begins or ends, for the
 			// same reason: a run carries one letter-spacing, so a run holding
@@ -1188,8 +1271,17 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// and nothing else is the only place it could be read from.
 			continue
 		}
+		var keptSpace paragraph.Ref
+		if p.Collapsible {
+			// This space was not collapsed into one before it — the branch
+			// above skips those — so it is the one §4.1.1 keeps, and the box
+			// that decides whether a line may end after it. See
+			// State.AfterSpaceBox.
+			keptSpace = b
+		}
 		state = inlineState{
 			AfterCollapsibleSpace: p.Collapsible,
+			AfterSpaceBox:         keptSpace,
 			// Whether the piece ended on a character that would hold on to a
 			// picture after it. A piece is a run between two opportunities, so
 			// its last character is the one next to whatever comes next.
@@ -1204,6 +1296,15 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 			// same way. See paragraph.Carried.PrevBase.
 			AfterBase: lastBaseOr(p.Text, state.AfterBase),
 		}
+	}
+	if l.combinesText(b) {
+		// The whole box's text is one text-combine-upright composition. It is
+		// made out of the items rather than instead of them; see combineItems.
+		// A composition is like an inline-block for the white space after it:
+		// its own trailing space is gone, and a space in the next box is the
+		// first of a run rather than one collapsing into it.
+		out = l.combineItems(b, out)
+		state.AfterCollapsibleSpace = false
 	}
 	return out, inlineState{
 		BreakOpportunity:      trailing.Offered,
@@ -1230,6 +1331,10 @@ func (l *layouter) itemsFor(b *Box, in inlineState, frame inlineFrame) ([]inline
 		AfterLetterUnit: state.AfterLetterUnit,
 		AfterBase:       state.AfterBase,
 		AfterBox:        b,
+		// Handed on as it stands: where this box's only pieces were spaces
+		// that collapsed into one before it, the space that was kept is still
+		// the one in the box before, and it is the run's whole opportunity.
+		AfterSpaceBox: state.AfterSpaceBox,
 	}
 }
 
@@ -1354,8 +1459,8 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 	// cannot set, and §10.8.1 measures against the font the run is *in*. See
 	// leadingInFace.
 	above, below := a.above, a.below
-	if a.run.Face != nil && a.run.Face != a.boxFace && usesNormalLineHeight(b) {
-		above, below = l.leadingInFace(b, a.run.Face)
+	if l.leadsByRun(b, a.run.Face, a.boxFace) {
+		above, below = l.runLeading(b, a.run.Face)
 	}
 	// A run whose small capitals were made out of the capitals is set smaller
 	// than the box's own size — that is the whole of what makes it a small
@@ -1380,9 +1485,10 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 		Text: a.run.Text, Box: b, Face: a.run.Face, Size: size,
 		Leads: true, Above: above, Below: below,
 		// Whether this run stands upright on a vertical line, which changes
-		// what it measures to and not only how it is drawn. See
-		// layouter.uprightText.
-		Upright: l.uprightText(b),
+		// what it measures to and not only how it is drawn. Asked of the run
+		// and not the box: under "mixed" the text was cut where the answer
+		// changes, and each piece of it has its own. See layouter.uprightRun.
+		Upright: l.uprightRun(b, a.run.Text),
 		// §5.2's "auto-phrase" suppresses hyphenation, so an opportunity a
 		// hyphen made is one the line falls back to rather than one it takes.
 		HyphenLastResort: a.wb.AutoPhrase,
@@ -1489,7 +1595,7 @@ func (l *layouter) textItem(a textItemArgs) inlineItem {
 			item.HyphenFace = face
 			item.HyphenAbove, item.HyphenBelow = above, below
 			if usesNormalLineHeight(b) {
-				item.HyphenAbove, item.HyphenBelow = l.leadingInFace(b, face)
+				item.HyphenAbove, item.HyphenBelow = l.runLeading(b, face)
 			}
 		}
 	}
@@ -1572,8 +1678,71 @@ func (l *layouter) boundaryWhiteSpace(b *Box, ws paragraph.WhiteSpace,
 			boundaryNoWrap = !whiteSpaceFor(gov.Style).Wrap
 			boundaryBreakSpaces = whiteSpaceFor(gov.Style).BreakSpaces
 		}
+		if in.AfterCollapsibleSpace {
+			// And the space in the box before is not always the one that made
+			// the opportunity. See spaceRunWraps.
+			boundaryNoWrap = !spaceRunWraps(in)
+		}
 	}
 	return boundaryNoWrap, boundaryBreakSpaces
+}
+
+// boundaryWraps reports whether white-space lets a line end at the boundary
+// in front of next, which is the box the state has just reached, for an
+// opportunity carried to it from the text before.
+//
+// CSS Text §5.1 has one rule for each kind of opportunity. One made by a run of
+// collapsible spaces belongs to the boxes the spaces are in — see
+// spaceRunWraps. Any other is "defined by the boundary between two characters
+// or atomic inlines", and "the white-space property on the nearest common
+// ancestor of the two characters controls breaking". A state that came from
+// nothing — the start of a context — has no boundary to govern, and nothing
+// is refused.
+func boundaryWraps(in inlineState, next *Box) bool {
+	prev, ok := in.AfterBox.(*Box)
+	if !ok || prev == nil {
+		return true
+	}
+	if in.AfterCollapsibleSpace {
+		return spaceRunWraps(in)
+	}
+	anc := commonAncestor(prev, next)
+	return anc == nil || whiteSpaceFor(anc.Style).Wrap
+}
+
+// spaceRunWraps reports whether white-space lets a line end after the run of
+// collapsible spaces the state is at the end of.
+//
+// CSS Text §5.1 gives an opportunity "created by characters that disappear at
+// the line break (e.g. U+0020 SPACE)" to "the box directly containing that
+// character", and a run of collapsible spaces that crosses a box boundary has
+// two such characters that matter. One is the space §4.1.1 kept, the first of
+// the run, in State.AfterSpaceBox. The other is the run's last space, in
+// State.AfterBox, which collapsed to nothing and "retains its soft wrap
+// opportunity, if any". Both opportunities fall at the same place, the end of
+// the run, and a line may end there where either box says it may.
+//
+// Asking only the last space's box was the defect: "1111 <nobr> 2222</nobr>"
+// keeps the paragraph's space, collapses the nobr's, and set "1111 2222" on one
+// line however narrow the paragraph — the nobr refused its own space's
+// opportunity and nothing asked about the paragraph's. Asking only the kept
+// space's box would be the mirror of it. The last row of
+// white-space-wrap-after-nowrap-001 writes
+// "<span class=normal><span class=nowrap>12345 </span> </span>67890" in a
+// nowrap div: the kept space is the nowrap span's, the collapsed one the
+// normal span's, and the reference breaks the line there.
+//
+// Where the run is all in one box the two are the same box and this is that
+// box's white-space. A state with neither — the start of a context, where
+// §4.1.2 removed the space — has no opportunity here to allow.
+func spaceRunWraps(in inlineState) bool {
+	return boxWraps(in.AfterBox) || boxWraps(in.AfterSpaceBox)
+}
+
+// boxWraps reports whether r is a box whose white-space lets its lines wrap.
+func boxWraps(r paragraph.Ref) bool {
+	b, ok := r.(*Box)
+	return ok && b != nil && whiteSpaceFor(b.Style).Wrap
 }
 
 // textAfter is the text that follows a box in its inline formatting context, up
@@ -1730,6 +1899,23 @@ func (l *layouter) nextInContext(b *Box) *Box {
 // nextSiblingOf is the box written after b inside its parent.
 func (l *layouter) nextSiblingOf(b *Box) *Box {
 	kids := b.Parent.Children
+	if i, ok := l.indexInParent(b); ok && i+1 < len(kids) {
+		return kids[i+1]
+	}
+	return nil
+}
+
+// prevSiblingOf is the box written before b inside its parent.
+func (l *layouter) prevSiblingOf(b *Box) *Box {
+	if i, ok := l.indexInParent(b); ok && i > 0 {
+		return b.Parent.Children[i-1]
+	}
+	return nil
+}
+
+// indexInParent is where b is among its parent's children.
+func (l *layouter) indexInParent(b *Box) (int, bool) {
+	kids := b.Parent.Children
 	i, ok := l.childIndex[b]
 	if !ok || i >= len(kids) || kids[i] != b {
 		// Fill the whole parent rather than this one child: the walk is about to
@@ -1743,13 +1929,10 @@ func (l *layouter) nextSiblingOf(b *Box) *Box {
 		}
 		i, ok = l.childIndex[b]
 		if !ok {
-			return nil
+			return 0, false
 		}
 	}
-	if i+1 < len(kids) {
-		return kids[i+1]
-	}
-	return nil
+	return i, true
 }
 
 // isForcedBreak reports whether a box ends the line wherever it falls.

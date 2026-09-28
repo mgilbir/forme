@@ -56,6 +56,15 @@ jobs:
             target: FuzzParseType1
           - package: ./shape
             target: FuzzLoadAndUse
+          # CFF2 tables fed to the reader directly, and every glyph written as
+          # CFF held to drawing what it drew.
+          - package: ./shape
+            target: FuzzCFF2
+          # A MATH table on its own, asked every question. FuzzLoadAndUse
+          # reaches the table only through a whole font, and a mutation that
+          # keeps a font readable seldom makes its MATH table say anything.
+          - package: ./shape
+            target: FuzzMathTable
           - package: ./layout
             target: FuzzImageLoading
           # The numbers a caller hands the line breaker, rather than the text:

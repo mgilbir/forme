@@ -35,11 +35,17 @@ backend.Begin(out.Page.Width, out.Page.Height, origin, out.Scale)
 
 for _, op := range out.Ops {
     switch op := op.(type) {
-    case layout.DrawText:  // op.Text, op.Face, op.Size, op.At, op.RTL …
-    case layout.FillRect:  // op.Rect, op.Color
-    case layout.DrawImage: // op.Image, op.Rect
-    case layout.TileImage: // op.Image, op.Clip, op.Tile — a repeated background
-    case layout.Link:      // op.Rects, op.Href — a hyperlink's areas; draws nothing
+    case layout.DrawText:         // op.Text, op.Face, op.Size, op.At, op.RTL …
+    case layout.DrawTextShadow:   // op.Run, op.StdDev — a shadow of text; not text itself
+    case layout.DrawEmphasisMark: // op.Mark — an emphasis mark, drawn as a run; not text itself
+    case layout.FillRect:         // op.Rect, op.Color
+    case layout.DrawImage:        // op.Image, op.Rect
+    case layout.TileImage:        // op.Image, op.Clip, op.Tile — a repeated background
+    case layout.FillGradient:     // op.Gradient, op.Clip, op.Tile — a CSS gradient, tiled
+    case layout.FillPath:         // op.Path, op.Color — a shape with curves in it, even-odd
+    case layout.ClipPath:         // op.Path, op.Ops — what op.Ops draw, clipped to the shape
+    case layout.FilterGroup:      // op.Filters, op.Ops — what op.Ops draw, filtered as one: blurred, faded, recoloured, shadowed
+    case layout.Link:             // op.Rects, op.Href — a hyperlink's areas; draws nothing
     }
 }
 ```
@@ -123,7 +129,9 @@ attachment, contextual and chained-contextual rules, mark filtering sets.
 
 **Fonts.** sfnt and CFF, Type 1, and the WOFF and WOFF 2 wrappers a web font
 arrives in; variable fonts instanced at a named or arbitrary point in their
-design space, subsetting, and the metrics a layout engine has to ask for —
+design space — where CSS's font-weight, font-width, font-style,
+font-optical-sizing and font-variation-settings place them — subsetting, and
+the metrics a layout engine has to ask for —
 including what the fourteen standard PDF faces state, which is not the same
 question.
 
@@ -137,7 +145,7 @@ record of what it thought of.
 
 | | |
 |---|---|
-| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,984 pass with nothing unsupported reported in either document** |
+| **CSS Working Group reftests** | 6,253 documents rendered and compared against their references — **5,996 pass with nothing unsupported reported in either document** |
 | **Unicode's bidi conformance** | 861,948 cases across `BidiTest.txt` and `BidiCharacterTest.txt`, no failures |
 | **Unicode's grapheme boundaries** | all 766 cases of `GraphemeBreakTest.txt` |
 | **Unicode's normalisation forms** | all 20,034 cases of `NormalizationTest.txt`, both NFC invariants |
@@ -164,7 +172,7 @@ that removes invisible characters it leaves a mark positioned across one of them
 It is listed with its reason in `shape/harfbuzz_test.go` and pinned in the
 corpus, so a difference that stops being deliberate fails the test.
 
-Beyond the suites: 33 fuzz targets, thirty-three of them scheduled weekly, a
+Beyond the suites: 35 fuzz targets, thirty-five of them scheduled weekly, a
 differential fuzzer against HarfBuzz that generates text rather than listing it,
 and a CoreText harness for the questions two implementations cannot settle
 between them.

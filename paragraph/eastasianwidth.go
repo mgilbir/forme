@@ -1,5 +1,10 @@
 package paragraph
 
+import (
+	"cmp"
+	"slices"
+)
+
 // Which characters a width feature could act on.
 //
 // CSS Fonts 4 §6.9's "full-width" and "proportional-width" ask a font for the
@@ -44,5 +49,29 @@ var fullWidthOf = func() map[rune]bool {
 	for _, pair := range fullWidthForms {
 		out[pair.to] = true
 	}
+	return out
+}()
+
+// FromFullWidth is "text-transform: full-width" read backwards: every
+// character that is the full-width form of another becomes that other.
+//
+// CSS Writing Modes §9.1.3.1 asks it of a text-combine-upright composition of
+// more than one character, "by reversing the algorithm defined for
+// text-transform: full-width", so that a date transformed to full width and
+// then combined sets "23" in the digits' own widths before it is squeezed to
+// an em. It is the same table read the other way, which is a function because
+// no form in the table is the full-width form of two characters: the reverse
+// is one character for one character, like the transform.
+func FromFullWidth(text string) string { return remapped(text, fromFullWidthForms) }
+
+// fromFullWidthForms is fullWidthForms with each pair turned round and sorted
+// by what it now transforms, which is what lookupWidth searches by. Built at
+// load, as fullWidthOf is.
+var fromFullWidthForms = func() []widthPair {
+	out := make([]widthPair, 0, len(fullWidthForms))
+	for _, p := range fullWidthForms {
+		out = append(out, widthPair{from: p.to, to: p.from})
+	}
+	slices.SortFunc(out, func(a, b widthPair) int { return cmp.Compare(a.from, b.from) })
 	return out
 }()

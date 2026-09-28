@@ -400,6 +400,7 @@ func TestShorthandLonghandsMatchWhatTheExpanderProduces(t *testing.T) {
 		"font":            "12px serif",
 		"font-variant":    "small-caps",
 		"text-decoration": "underline red",
+		"text-emphasis":   "open dot red",
 		"white-space":     "pre-line",
 		"text-wrap":       "balance",
 		"text-align":      "match-parent",
@@ -412,9 +413,11 @@ func TestShorthandLonghandsMatchWhatTheExpanderProduces(t *testing.T) {
 		"place-self":      "center stretch",
 		"columns":         "3 12em",
 		"word-wrap":       "break-word",
+		"font-stretch":    "condensed",
 		"grid-row":        "1 / 2",
 		"grid-column":     "main",
 		"grid-area":       "a",
+		"border-radius":   "2em 1em 4em / 0.5em 3em",
 
 		// css-break-3's legacy shorthands for the break properties.
 		"page-break-before": "avoid",

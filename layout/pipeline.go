@@ -277,7 +277,7 @@ func buildWith(in Input, page PageSize, rec *Recorder) Built {
 	// property (lengthContext); a font-size in vw is resolved in the cascade,
 	// because it is inherited as a number, so the cascade is told the same page.
 	area := page.Content()
-	styled := prepared.ApplyOnPageWith(doc, fontMetrics{fontSet}, style.Media{Width: area.W, Height: area.H},
+	styled := prepared.ApplyOnPageWith(doc, fontMetrics{fonts: fontSet, rec: rec}, style.Media{Width: area.W, Height: area.H},
 		base.inlineURLs(rec))
 	for _, f := range styled.Findings {
 		rec.ReportDetail(Finding{

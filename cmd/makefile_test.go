@@ -3,10 +3,13 @@ package cmd
 import (
 	"os"
 	"os/exec"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/cmd/internal/tables"
 )
 
 func needMake(t *testing.T) {
@@ -132,6 +135,7 @@ func TestEveryFetchStampMovesWithWhatItFetches(t *testing.T) {
 			"NOTO_LICENSE", "UNIFONT_VER", "UNIFONT_SHA256", "UNIFONT_UPPER_SHA256",
 			"IPAFONT_URL", "IPAFONT_SHA256"},
 		"CJK_STAMP": {"NOTO_CJK_COMMIT", "CJK_FACES"},
+		"CFF_STAMP": {"SOURCE_SANS_COMMIT", "SOURCE_SERIF_COMMIT", "NOTO_CJK_COMMIT", "CFF_FILES"},
 		"WPT_STAMP": {"WPT_COMMIT", "WPT_DIRS"},
 	}
 	stamps := map[string]string{}
@@ -231,5 +235,79 @@ func TestMakeIsAskedWithoutTheCallersEnvironment(t *testing.T) {
 		t.Errorf("with UNICODE_VERSION=1.0.0 in the environment, make answered %q "+
 			"for the Makefile's pin %q: the test is reading the caller, not the Makefile",
 			got, own)
+	}
+}
+
+// TestEveryTableInputIsInItsFetchList is the fault a new table can be added
+// with and nothing here would see. A fetched set is fetched file by file from a
+// list — HYPHEN_FILES, ICU_DICT_FILES — and the generator reads the files the
+// manifest names. The two are written in two places, and a file the manifest
+// reads that the list does not name is a table that regenerates, and passes
+// every check, in the checkout of whoever fetched that file by hand: the
+// directory already holds it. On a fresh checkout — CI's — make fetches the
+// list and the file is simply not there.
+//
+// It was seen to pass exactly that way: with hyph-de-1996.tex taken out of
+// HYPHEN_FILES, TABLE_INPUTS=required go test ./cmd was green on the machine
+// that had fetched it. So each input the manifest reads from a listed set is
+// asked for by name in its list.
+func TestEveryTableInputIsInItsFetchList(t *testing.T) {
+	needMake(t)
+	// The directory variable a set is read from, and the variable listing the
+	// files fetched into it. A list entry may carry a path the recipe drops
+	// (BudouX's "budoux/models/ja.json" lands as ja.json) or a digest after a
+	// colon (MSUSE_FILES), so an entry is compared by its base name.
+	lists := map[string]string{
+		"HYPHEN_DIR": "HYPHEN_FILES",
+		"DICT_DIR":   "ICU_DICT_FILES",
+		"BUDOUX_DIR": "BUDOUX_FILES",
+		"AFM_DIR":    "AFM_FILES",
+		"BROTLI_DIR": "BROTLI_FILES",
+		"MSUSE_DIR":  "MSUSE_FILES",
+		"UCD":        "UCD_FILES",
+	}
+	listed := map[string]map[string]bool{}
+	for dir, list := range lists {
+		names := map[string]bool{}
+		for _, f := range strings.Fields(makeValue(t, list)) {
+			f, _, _ = strings.Cut(f, ":")
+			names[path.Base(f)] = true
+		}
+		if len(names) == 0 {
+			t.Fatalf("%s expands to nothing, so this test would pass whatever it held", list)
+		}
+		listed[dir] = names
+	}
+	ref := regexp.MustCompile(`^\$\{([A-Z_]+)\}/(.+)$`)
+	checked := map[string]int{}
+	for _, tb := range tables.Manifest {
+		inputs := append([]string(nil), tb.Inputs...)
+		for _, a := range tb.Args {
+			// A UCD generator names its files in its arguments.
+			if strings.HasPrefix(a, "${UCD}/") {
+				inputs = append(inputs, a)
+			}
+		}
+		for _, in := range inputs {
+			m := ref.FindStringSubmatch(in)
+			if m == nil {
+				continue
+			}
+			names, ok := listed[m[1]]
+			if !ok {
+				continue
+			}
+			checked[m[1]]++
+			if !names[path.Base(m[2])] {
+				t.Errorf("%s reads %s, and %s does not name it: a fresh checkout's "+
+					"fetch leaves it out", tb.Out, in, lists[m[1]])
+			}
+		}
+	}
+	for dir := range lists {
+		if checked[dir] == 0 {
+			t.Errorf("no table in the manifest reads from ${%s}, so its list was not "+
+				"checked; the manifest or this test has changed shape", dir)
+		}
 	}
 }

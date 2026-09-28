@@ -13,10 +13,12 @@ import (
 // The ink of colour glyphs, held to HarfBuzz.
 //
 // testdata/harfbuzz/colrink.py asks HarfBuzz for the extents of every glyph of
-// two faces colrink_fixture.py builds: ColourInk.ttf, which paints with every
+// the faces colrink_fixture.py builds: ColourInk.ttf, which paints with every
 // paint format COLR has and does to a box each thing painting can do, and
 // BitmapInk.ttf, a CBDT face whose tables say each thing HarfBuzz reads its
-// extents from. It shapes a few strings in ColourInk across the page and down
+// extents from, and SbixInk.ttf and its siblings, sbix faces that do the same
+// for the bitmap table HarfBuzz asks first and for the tables its sanitizer
+// refuses. It shapes a few strings in ColourInk across the page and down
 // it, where HarfBuzz places the marks and hangs the glyphs by their painted
 // boxes. The answers are checked in as colrink.expected.txt.
 //
@@ -33,7 +35,16 @@ var colourInkFaces = map[string]func(t *testing.T) []byte{
 	"ColourInk.ttf@wght=900": func(t *testing.T) []byte { return harfbuzzFont(t, "ColourInk.ttf") },
 	"ColourInkStatic.ttf":    func(t *testing.T) []byte { return harfbuzzFont(t, "ColourInkStatic.ttf") },
 	"BitmapInk.ttf":          func(t *testing.T) []byte { return harfbuzzFont(t, "BitmapInk.ttf") },
+	"SbixInk.ttf":            func(t *testing.T) []byte { return harfbuzzFont(t, "SbixInk.ttf") },
+	"SbixInkLarge.ttf":       func(t *testing.T) []byte { return harfbuzzFont(t, "SbixInkLarge.ttf") },
+	"SbixInkRejected.ttf":    func(t *testing.T) []byte { return harfbuzzFont(t, "SbixInkRejected.ttf") },
+	"SbixInkOps.ttf":         func(t *testing.T) []byte { return harfbuzzFont(t, "SbixInkOps.ttf") },
+	"SbixInkOpsEdge.ttf":     func(t *testing.T) []byte { return harfbuzzFont(t, "SbixInkOpsEdge.ttf") },
 }
+
+// sbixRefused are the sbix faces whose table HarfBuzz's sanitizer refuses,
+// which load with no sbix read; every other sbix face loads with it read.
+var sbixRefused = map[string]bool{"SbixInkRejected.ttf": true, "SbixInkOps.ttf": true}
 
 // colourInkStrings are the strings colrink.py shapes in ColourInk, in its
 // order.
@@ -114,6 +125,10 @@ func TestColourInkAgreesWithHarfBuzz(t *testing.T) {
 			}
 			if strings.HasPrefix(want.name, "ColourInk.ttf") && f.colr == nil || want.name == "BitmapInk.ttf" && f.bitmap == nil {
 				t.Fatalf("%s did not load with its colour table read", want.name)
+			}
+			if strings.HasPrefix(want.name, "SbixInk") && (f.sbix == nil) != sbixRefused[want.name] {
+				t.Fatalf("%s loaded with its sbix read %v, and HarfBuzz reads it %v",
+					want.name, f.sbix != nil, !sbixRefused[want.name])
 			}
 			for gid, w := range want.extents {
 				got, ok := f.glyphExtents(gid)

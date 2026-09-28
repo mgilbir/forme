@@ -559,6 +559,24 @@ func sameShaping(a, b inlineItem) bool {
 	if a.Spacing != b.Spacing || a.Level != b.Level {
 		return false
 	}
+	// Nor across a change of orientation on a vertical line. An upright run is
+	// shaped top to bottom with the vertical features and a sideways one left
+	// to right without them, so neither is the other's context: the two are
+	// not one string shaped one way, and CSS Writing Modes §5.1.1 sets the
+	// letters of a cursive script in their isolated forms when they stand
+	// upright, which is the join this would otherwise make. The runs differ
+	// here only where "text-orientation: mixed" cut a paragraph in two, or a
+	// span declared another orientation. See layout/writingmode.go.
+	if a.Upright != b.Upright {
+		return false
+	}
+	// And never across the edge of a text-combine-upright composition, which
+	// §9.1.2 bidi-isolates and composes "similar to the contents of an
+	// inline-block box": it has no neighbours to join or kern with, on either
+	// side, even an ideograph standing upright beside it. See combine.go.
+	if a.Combine || b.Combine {
+		return false
+	}
 	// Of those three, the face has no test: a planted defect dropping it leaves
 	// every one passing, because the only Arabic face in the checkout is one and
 	// two runs cannot be set in different ones. It is kept because a face is
@@ -616,7 +634,8 @@ func itemShaping(it *inlineItem) shaping {
 	return shaping{
 		Before: it.PreContext, After: it.PostContext,
 		MergeBefore: it.MergePre, MergeAfter: it.MergePost, MergeGroup: it.MergeGroup,
-		ContextKerns: it.ContextKerns, Upright: it.Upright, Off: it.Off,
+		ContextKerns: it.ContextKerns, Upright: it.Upright, Combine: it.Combine,
+		Off: it.Off,
 	}
 }
 
@@ -795,8 +814,7 @@ func sharesGlyphsWith(items []inlineItem, from, to int, breaks []int, tr translu
 	// where it was and moved the other half with the span.
 	//
 	// Which way a run's glyphs stand is the one other thing drawn per run,
-	// and it cannot differ here: it is decided by the block the page was
-	// turned at (see uprightText), so every run of one paragraph has it.
+	// and sameShaping has already refused a boundary where it changes.
 	if a.Offset != b.Offset {
 		return false
 	}
@@ -903,7 +921,10 @@ func translucentStep(cur *Box) (found *Box, done bool) {
 		return nil, true
 	case cur.IsText():
 		return nil, false
-	case groupsItsPaint(cur):
+	case groupsItsPaint(cur), filtersItsPaint(cur):
+		// A filtered box is a group of its own as a translucent one is (Filter
+		// Effects 1 §5), and a glyph shared across its edge would be drawn in
+		// one group or the other and not both.
 		return cur, true
 	}
 	return nil, false

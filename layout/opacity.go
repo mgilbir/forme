@@ -170,6 +170,92 @@ func dimOps(ops []Op, at int, alpha float64) ([]Op, []groupMark) {
 			}
 			v.Color.A *= alpha
 			kept = append(kept, v)
+		case FillGradient:
+			// A gradient carries colours, and they take an alpha exactly: every
+			// stop's is multiplied by it, and an interpolation in premultiplied
+			// alpha between two scaled colours is the scaled interpolation. So
+			// it is a mark like a fill, over the area it may paint.
+			marks = append(marks, groupMark{rect: v.Clip})
+			if alpha == 0 {
+				continue
+			}
+			stops := make([]GradientStop, len(v.Gradient.Stops))
+			copy(stops, v.Gradient.Stops)
+			for i := range stops {
+				stops[i].Color.A *= alpha
+			}
+			v.Gradient.Stops = stops
+			kept = append(kept, v)
+		case FillPath:
+			if len(v.Path) == 0 || v.Color.A == 0 {
+				kept = append(kept, op)
+				continue
+			}
+			marks = append(marks, groupMark{rect: v.Path.Bounds()})
+			if alpha == 0 {
+				continue
+			}
+			v.Color.A *= alpha
+			kept = append(kept, v)
+		case DrawGlyphs:
+			// Glyphs carry a colour, as a run of text does.
+			if v.Color.A == 0 || len(v.Glyphs) == 0 {
+				kept = append(kept, op)
+				continue
+			}
+			marks = append(marks, groupMark{text: true})
+			if alpha == 0 {
+				continue
+			}
+			v.Color.A *= alpha
+			kept = append(kept, v)
+		case DrawEmphasisMark:
+			// A mark carries a colour, as the run beside it does.
+			if v.Mark.Color.A == 0 || v.Mark.Text == "" {
+				kept = append(kept, op)
+				continue
+			}
+			marks = append(marks, groupMark{text: true})
+			if alpha == 0 {
+				continue
+			}
+			v.Mark.Color.A *= alpha
+			kept = append(kept, v)
+		case DrawTextShadow:
+			// A shadow carries a colour, and a blur is linear, so the alpha
+			// folds into it exactly as into the run it shadows.
+			if v.Run.Color.A == 0 || v.Run.Text == "" {
+				kept = append(kept, op)
+				continue
+			}
+			marks = append(marks, groupMark{text: true})
+			if alpha == 0 {
+				continue
+			}
+			v.Run.Color.A *= alpha
+			kept = append(kept, v)
+		case FilterGroup:
+			// The group is composited as one, so an alpha is the group's: it
+			// joins the chain's opacity, exactly, and the group is one mark
+			// over the area its blur reaches.
+			marks = append(marks, groupMark{rect: v.Extent()})
+			if alpha == 0 {
+				continue
+			}
+			v.Filters = withOpacity(v.Filters, alpha)
+			kept = append(kept, v)
+		case ClipPath:
+			// What the group holds is dimmed as it would have been outside it,
+			// and its marks are those of what it holds: the curve only takes
+			// ink away, so no two of them overlap inside it that did not
+			// outside.
+			inner, innerMarks := dimOps(append([]Op(nil), v.Ops...), 0, alpha)
+			marks = append(marks, innerMarks...)
+			if len(inner) == 0 {
+				continue
+			}
+			v.Ops = inner
+			kept = append(kept, v)
 		case DrawImage:
 			marks = append(marks, groupMark{rect: v.Rect, image: true})
 			if alpha == 0 {

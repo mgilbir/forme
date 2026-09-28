@@ -76,8 +76,9 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 	// A missing fallback set is not a reason to stop: the control-character cut
 	// below does not need one, and a caller with no fallback faces still gets a
 	// visible glyph for a character no face has.
-	set, canFall := l.fontSet.(FallbackFontSet)
-	ranged, hasRanges := l.fontSet.(RangedFontSet)
+	fallback := l.instancedFallback(b)
+	canFall := fallback != nil
+	hasRanges := rangedLookup(l.fontSet) != nil
 	if hasRanges {
 		// Only worth walking the family list per cluster when some face in it
 		// is actually restricted. A document with no unicode-range anywhere —
@@ -101,8 +102,8 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 	if !canFall && !hasRanges && !hasVisibleControl(text) {
 		return one
 	}
-	bold := isBold(b.Style.Get("font-weight"))
-	italic := isItalic(b.Style.Get("font-style"))
+	ask := l.variationAsk(b)
+	r := ask.r
 
 	// The cluster starts, so every cluster is [at[i], at[i+1]).
 	//
@@ -157,7 +158,7 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 			// faces all exclude this character has nothing for it and the next
 			// one the author named is asked — which is what a unicode-range is
 			// written to make happen.
-			if named, found := l.namedFaceFor(ranged, b, cluster); found {
+			if named, found := l.namedFaceFor(b, ask, cluster); found {
 				want = named
 			}
 		}
@@ -166,9 +167,9 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 			// that can — for the cluster alone, because asking for the rest of
 			// the text would be the whole-box question again and would have the
 			// same non-answer.
-			if alt, found := set.FaceFor(cluster, bold, italic); found {
+			if alt, found := fallback(cluster, r); found {
 				want, fromFallback = alt, true
-			} else if parts := clusterFaceRuns(set, cluster, primary, bold, italic); parts != nil {
+			} else if parts := clusterFaceRuns(fallback, cluster, primary, r); parts != nil {
 				// No one face has the whole cluster, but its parts have faces
 				// of their own. "⛹🏿" is the case: Noto Sans Symbols has the
 				// person, Unifont Upper has the skin tone, neither has both —
@@ -371,7 +372,7 @@ func (l *layouter) familyListIsRestricted(b *Box) bool {
 			return true
 		}
 	}
-	if _, ranged := set.base.(RangedFontSet); ranged {
+	if rangedLookup(set.base) != nil {
 		return true
 	}
 	families := b.Style.Get("font-family")
@@ -400,15 +401,36 @@ func (l *layouter) familyListIsRestricted(b *Box) bool {
 // for a font-family list and is what makes "high-a-only, deep-b-only" mean what
 // it says. A cluster no named family covers comes back false and is left to the
 // primary face and the fallback set, exactly as before.
-func (l *layouter) namedFaceFor(ranged RangedFontSet, b *Box, cluster string) (*shape.Face, bool) {
-	bold := isBold(b.Style.Get("font-weight"))
-	italic := isItalic(b.Style.Get("font-style"))
+func (l *layouter) namedFaceFor(b *Box, ask variationAsk, cluster string) (*shape.Face, bool) {
+	src := sourceOf(boxElement(b))
 	for _, family := range parseFamilyList(b.Style.Get("font-family")) {
-		if face, ok := ranged.FaceForFamily(family, cluster, bold, italic); ok {
+		if face, ok := styledFace(l.fontSet, l.inst, l.rec, src, family, cluster, ask); ok {
 			return face, true
 		}
 	}
 	return nil, false
+}
+
+// instancedFallback is the set's fallback lookup for a box, with the face it
+// answers set where the box places a variable face (fontinstance.go) — a
+// fallback face is drawn at the weight the text asked for, like any other.
+// nil for a set with no fallback.
+func (l *layouter) instancedFallback(b *Box) func(text string, r FontRequest) (*shape.Face, bool) {
+	raw := fallbackLookup(l.fontSet)
+	if raw == nil {
+		return nil
+	}
+	ask := l.variationAsk(b)
+	src := sourceOf(boxElement(b))
+	return func(text string, r FontRequest) (*shape.Face, bool) {
+		face, ok := raw(text, r)
+		if !ok {
+			return nil, false
+		}
+		a := ask
+		a.r = r
+		return l.inst.instanced(face, a, l.rec, src), true
+	}
 }
 
 // namesOnlyGenericFamilies reports whether a font-family list asks for a kind of
@@ -489,30 +511,31 @@ func drawsNoPaper(cluster string) bool {
 // decides a face and never starts a stretch. It stays with the stretch it
 // follows, which keeps a ZWJ sequence from being cut at the joiner and keeps the
 // joiner out of a face chosen for it alone.
-func clusterFaceRuns(set FallbackFontSet, cluster string, primary *shape.Face, bold, italic bool) []faceRun {
+func clusterFaceRuns(fallback func(text string, r FontRequest) (*shape.Face, bool), cluster string,
+	primary *shape.Face, r FontRequest) []faceRun {
 	type piece struct {
 		text string
 		face *shape.Face
 		sub  bool
 	}
 	var pieces []piece
-	for _, r := range cluster {
-		if isDefaultIgnorable(r) && len(pieces) > 0 {
-			pieces[len(pieces)-1].text += string(r)
+	for _, c := range cluster {
+		if isDefaultIgnorable(c) && len(pieces) > 0 {
+			pieces[len(pieces)-1].text += string(c)
 			continue
 		}
 		// A part with no face of its own stays with the primary, as it would
 		// have if the cluster were left whole: every run carries a face, and a
 		// part nobody can set is still reported missing by checkGlyphs.
 		face, sub := primary, false
-		if alt, ok := set.FaceFor(string(r), bold, italic); ok {
+		if alt, ok := fallback(string(c), r); ok {
 			face, sub = alt, true
 		}
 		if n := len(pieces); n > 0 && pieces[n-1].face == face {
-			pieces[n-1].text += string(r)
+			pieces[n-1].text += string(c)
 			continue
 		}
-		pieces = append(pieces, piece{text: string(r), face: face, sub: sub})
+		pieces = append(pieces, piece{text: string(c), face: face, sub: sub})
 	}
 	// Fewer than two stretches is nothing to cut. That also covers the cluster
 	// no face can set at all: every one of its characters keeps the primary, so

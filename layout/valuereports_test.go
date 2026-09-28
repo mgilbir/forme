@@ -34,20 +34,24 @@ func TestAnInnerElementsTrimIsHonoured(t *testing.T) {
 	}
 }
 
-// TestAnInnerElementsTrimIsReported: the values whose line-start rule is not
-// done are reported wherever they are declared, and each value once — not the
+// TestAnInnerElementsTrimIsReported: the values whose rule is not done in full
+// are reported wherever they are declared, and each value once — not the
 // block's value only, and not the first value met only (audit C146).
+//
+// They were trim-start and space-first, whose line-start rule was not done; it
+// is now, and the values still reported are trim-both, whose end clause is not
+// done, and trim-all, which is not done at all.
 func TestAnInnerElementsTrimIsReported(t *testing.T) {
 	rec := NewRecorder(nil)
 	built := Build(Input{
-		HTML: `<p>a<span style="text-spacing-trim: trim-start">b</span>` +
-			`<span style="text-spacing-trim: space-first">c</span></p>`,
+		HTML: `<p>a<span style="text-spacing-trim: trim-both">b</span>` +
+			`<span style="text-spacing-trim: trim-all">c</span></p>`,
 	})
 	Layout(built.Root, A4.Content(), nil, rec)
 	said := map[string]bool{}
 	for _, f := range rec.Findings() {
 		if f.Property == "text-spacing-trim" {
-			for _, v := range []string{"trim-start", "space-first"} {
+			for _, v := range []string{"trim-both", "trim-all"} {
 				if strings.Contains(f.Message, v) {
 					said[v] = true
 					if !strings.HasSuffix(f.Path, "span") {
@@ -58,7 +62,7 @@ func TestAnInnerElementsTrimIsReported(t *testing.T) {
 			}
 		}
 	}
-	for _, v := range []string{"trim-start", "space-first"} {
+	for _, v := range []string{"trim-both", "trim-all"} {
 		if !said[v] {
 			t.Errorf("text-spacing-trim: %s on an inner element was not reported", v)
 		}

@@ -420,6 +420,48 @@ func TestRenumberingSubroutinesRecomputesTheBias(t *testing.T) {
 	}
 }
 
+// TestRenumberingLocalSubroutinesUsesTheirOwnBias is the same for a Font
+// DICT's local INDEX, whose bias is its own count's and not the global one's:
+// 1,240 local subroutines kept are biased by 1131 while the two global ones
+// are biased by 107, so a call renumbered by the other INDEX's bias names a
+// subroutine that is not the one it called.
+func TestRenumberingLocalSubroutinesUsesTheirOwnBias(t *testing.T) {
+	const kept = 1240
+	locals := make([][]byte, kept+60)
+	for i := range locals {
+		locals[i] = line(i%100+1, i/100+1)
+	}
+	var glyph [][]byte
+	for i := 0; i < kept; i++ {
+		glyph = append(glyph, t2(i-1131), opCallsubr)
+	}
+	glyph = append(glyph, t2(1-107), opCallgsubr, opEndchar)
+	fix := cidFixture{
+		glyphs: [][]byte{opEndchar, cat(glyph...)},
+		cids:   []int{0, 1},
+		fds:    []int{0, 0},
+		locals: [][][]byte{locals},
+		global: [][]byte{line(1, 1), line(2, 2), line(3, 3)},
+	}
+	f := fix.face(t, []rune{'a'})
+	f.Encode("a")
+	prog, kept2, err := f.SubsetGlyphs()
+	if err != nil {
+		t.Fatalf("SubsetGlyphs: %v", err)
+	}
+	_, s := checkRenumbered(t, f.Program(), prog, kept2)
+	if len(s.global) != 1 {
+		t.Errorf("the subset carries %d global subroutines, want 1", len(s.global))
+	}
+	if len(s.locals) != 1 || len(s.locals[0]) != kept {
+		sizes := make([]int, len(s.locals))
+		for i, l := range s.locals {
+			sizes[i] = len(l)
+		}
+		t.Errorf("the subset carries local INDEXes of %v subroutines, want one of %d", sizes, kept)
+	}
+}
+
 // The subroutines are kept whole, and the glyphs still renumbered, where a
 // call cannot be renumbered exactly.
 func TestSubroutinesAreKeptWholeWhereACallCannotBeRenumbered(t *testing.T) {

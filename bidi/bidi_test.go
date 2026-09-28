@@ -104,6 +104,35 @@ func TestBidiBracketAndMirrorTables(t *testing.T) {
 	}
 }
 
+// TestBidiMirroredIsWiderThanTheMirrors: Bidi_Mirrored holds for every
+// character with a mirror, and for characters with none — the square root,
+// the summation, the integral — and not for a letter, a digit, or an arrow
+// (U+2192 is not mirrored in Unicode: it points where it points). U+2140
+// DOUBLE-STRUCK N-ARY SUMMATION is a range of one, U+2141 after it is not
+// mirrored, and U+0029 is the end of the range that opens at U+0028.
+func TestBidiMirroredIsWiderThanTheMirrors(t *testing.T) {
+	for _, m := range mirrors {
+		if !Mirrored(m.from) {
+			t.Errorf("U+%04X has a mirror and is not Bidi_Mirrored", m.from)
+		}
+	}
+	for _, r := range []rune{'(', ')', '<', 0x221A, 0x2211, 0x222B, 0x2140} {
+		if !Mirrored(r) {
+			t.Errorf("U+%04X is not reported Bidi_Mirrored", r)
+		}
+	}
+	for _, r := range []rune{'a', '1', '+', '-', 0x2192, 0x2141, 0x10FFFF} {
+		if Mirrored(r) {
+			t.Errorf("U+%04X is reported Bidi_Mirrored", r)
+		}
+	}
+	for _, r := range []rune{0x221A, 0x2211, 0x222B} {
+		if _, ok := MirrorOf(r); ok {
+			t.Errorf("U+%04X has a mirror character, which Unicode does not give it", r)
+		}
+	}
+}
+
 // TestBidiRunsSplitAndReorder is the algorithm's output in the form the shaping
 // pipeline consumes it: stretches of one direction, in the order they are drawn.
 func TestBidiRunsSplitAndReorder(t *testing.T) {

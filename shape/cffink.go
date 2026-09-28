@@ -61,10 +61,17 @@ import (
 // leaves the glyphs after it with no ink, which Face.LayoutLimits reports. See
 // cffInkWork for how large it is and why no real font comes near it.
 //
-// # What is not here
+// # CFF2
 //
-// CFF2. A face whose outlines are a CFF2 table is not loaded at all (see
-// Load), so there is no such glyph to measure.
+// The same interpreter runs a CFF2 font's charstrings, as HarfBuzz's cff2
+// interpreter shares its cff1 one's operators: a CFF2 charstring adds vsindex
+// and blend, which cff2Blend resolves at a location (cff2.go), has no seac and
+// no width, and ends where its bytes do — a subroutine that runs out returns
+// and a glyph that runs out has ended, where a CFF charstring that runs out
+// reads nothing but an operator that clears the stack. A face whose outlines
+// are CFF2 is never measured through it, though: it is loaded as a CFF font
+// cut at its location (cff2cff.go), and measured as one, so that what is
+// measured is what is embedded.
 
 // cffMaxOps is how many operators HarfBuzz runs of one charstring, the
 // subroutines it calls included, before it gives up on it:
@@ -106,6 +113,10 @@ func cffInkWork(tableLen int) int {
 type cffInk struct {
 	table     []byte
 	numGlyphs int
+	// cff2 is a face whose outlines are CFF2 read at its default instance,
+	// whose glyphs are measured as the CFF charstrings it writes for them —
+	// the ones it embeds — and nil for a CFF face.
+	cff2 *cff2Default
 
 	once sync.Once
 	// outlines is nil where HarfBuzz's accelerator would refuse the table.
@@ -129,15 +140,28 @@ func newCFFInk(table []byte, numGlyphs int) *cffInk {
 	return &cffInk{table: table, numGlyphs: numGlyphs}
 }
 
+// newCFF2Ink measures the glyphs of a face whose outlines are CFF2, as the CFF
+// it writes them as: the glyph embedded is the one measured.
+func newCFF2Ink(d *cff2Default) *cffInk {
+	return &cffInk{numGlyphs: d.numGlyphs(), cff2: d}
+}
+
 // extents is a glyph's ink in font units, HarfBuzz's hb_glyph_extents_t for it
 // at a scale of one unit to the unit, and false where HarfBuzz has none.
 func (c *cffInk) extents(gid int) (extents, bool) {
 	c.once.Do(func() {
+		if c.cff2 != nil {
+			c.budget = font.NewBudget(cffInkWork(len(c.cff2.tables["CFF2"])))
+			return
+		}
 		c.outlines, _ = readCFFOutlines(c.table, c.numGlyphs)
 		c.budget = font.NewBudget(cffInkWork(len(c.table)))
 	})
-	o := c.outlines
-	if o == nil || gid < 0 || gid >= len(o.charStrings) {
+	o, run := c.outlines, gid
+	switch {
+	case gid < 0 || gid >= c.numGlyphs:
+		return extents{}, false
+	case c.cff2 == nil && (o == nil || gid >= len(o.charStrings)):
 		return extents{}, false
 	}
 	c.mu.Lock()
@@ -145,8 +169,13 @@ func (c *cffInk) extents(gid int) (extents, bool) {
 	if a, ok := c.answers[gid]; ok {
 		return a.ext, a.ok
 	}
+	if c.cff2 != nil {
+		// The one charstring, which calls no subroutine: a CFF2 font's are
+		// run as it is written (cff2cff.go).
+		o, run = &cffOutlines{charStrings: [][]byte{c.cff2.glyph(gid)}}, 0
+	}
 	r := t2Run{o: o, budget: c.budget}
-	b, ok := r.bounds(gid, false)
+	b, ok := r.bounds(run, false)
 	switch {
 	case r.spent:
 		c.spent = true
@@ -198,6 +227,9 @@ type cffOutlines struct {
 	sids       []int
 	charsetOff int
 	firstGID   map[int]int
+	// cff2 is how a CFF2 font's blends are resolved, and nil for a CFF font:
+	// what makes the interpreter run a charstring as CFF2.
+	cff2 *cff2Blend
 }
 
 // readCFFOutlines reads a CFF table as HarfBuzz's cff1 accelerator does, and
@@ -380,6 +412,15 @@ func cffFDSelect(cff []byte, off, numGlyphs, fdCount int) ([]byte, error) {
 		}
 	}
 	return fds, nil
+}
+
+// ivsOf is the group of regions a CFF2 glyph's blends are written against
+// until a vsindex in it says otherwise: its Private DICT's.
+func (o *cffOutlines) ivsOf(gid int) int {
+	if o.cff2 == nil || o.fds == nil || gid >= len(o.fds) || int(o.fds[gid]) >= len(o.cff2.ivs) {
+		return 0
+	}
+	return o.cff2.ivs[o.fds[gid]]
 }
 
 // localsOf is the local subroutines a glyph's charstring calls into.
@@ -567,6 +608,29 @@ type t2Run struct {
 	// capped is set when a charstring ran into HarfBuzz's cap, and spent when
 	// the budget ran out; either leaves the glyph without ink.
 	capped, spent bool
+	// path, when it is not nil, is handed every segment the charstring draws,
+	// in font units, as HarfBuzz's draw functions are: a move, a line or a
+	// curve. It is how two programs' outlines are compared point for point —
+	// a subset against the font it was cut from — where a box would let a
+	// point that moved inside it go unnoticed. offX and offY are where a seac
+	// draws the glyph it is running, which is its accent's offset while the
+	// accent runs and nothing otherwise.
+	path       func(t2Seg)
+	offX, offY float64
+	// hints, when it is not nil, is handed every hint the charstring
+	// declares: a stem operator and its operands, or a mask operator, the
+	// stems a first mask declares by the operands in front of it (nil for
+	// every mask after the first, whose operands are cleared and declare
+	// nothing), and the mask's bytes. It is how a CFF2 glyph is written again
+	// as a CFF one with its hints (cff2cff.go).
+	hints func(op int, args []float64, mask []byte)
+}
+
+// t2Seg is one segment a charstring draws: op is 'M', 'L' or 'C', and pts the
+// point it goes to, after a curve's two control points.
+type t2Seg struct {
+	op  byte
+	pts [6]float64
 }
 
 // t2Frame is one charstring or subroutine being run, and how far into it.
@@ -602,6 +666,16 @@ type t2Interp struct {
 	open    bool
 	bounds  cffBounds
 	endchar bool
+
+	// A CFF2 charstring's blend state, HarfBuzz's cff2_cs_interp_env_t: the
+	// group of regions its blends use, whether a vsindex or a blend has been
+	// seen — a vsindex after either is an error — how many regions the group
+	// has, fixed at the first blend, and how many operands its blends have
+	// consumed, which HarfBuzz charges against the glyph's budget.
+	ivs                    int
+	seenVsindex, seenBlend bool
+	regions                int
+	blendSpent             int
 }
 
 // bounds runs glyph gid's charstring for the box it draws: HarfBuzz's
@@ -612,7 +686,7 @@ func (r *t2Run) bounds(gid int, inSeac bool) (cffBounds, bool) {
 	if gid < 0 || gid >= len(r.o.charStrings) {
 		return newCFFBounds(), false
 	}
-	in := &t2Interp{run: r, locals: r.o.localsOf(gid), inSeac: inSeac, bounds: newCFFBounds()}
+	in := &t2Interp{run: r, locals: r.o.localsOf(gid), inSeac: inSeac, bounds: newCFFBounds(), ivs: r.o.ivsOf(gid)}
 	in.cur = t2Frame{code: r.o.charStrings[gid]}
 	for left := cffMaxOps; ; {
 		if !r.budget.Charge(1, "the ink of the CFF glyphs") {
@@ -651,6 +725,14 @@ const (
 func (in *t2Interp) fetch() int {
 	f := &in.cur
 	if f.at >= len(f.code) {
+		if in.run.o.cff2 != nil {
+			// A CFF2 charstring ends where its bytes do: a subroutine
+			// returns, and the glyph has ended.
+			if in.depth > 0 {
+				return 11
+			}
+			return 14
+		}
 		return t2Invalid
 	}
 	op := int(f.code[f.at])
@@ -701,6 +783,9 @@ func (in *t2Interp) clear() { in.n = 0 }
 func (in *t2Interp) moveTo(x, y float64) {
 	in.open = false
 	in.x, in.y = x, y
+	if r := in.run; r.path != nil {
+		r.path(t2Seg{op: 'M', pts: [6]float64{x + r.offX, y + r.offY}})
+	}
 }
 
 func (in *t2Interp) lineTo(x, y float64) {
@@ -710,12 +795,19 @@ func (in *t2Interp) lineTo(x, y float64) {
 	}
 	in.x, in.y = x, y
 	in.bounds.update(x, y)
+	if r := in.run; r.path != nil {
+		r.path(t2Seg{op: 'L', pts: [6]float64{x + r.offX, y + r.offY}})
+	}
 }
 
 func (in *t2Interp) curveTo(x1, y1, x2, y2, x3, y3 float64) {
 	if !in.open {
 		in.open = true
 		in.bounds.update(in.x, in.y)
+	}
+	if r := in.run; r.path != nil {
+		ox, oy := r.offX, r.offY
+		r.path(t2Seg{op: 'C', pts: [6]float64{x1 + ox, y1 + oy, x2 + ox, y2 + oy, x3 + ox, y3 + oy}})
 	}
 	in.bounds.update(x1, y1)
 	in.bounds.update(x2, y2)
@@ -780,29 +872,58 @@ func (in *t2Interp) step(op int) {
 		in.depth++
 		in.cur = t2Frame{code: subrs[n]}
 
-	case 14: // endchar, which with four operands or more is a seac
-		if in.n >= 4 {
+	case 14: // endchar, which with four operands or more is a seac, in CFF
+		if in.n >= 4 && in.run.o.cff2 == nil {
 			in.seac()
 		}
 		in.clear()
 		in.endchar = true
 
 	case 1, 18, 3, 23: // hstem, hstemhm, vstem, vstemhm
+		if h := in.run.hints; h != nil {
+			h(op, in.args[:in.n], nil)
+		}
 		in.stems += in.n / 2
 		in.clear()
 	case 19, 20: // hintmask, cntrmask
 		// The mask's length is fixed by the stems declared before the first
 		// mask, and a mask the charstring does not have room for is not read
 		// at all: its bytes are read as operators, and the operands stay.
+		var implicit []float64
 		if !in.seenHintmask {
 			in.stems += in.n / 2
 			in.hintmaskSize = (in.stems + 7) >> 3
 			in.seenHintmask = true
+			implicit = in.args[:in.n]
 		}
 		if in.cur.at+in.hintmaskSize <= len(in.cur.code) {
+			if h := in.run.hints; h != nil {
+				h(op, implicit, in.cur.code[in.cur.at:in.cur.at+in.hintmaskSize])
+			}
 			in.clear()
 			in.cur.at += in.hintmaskSize
 		}
+
+	case 15: // vsindex, in CFF2
+		if in.run.o.cff2 == nil {
+			in.clear()
+			return
+		}
+		// pop_uint: an integer part below zero is an error.
+		v := in.pop()
+		if in.err || v <= -1 || v > math.MaxInt32 || in.seenVsindex || in.seenBlend {
+			in.err = true
+			return
+		}
+		in.ivs = int(v)
+		in.seenVsindex = true
+		in.clear()
+	case 16: // blend, in CFF2
+		if in.run.o.cff2 == nil {
+			in.clear()
+			return
+		}
+		in.blend()
 
 	case 21: // rmoveto
 		dy := in.pop()
@@ -907,6 +1028,51 @@ func (in *t2Interp) step(op int) {
 		// goes on.
 		in.clear()
 	}
+}
+
+// cff2BlendBudget is how many operands HarfBuzz lets one glyph's blends
+// consume: its per-glyph budget, HB_BUDGET_GLYPH, from which each blend spends
+// the deltas it reads. The operators a glyph runs are charged to the same
+// budget only once it has finished, and are fewer than cffMaxOps, so it is
+// the blends alone that can spend it.
+const cff2BlendBudget = 1 << 24
+
+// blend is CFF2's blend operator, cff2_cs_opset_t::process_blend: the count n
+// on top of the stack, the n values under the n·k deltas beneath it — k the
+// regions of the glyph's group, fixed at its first blend — and each value
+// resolved at the location with its own k deltas. The deltas and the count
+// leave the stack; the values stay, moved.
+func (in *t2Interp) blend() {
+	if !in.seenBlend {
+		in.seenBlend = true
+		in.regions = in.run.o.cff2.regionCount(in.ivs)
+	}
+	v := in.pop()
+	if in.err || v < math.MinInt32 || v > math.MaxInt32 || v <= -1 {
+		in.err = true
+		return
+	}
+	n, k := int(v), in.regions
+	total := (k + 1) * n
+	if total > in.n {
+		in.err = true
+		return
+	}
+	if in.blendSpent += total - n; in.blendSpent > cff2BlendBudget {
+		in.err = true
+		return
+	}
+	if !in.run.budget.Charge(total-n, "the blends of the CFF2 glyphs") {
+		in.run.spent = true
+		in.err = true
+		return
+	}
+	start := in.n - total
+	for i := 0; i < n; i++ {
+		deltas := in.args[start+n+i*k : start+n+(i+1)*k]
+		in.args[start+i] = in.run.o.cff2.resolve(in.args[start+i], deltas, in.ivs)
+	}
+	in.n -= k * n
 }
 
 // rcurve draws the curve whose six relative coordinates start at argument i.
@@ -1069,7 +1235,9 @@ func (in *t2Interp) seac() {
 		in.err = true
 		return
 	}
+	in.run.offX, in.run.offY = dx, dy
 	ab, ok := in.run.bounds(accent, true)
+	in.run.offX, in.run.offY = 0, 0
 	if in.run.draw {
 		ab.shift(dx, dy)
 		in.bounds.include(ab)

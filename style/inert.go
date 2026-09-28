@@ -119,11 +119,6 @@ var inertValues = map[string]inertValue{
 	// a page laid out once offers no way to.
 	"resize": {produced: "none", because: "nothing here is resizable by anyone"},
 
-	// CSS Fonts 4 §6.4 and §6.5. Shaping applies the face's own kerning and its
-	// default features, which is what "auto" and "normal" ask for.
-	// TestKerningIsApplied in the shape package is what holds the first.
-	"font-variation-settings": {inherits: true, produced: "normal", because: "no variation is applied beyond the instance"},
-
 	// CSS Fragmentation 3's break properties are not here any more, and the
 	// reason they were is the one TestNothingIsFragmented was written to
 	// catch going stale. "avoid" was inert on the ground that "this engine does
@@ -161,14 +156,11 @@ var inertValues = map[string]inertValue{
 	// neither box is turned and neither property changes anything, which is what
 	// the layout-time check asks before it says a word.
 
-	// CSS Backgrounds 3 §5.1: corners are square.
-	"border-radius": {produced: "0", because: "every corner is square"},
-
-	// The identities: CSS Filter Effects 1 §5 and CSS Transforms 2. CSS Color
-	// 4 §3's opacity was here and is not any more — it is implemented, and what
-	// it cannot express is reported at the box that asked for it rather than at
-	// the declaration. See layout/opacity.go.
-	"filter":          {produced: "none", because: "nothing is filtered"},
+	// The identities of CSS Transforms 2. CSS Color 4 §3's opacity was here and
+	// is not any more — it is implemented, and what it cannot express is
+	// reported at the box that asked for it rather than at the declaration. See
+	// layout/opacity.go. Filter Effects 1's filter has gone the same way: see
+	// layout/filter.go.
 	"transform":       {produced: "none", because: "nothing is transformed"},
 	"transform-style": {produced: "flat", because: "there is no 3D rendering context"},
 	// backface-visibility is the second property whose every value is inert,
@@ -205,7 +197,6 @@ var inertValues = map[string]inertValue{
 
 	// Properties about interaction and animation, none of which a page laid out
 	// once has any of.
-	"will-change":         {produced: "auto", because: "nothing is optimised for change"},
 	"transition":          {produced: "none", because: "nothing transitions"},
 	"animation":           {produced: "none", because: "nothing animates"},
 	"pointer-events":      {inherits: true, produced: "auto", because: "there is no pointer"},
@@ -220,12 +211,12 @@ var inertValues = map[string]inertValue{
 	// report said a declaration had been dropped when there was no effect in it
 	// to drop.
 
-	// CSS Backgrounds 3 §6 and CSS Text Decoration 4 §6. Nothing is drawn behind
-	// a box or behind a glyph, so a declaration asking for no shadow asks for the
-	// page that is already there. A shadow that asks for something stays
-	// reported: an author who wrote one gets a flat page instead.
-	"box-shadow":  {produced: "none", because: "no shadow is drawn behind a box"},
-	"text-shadow": {inherits: true, produced: "none", because: "no shadow is drawn behind text"},
+	// CSS Backgrounds 3 §6. Nothing is drawn behind a box, so a declaration
+	// asking for no shadow asks for the page that is already there. A shadow
+	// that asks for something stays reported: an author who wrote one gets a
+	// flat page instead. text-shadow was here and is implemented; see
+	// layout/textshadow.go.
+	"box-shadow": {produced: "none", because: "no shadow is drawn behind a box"},
 
 	// CSS UI 4 §8.1 and CSS Contain 2 §4. A page laid out once has no pointer to
 	// put a cursor under, and it renders every box it lays out rather than
@@ -266,9 +257,11 @@ var inertValues = map[string]inertValue{
 	"transform-origin": {always: true, because: "nothing is transformed, so no transformation has an origin"},
 
 	// CSS Text Decoration 4 §3.2 and §2.5, and CSS Fonts 4 §4.5 and §6.9.
+	// text-emphasis and text-emphasis-style were here and are implemented; see
+	// layout/emphasis.go.
 	//
-	// Two of these are the hyphens trap and the text-decoration-skip-ink case
-	// respectively, which is why they are written out rather than listed.
+	// One of these is the text-decoration-skip-ink case, which is why it is
+	// written out rather than listed.
 	//
 	// text-underline-position: "auto" leaves the position to the UA, and
 	// "from-font" requires it to come from the face's own metrics. This engine
@@ -277,19 +270,14 @@ var inertValues = map[string]inertValue{
 	// "also" is for. See TestUnderlineComesFromTheFaceThatStatesOne. "under" asks
 	// for the line below the descenders and is still reported.
 	//
-	// font-optical-sizing: the initial value is "auto", and it is *not* what this
-	// engine produces. "auto" asks for the face's optical size axis to be set from
-	// the font size, and this engine applies no variation beyond the instance it
-	// was given — see font-variation-settings above, and TestKerningIsApplied's
-	// neighbours in the shape package. So what it produces is "none", and "auto"
-	// is the value that is still reported. Exactly the hyphens case, found by
-	// looking for it.
+	// font-optical-sizing was here, with the hyphens case's shape: its initial
+	// value "auto" asked for the optical size axis to follow the font size,
+	// which this engine did not do, so "none" was inert and "auto" reported. It
+	// is a property now and both values are applied — see
+	// layout/fontinstance.go — and so is font-variation-settings, which was
+	// beside it.
 	"text-underline-position": {inherits: true, produced: "auto", also: "from-font",
 		because: "the underline is placed from the face's own metrics"},
-	"font-optical-sizing": {inherits: true, produced: "none", initial: "auto",
-		because: "no variation is applied beyond the instance, optical sizing included"},
-	"text-emphasis":       {inherits: true, produced: "none", because: "no emphasis mark is drawn"},
-	"text-emphasis-style": {inherits: true, produced: "none", because: "no emphasis mark is drawn"},
 	"font-variant-alternates": {inherits: true, produced: "normal",
 		because: "no alternate glyphs are selected"},
 
@@ -322,7 +310,6 @@ var inertValues = map[string]inertValue{
 	"scroll-padding":  {produced: "auto", because: "nothing scrolls, so there is no scrollport to inset"},
 	"overflow-anchor": {produced: "auto", because: "nothing scrolls and nothing moves after layout"},
 	"scrollbar-color": {produced: "auto", because: "there is no scrollbar to colour"},
-	"outline-offset":  {produced: "0", because: "an outline is drawn at the border edge"},
 }
 
 // isInertDeclaration reports whether a declaration of an unimplemented property
@@ -376,7 +363,7 @@ func isInertDeclaration(name string, vals []css.ComponentValue) bool {
 		return true
 	}
 	// A length written as a bare zero and one written with a unit are the same
-	// length, and "border-radius: 0px" is as inert as "border-radius: 0".
+	// length, and "scroll-margin: 0px" is as inert as "scroll-margin: 0".
 	return entry.produced == "0" && isZeroLength(value)
 }
 

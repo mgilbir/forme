@@ -1,4 +1,4 @@
-.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink hbcolrink hbverticalinstance test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -50,6 +50,7 @@ CORPUS_ENV = \
 	WPT_TESTS="$(abspath $(WPT_DIR))" \
 	NOTO_FONTS="$(abspath $(NOTO_DIR))" \
 	NOTO_CJK="$(abspath $(CJK_DIR))" \
+	CFF_FONTS="$(abspath $(CFF_DIR))" \
 	CSS_PARSING_TESTS="$(abspath $(CSS_TESTS_DIR))" \
 	UNICODE_BIDI_TESTS="$(abspath $(BIDI_DIR))" \
 	UNICODE_GRAPHEME_TESTS="$(abspath $(GRAPHEME_DIR))" \
@@ -59,7 +60,7 @@ CORPUS_ENV = \
 # The inputs of every generated table are corpora too: cmd/regenerate_test.go
 # regenerates each table from them and compares, and with TABLE_INPUTS=required
 # above, a table whose inputs are not here is a failure rather than a skip.
-CORPORA = wpt noto-fonts notocjk ucd css-tests bidi-tests grapheme-tests \
+CORPORA = wpt noto-fonts notocjk cff-fonts ucd css-tests bidi-tests grapheme-tests \
 	normalization-tests $(HTML_ENTITIES) $(TABLE_SOURCES) notice-sources
 
 test-corpora:
@@ -185,7 +186,7 @@ hbenv:
 # indiccategories.expected.txt — are read from a source checkout of the same
 # release: HarfBuzz's own generators, and its own source; see
 # usecategories.py, usescripts.py and indiccategories.py.
-hboracles: hbshaping hbvertical hbcffink hbcolrink hbverticalinstance hblanguages varinstance
+hboracles: hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried hblanguages varinstance
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
@@ -254,6 +255,26 @@ hbcffink:
 		NotoSansHK-Regular.otf=$(CJK_DIR)/NotoSansHK-Regular.otf \
 		NotoSerifJP-Regular.otf=$(CJK_DIR)/NotoSerifJP-Regular.otf
 
+# CFF2 variable fonts, drawn by HarfBuzz at several locations and cut there by
+# fontTools: a face built here for what no real one does (cff2_fixture.py), and
+# the CFF2 fonts of `make cff-fonts`. See cff2.py.
+hbcff2:
+	$(PYTHON) $(HARFBUZZ_DIR)/cff2_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/cff2.py $(HARFBUZZ_DIR)/cff2.expected.txt \
+		CFF2Blend.otf=$(HARFBUZZ_DIR)/fonts/CFF2Blend.otf \
+		SourceSans3VF-Upright.otf=$(CFF_DIR)/SourceSans3VF-Upright.otf \
+		SourceSerif4Variable-Roman.otf=$(CFF_DIR)/SourceSerif4Variable-Roman.otf \
+		NotoSansJP-VF.otf=$(CFF_DIR)/NotoSansJP-VF.otf
+
+# Which subroutines of a name-keyed CFF a subset keeps, asked of fontTools'
+# subsetter: the CFFInk.otf fixture and the static Source fonts, so this needs
+# `make cff-fonts` first. See cffsubrs.py.
+cffsubrs:
+	$(PYTHON) $(HARFBUZZ_DIR)/cffsubrs.py $(HARFBUZZ_DIR)/cffsubrs.expected.txt \
+		CFFInk.otf=$(HARFBUZZ_DIR)/fonts/CFFInk.otf \
+		SourceSans3-Regular.otf=$(CFF_DIR)/SourceSans3-Regular.otf \
+		SourceSerif4-Regular.otf=$(CFF_DIR)/SourceSerif4-Regular.otf
+
 # The ink of colour glyphs, painted from COLR or read from a CBDT bitmap's
 # metrics: every glyph of two faces built here for each thing painting can do
 # to a box and each thing the bitmap tables say (see colrink_fixture.py). See
@@ -263,13 +284,139 @@ hbcolrink:
 	$(PYTHON) $(HARFBUZZ_DIR)/colrink.py $(HARFBUZZ_DIR)/colrink.expected.txt \
 		ColourInk.ttf=$(HARFBUZZ_DIR)/fonts/ColourInk.ttf \
 		ColourInkStatic.ttf=$(HARFBUZZ_DIR)/fonts/ColourInkStatic.ttf \
-		BitmapInk.ttf=$(HARFBUZZ_DIR)/fonts/BitmapInk.ttf
+		BitmapInk.ttf=$(HARFBUZZ_DIR)/fonts/BitmapInk.ttf \
+		SbixInk.ttf=$(HARFBUZZ_DIR)/fonts/SbixInk.ttf \
+		SbixInkLarge.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkLarge.ttf \
+		SbixInkRejected.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkRejected.ttf \
+		SbixInkOps.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkOps.ttf \
+		SbixInkOpsEdge.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkOpsEdge.ttf
+
+# Variable composites (VARC): a face built here (see varc_fixture.py), its
+# ink and outlines asked of HarfBuzz at its default and six locations, and its
+# outlines of fontTools. See varc.py.
+hbvarc:
+	$(PYTHON) $(HARFBUZZ_DIR)/varc_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/varc.py $(HARFBUZZ_DIR)/varc.expected.txt \
+		VarComposite.ttf=$(HARFBUZZ_DIR)/fonts/VarComposite.ttf \
+		VarCompositeDeep64.ttf=$(HARFBUZZ_DIR)/fonts/VarCompositeDeep64.ttf \
+		VarCompositeDeep65.ttf=$(HARFBUZZ_DIR)/fonts/VarCompositeDeep65.ttf \
+		VarCompositeBroken.ttf=$(HARFBUZZ_DIR)/fonts/VarCompositeBroken.ttf \
+		VarCompositeCFF.otf=$(HARFBUZZ_DIR)/fonts/VarCompositeCFF.otf \
+		VarCompositeStatic.ttf=$(HARFBUZZ_DIR)/fonts/VarCompositeStatic.ttf
+
+# Components placed by matching points, instanced: two variable faces built
+# here (see pointmatch_fixture.py), asked of HarfBuzz at five weights, of its
+# instancer and of fontTools'. See pointmatch.py.
+hbpointmatch:
+	$(PYTHON) $(HARFBUZZ_DIR)/pointmatch_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/pointmatch.py $(HARFBUZZ_DIR)/pointmatch.expected.txt \
+		PointMatch.ttf=$(HARFBUZZ_DIR)/fonts/PointMatch.ttf \
+		PointMatchPhantom.ttf=$(HARFBUZZ_DIR)/fonts/PointMatchPhantom.ttf
+
+# The MATH table, held to HarfBuzz and to fontTools both: a face built here
+# with every part of the table in it (see mathtable_fixture.py), the math test
+# fonts of the pinned suite — every one of them that has a MATH table but
+# operators.woff, whose two thousand constructions are one construction
+# repeated — and the two math faces of the Google Fonts library. See
+# mathtable.py.
+MATH_WPT_FONTS := \
+	axisheight5000-verticalarrow14000.woff \
+	css-units.woff \
+	fraction-axisheight7000-rulethickness1000.woff \
+	fraction-denominatordisplaystylegapmin5000-rulethickness1000.woff \
+	fraction-denominatordisplaystyleshiftdown6000-axisheight1000-rulethickness1000.woff \
+	fraction-denominatorgapmin4000-rulethickness1000.woff \
+	fraction-denominatorshiftdown3000-axisheight1000-rulethickness1000.woff \
+	fraction-numeratordisplaystylegapmin8000-rulethickness1000.woff \
+	fraction-numeratordisplaystyleshiftup2000-axisheight1000-rulethickness1000.woff \
+	fraction-numeratorgapmin9000-rulethickness1000.woff \
+	fraction-numeratorshiftup11000-axisheight1000-rulethickness1000.woff \
+	fraction-rulethickness10000.woff \
+	largeop-displayoperatorminheight1250.woff \
+	largeop-displayoperatorminheight2000-2AFF-italiccorrection3000.woff \
+	largeop-displayoperatorminheight3000-2AFF-axisheight1000.woff \
+	largeop-displayoperatorminheight5000.woff \
+	largeop-displayoperatorminheight7000-2AFF-italiccorrection5000.woff \
+	limits-lowerlimitbaselinedropmin3000.woff \
+	limits-lowerlimitgapmin11000.woff \
+	limits-upperlimitbaselinerisemin5000.woff \
+	limits-upperlimitgapmin7000.woff \
+	radical-degreebottomraisepercent25-rulethickness1000.woff \
+	radical-displaystyleverticalgap7000-rulethickness1000.woff \
+	radical-extraascender3000-rulethickness1000.woff \
+	radical-kernafterdegreeminus5000-rulethickness1000.woff \
+	radical-kernbeforedegree4000-rulethickness1000.woff \
+	radical-negativekernbeforedegree1000-rulethickness1000.woff \
+	radical-rtlm.woff \
+	radical-rulethickness8000.woff \
+	radical-verticalgap6000-rulethickness1000.woff \
+	scriptpercentscaledown0-scriptscriptpercentscaledown40.woff \
+	scriptpercentscaledown80-scriptscriptpercentscaledown0.woff \
+	scriptpercentscaledown80-scriptscriptpercentscaledown40.woff \
+	scripts-spaceafterscript3000.woff \
+	scripts-subscriptbaselinedropmin9000.woff \
+	scripts-subscriptshiftdown6000.woff \
+	scripts-subscripttopmax4000.woff \
+	scripts-subsuperscriptgapmin11000-superscriptbottommaxwithsubscript3000.woff \
+	scripts-subsuperscriptgapmin11000.woff \
+	scripts-superscriptbaselinedropmax10000.woff \
+	scripts-superscriptbottommin8000.woff \
+	scripts-superscriptshiftup7000.woff \
+	scripts-superscriptshiftupcramped5000.woff \
+	stack-bottomdisplaystyleshiftdown5000-axisheight1000.woff \
+	stack-bottomshiftdown6000-axisheight1000.woff \
+	stack-displaystylegapmin4000.woff \
+	stack-gapmin8000.woff \
+	stack-topdisplaystyleshiftup3000-axisheight1000.woff \
+	stack-topshiftup9000-axisheight1000.woff \
+	stretchstack-bottomshiftdown3000.woff \
+	stretchstack-gapabovemin7000.woff \
+	stretchstack-gapbelowmin11000.woff \
+	stretchstack-topshiftup5000.woff \
+	stretchy-centered-on-baseline.woff \
+	stretchy-text-direction-asymetrical.woff \
+	stretchy.woff \
+	underover-accentbaseheight4000-overbarextraascender3000.woff \
+	underover-accentbaseheight4000-overbarverticalgap11000.woff \
+	underover-accentbaseheight4000-underbarextradescender5000.woff \
+	underover-accentbaseheight4000-underbarverticalgap7000.woff
+
+hbmath:
+	$(PYTHON) $(HARFBUZZ_DIR)/mathtable_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/mathtable.py $(HARFBUZZ_DIR)/mathtable.expected.txt \
+		MathTable.ttf=$(HARFBUZZ_DIR)/fonts/MathTable.ttf \
+		$(foreach f,$(MATH_WPT_FONTS),$(f)=$(WPT_DIR)/fonts/math/$(f)) \
+		NotoSansMath-Regular.ttf=$(GF_DIR)/ofl/notosansmath/NotoSansMath-Regular.ttf \
+		STIXTwoMath-Regular.ttf=$(GF_DIR)/ofl/stixtwomath/STIXTwoMath-Regular.ttf
+
+# What each face's 'rtlm' makes of every glyph it maps, held to HarfBuzz: a face
+# built here with the feature stated every way the answer depends on (see
+# mirroredform_fixture.py), the suite's radical-rtlm.woff, and the two math
+# faces of the Google Fonts library. See mirroredform.py.
+hbmirroredform:
+	$(PYTHON) $(HARFBUZZ_DIR)/mirroredform_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/mirroredform.py $(HARFBUZZ_DIR)/mirroredform.expected.txt \
+		MirroredForms.ttf=$(HARFBUZZ_DIR)/fonts/MirroredForms.ttf \
+		radical-rtlm.woff=$(WPT_DIR)/fonts/math/radical-rtlm.woff \
+		NotoSansMath-Regular.ttf=$(GF_DIR)/ofl/notosansmath/NotoSansMath-Regular.ttf \
+		STIXTwoMath-Regular.ttf=$(GF_DIR)/ofl/stixtwomath/STIXTwoMath-Regular.ttf
 
 # A variable face set upright away from its default instance, and a kern
 # table's vertical subtables: two faces built here with VVAR and without, and
 # one with a kern table that kerns down the page (see
 # verticalinstance_fixture.py), and Noto Sans JP's variable face from the
 # corpora, so this needs `make noto-fonts` first. See verticalinstance.py.
+# A variable face's font-wide metrics and its GPOS devices at several
+# locations, which shape/instancevaried_test.go holds LoadInstance to. The two
+# fixture faces are built here; the others are checked in or bundled.
+hbinstancevaried:
+	$(PYTHON) $(HARFBUZZ_DIR)/variedlayout_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/instancevaried.py $(HARFBUZZ_DIR)/instancevaried.expected.txt \
+		VariedLayout.ttf=$(HARFBUZZ_DIR)/fonts/VariedLayout.ttf \
+		VariedLayoutTypo.ttf=$(HARFBUZZ_DIR)/fonts/VariedLayoutTypo.ttf \
+		NotoSans-Variable.ttf=fonts/notosans/NotoSans-Variable.ttf \
+		NotoSansArabic.ttf=$(HARFBUZZ_DIR)/fonts/NotoSansArabic.ttf
+
 hbverticalinstance:
 	$(PYTHON) $(HARFBUZZ_DIR)/verticalinstance_fixture.py $(HARFBUZZ_DIR)/fonts
 	$(PYTHON) $(HARFBUZZ_DIR)/verticalinstance.py $(HARFBUZZ_DIR)/verticalinstance.expected.txt \
@@ -629,11 +776,22 @@ phrases: phrase-sources
 # language to language and a table shipped without them is a table nobody may
 # ship.
 #
-# Four languages, and each is a table checked in — Hungarian's alone is half a
-# megabyte, which is what a hyphenation dictionary costs when it is patterns
-# rather than words. They are the four the suite asks for by name; adding a
-# fifth is an entry in cmd/internal/tables, its file here, and a line in
-# paragraph/hyphenate.go's hyphenSources.
+# Five languages, and each is a table checked in — Hungarian's alone is half a
+# megabyte and German's a quarter, which is what a hyphenation dictionary costs
+# when it is patterns rather than words. They are the five the suite asks for by
+# name and hyph-utf8 has patterns for; adding a sixth is an entry in
+# cmd/internal/tables, its file here, and a line in paragraph/hyphenate.go's
+# hyphenSources.
+#
+# German is the reformed spelling, hyph-de-1996, and only that: the suite's
+# German is "Donaudampfschifffahrt", three f's, which the traditional spelling
+# writes with two. The 1901 patterns are two more tables of the same size for
+# text the suite never holds, so a document that asks for them by its variant
+# subtag is told it did not get them rather than given the reformed breaks.
+#
+# The suite asks for two more, Uyghur and Cree, and neither is here because
+# nobody publishes patterns for them: not hyph-utf8, not LibreOffice's
+# dictionaries, not the ones Android and Chromium ship.
 #
 # Each entry carries the Go identifier and the key paragraph.HyphenationOf
 # resolves a lang attribute to. They differ for pinyin, whose key carries the
@@ -644,7 +802,7 @@ phrases: phrase-sources
 TEX_HYPHEN_COMMIT := 5684c0f51c0b81133db2efbe60a408b4155a3ff5
 HYPHEN_URL := https://raw.githubusercontent.com/hyphenation/tex-hyphen/$(TEX_HYPHEN_COMMIT)/hyph-utf8/tex/generic/hyph-utf8/patterns/tex
 HYPHEN_DIR := testdata/hyphen
-HYPHEN_FILES := hyph-en-us.tex hyph-nl.tex hyph-hu.tex hyph-zh-latn-pinyin.tex
+HYPHEN_FILES := hyph-en-us.tex hyph-nl.tex hyph-hu.tex hyph-zh-latn-pinyin.tex hyph-de-1996.tex
 
 HYPHEN_STAMP := $(call stamp,$(HYPHEN_DIR),$(HYPHEN_URL) $(HYPHEN_FILES))
 
@@ -805,6 +963,63 @@ $(CJK_STAMP):
 	done
 	@echo "$$(ls $(CJK_DIR)/*.otf | wc -l | tr -d ' ') CJK faces in $(CJK_DIR)"
 	touch $@
+
+# Fonts whose outlines are CFF that neither library above has: CFF2 variable
+# fonts, and static CFF fonts that are not CID-keyed.
+#
+# The OFL library is TrueType throughout and every face in the CJK set is a
+# CID-keyed CFF, so nothing fetched here had a CFF2 table — a variable font
+# whose charstrings blend their own variations — or a name-keyed CFF with
+# subroutines worth the name: Unifont and the Noto CJK faces are CID-keyed, and
+# the one name-keyed program in the tree is a fixture built to carry one of
+# everything. These are real fonts, from their publishers:
+#
+#   - Source Sans 3 and Source Serif 4, Adobe's own, each as the variable CFF2
+#     font and as a static Regular. The variable Serif has two axes, an avar,
+#     an MVAR and six Font DICTs; the Sans has one axis, two variation-data
+#     groups, and 1,686 local subroutines. The static ones are name-keyed CFF
+#     carrying 738 and 629 global subroutines and 648 and 543 local ones.
+#   - Noto Sans JP's variable font, from noto-cjk at the commit the CJK faces
+#     above are taken at: a CFF2 of 17,936 glyphs in eighteen Font DICTs, with
+#     a VORG and a VVAR.
+#
+# Each is held to its SHA-256, and each publisher's licence is fetched beside
+# its fonts. All five are under the SIL Open Font License 1.1, and Adobe's
+# reserve the font name "Source"; none of them is redistributed, only read by
+# the tests.
+#
+#	<name here>=<sha256>=<URL>
+SOURCE_SANS_COMMIT := 87b37a2daaed80fcb8e8ccb0085c4d72ddade12e
+SOURCE_SERIF_COMMIT := 80d3f8894c09c937bebfa9011247d2e1c79fd6f4
+SOURCE_SANS_URL := https://raw.githubusercontent.com/adobe-fonts/source-sans/$(SOURCE_SANS_COMMIT)
+SOURCE_SERIF_URL := https://raw.githubusercontent.com/adobe-fonts/source-serif/$(SOURCE_SERIF_COMMIT)
+CFF_DIR := testdata/cff-fonts
+CFF_FILES := \
+	SourceSans3-Regular.otf=08df266400933d3178d081a45f94a08814c3e55b4b7dd2e0ff69cb1329f13ab6=$(SOURCE_SANS_URL)/OTF/SourceSans3-Regular.otf \
+	SourceSans3VF-Upright.otf=3d0dfd6a3a644ab3d462a737923ffac41fb0ae007ce9ba83c24e6bfa76aa56c7=$(SOURCE_SANS_URL)/VF/SourceSans3VF-Upright.otf \
+	SourceSans-LICENSE.md=56af9b9c6715597e458284a474dc118a50a4150e9d547c70f7b4a33c3e6a9328=$(SOURCE_SANS_URL)/LICENSE.md \
+	SourceSerif4-Regular.otf=edf160d0d584deee8a3bb2c3371b2a7624ca63580fbe02c57c1f4c91e84d8787=$(SOURCE_SERIF_URL)/OTF/SourceSerif4-Regular.otf \
+	SourceSerif4Variable-Roman.otf=867b73c6a954a4a64616906d179f94572a748790a1d022ebeeff07f56ea0221a=$(SOURCE_SERIF_URL)/VAR/SourceSerif4Variable-Roman.otf \
+	SourceSerif-LICENSE.md=c21d7293d87b6d7ab1d0229a2f55b77f33a7613a6a4e66f6693d68d7d8d09464=$(SOURCE_SERIF_URL)/LICENSE.md \
+	NotoSansJP-VF.otf=85e5ef353081175fb9f764f037c550dd4b5ad913cb030c0de98a5d4d4018014b=$(NOTO_CJK_URL)/Sans/Variable/OTF/Subset/NotoSansJP-VF.otf \
+	NotoSansCJK-LICENSE=6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2=$(NOTO_CJK_URL)/Sans/LICENSE
+CFF_STAMP := $(call stamp,$(CFF_DIR),$(CFF_FILES))
+
+.PHONY: cff-fonts clean-cff-fonts
+
+cff-fonts: $(CFF_STAMP)
+
+$(CFF_STAMP):
+	mkdir -p $(CFF_DIR)
+	for e in $(foreach f,$(CFF_FILES),'$(f)'); do \
+	  name=$${e%%=*}; rest=$${e#*=}; sum=$${rest%%=*}; url=$${rest#*=}; \
+	  $(call pinned,$(CFF_DIR)/$$name,$$url,$$sum) || exit 1; \
+	done
+	for f in $(CFF_DIR)/*.otf; do $(call sfnt,$$f); done
+	touch $@
+
+clean-cff-fonts:
+	rm -rf $(CFF_DIR)
 
 fontsweep:
 	go run ./cmd/fontsweep $(GF_DIR)/ofl $(CJK_DIR)
@@ -1421,11 +1636,11 @@ $(NOTO_STAMP):
 # never looked at again.
 verify-fonts:
 	for f in $(NOTO_DIR)/*.ttf $(NOTO_DIR)/*.otf $(WPT_DIR)/fonts/*.ttf \
-	         $(WPT_DIR)/fonts/*.otf $(WPT_DIR)/fonts/*.woff; do \
+	         $(WPT_DIR)/fonts/*.otf $(WPT_DIR)/fonts/*.woff $(CFF_DIR)/*.otf; do \
 	  [ -e "$$f" ] || continue; \
 	  $(call sfnt,$$f); \
 	done
-	@echo "every font in $(NOTO_DIR) and $(WPT_DIR)/fonts is one"
+	@echo "every font in $(NOTO_DIR), $(WPT_DIR)/fonts and $(CFF_DIR) is one"
 
 clean-noto-fonts:
 	rm -rf $(NOTO_DIR)

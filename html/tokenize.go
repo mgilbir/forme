@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/internal/diag"
 )
 
 // The tokenizer.
@@ -92,6 +93,10 @@ type token struct {
 	text        string
 	selfClosing bool
 	offset      int
+	// ns is the namespace a prefix on the tag's name was bound to, before the
+	// parser dropped the prefix (see parser.resolveName), and empty where it
+	// had none or one this engine does not know.
+	ns string
 }
 
 type tokenizer struct {
@@ -107,9 +112,10 @@ type tokenizer struct {
 	// thing here: <style> and <script> hold ordinary character data, so "&gt;"
 	// in a stylesheet is a ">". See looksLikeXML.
 	xml bool
-	// foreign says the markup being read is inside an <svg> or a <math>, which
-	// the parser sets while it skips one. It changes one thing: a CDATA section
-	// is a CDATA section there in HTML as well as in XML.
+	// foreign says the markup being read is inside an <svg> or a <math>: the
+	// parser sets it while it skips an <svg>, and while a MathML element is
+	// the current node. It changes one thing: a CDATA section is a CDATA
+	// section there in HTML as well as in XML.
 	foreign bool
 }
 
@@ -248,6 +254,20 @@ func looksLikeXML(src string) bool {
 	return false
 }
 
+// maxShownBytes is how much of a name a message quotes, which is what
+// quoteValue and quoteName quote in layout and css.
+const maxShownBytes = 40
+
+// shown is a name from the document as a message quotes it: cut at
+// maxShownBytes, every byte that begins no UTF-8 character as the U+FFFD the
+// reader makes of it, and every control character as "?". See internal/diag.
+//
+// A name is the document's to choose, and it is bytes. "<a\x93" ends in a
+// tag name that is not text, and the message about it was not text either —
+// the scheduled fuzz run found it — and a tag name of sixty thousand bytes was
+// sixty thousand bytes of every message that named it.
+func shown(name string) string { return diag.Cut(name, maxShownBytes) }
+
 func (t *tokenizer) fail(off int, msg string) { t.add(Error{Offset: off, Message: msg}) }
 func (t *tokenizer) unsupported(off int, msg string) {
 	t.add(Error{Offset: off, Message: msg, Unsupported: true})
@@ -258,7 +278,15 @@ func (t *tokenizer) limit(off int, msg string) {
 	t.add(Error{Offset: off, Message: msg, Limit: true})
 }
 
+// add records a problem under the maxErrors bound.
+//
+// The message is made text here as well as where it is written. Each place that
+// quotes the document passes what it quotes through shown; this is what holds
+// when one of them does not, because a message that is not text is a fault in
+// every consumer that reads it and not only in the one that wrote it. For a
+// message that is already text it is a scan and nothing else.
 func (t *tokenizer) add(e Error) {
+	e.Message = diag.Text(e.Message)
 	switch {
 	case len(t.errs) > maxErrors:
 		return
@@ -283,7 +311,7 @@ func (t *tokenizer) add(e Error) {
 // been read. The parser stops reading when it calls this, so it is called once
 // per document at most, and the list is still bounded.
 func (t *tokenizer) stopped(off int, msg string) {
-	t.errs = append(t.errs, Error{Offset: off, Message: msg, Limit: true})
+	t.errs = append(t.errs, Error{Offset: off, Message: diag.Text(msg), Limit: true})
 }
 
 // next produces one token.
@@ -403,7 +431,7 @@ func (t *tokenizer) rawText() token {
 		// the document is the element's. Its being open at the end is reported
 		// once, by the tree builder, as every element open there is.
 		if name != "plaintext" || t.xml {
-			t.fail(start, "<"+name+"> is never closed")
+			t.fail(start, "<"+shown(name)+"> is never closed")
 		}
 		t.pos = len(t.src)
 		end = len(t.src)
@@ -615,7 +643,7 @@ func (t *tokenizer) endTag() (token, bool) {
 	if t.pos < len(t.src) && t.src[t.pos] == '>' {
 		t.pos++
 	} else {
-		t.fail(start, "the end tag </"+name+" is not closed with \">\"")
+		t.fail(start, "the end tag </"+shown(name)+" is not closed with \">\"")
 		t.skipTo('>')
 	}
 	return token{kind: tokEndTag, name: name, offset: start}, true
@@ -634,7 +662,7 @@ func (t *tokenizer) startTag() token {
 	for {
 		t.skipSpace()
 		if t.pos >= len(t.src) {
-			t.fail(start, "the tag <"+name+" is never closed")
+			t.fail(start, "the tag <"+shown(name)+" is never closed")
 			return out
 		}
 		switch t.src[t.pos] {
@@ -647,7 +675,7 @@ func (t *tokenizer) startTag() token {
 				out.selfClosing = true
 				return out
 			}
-			t.fail(t.pos, "a \"/\" in the middle of the tag <"+name+">")
+			t.fail(t.pos, "a \"/\" in the middle of the tag <"+shown(name)+">")
 			t.pos++
 			continue
 		}
@@ -669,8 +697,8 @@ func (t *tokenizer) startTag() token {
 			// author has to look.
 			if !cut {
 				cut = true
-				t.limit(at, "<"+name+"> has more attributes than this engine will read ("+
-					strconv.Itoa(maxAttributes)+"); \""+attr.Name+"\" and those after it were dropped")
+				t.limit(at, "<"+shown(name)+"> has more attributes than this engine will read ("+
+					strconv.Itoa(maxAttributes)+"); \""+shown(attr.Name)+"\" and those after it were dropped")
 			}
 			continue
 		}
@@ -679,7 +707,7 @@ func (t *tokenizer) startTag() token {
 			// the first and drops the rest, which means a template with two
 			// class attributes silently loses one — and which one is lost is
 			// not something an author can see in the output.
-			t.fail(at, "the attribute \""+attr.Name+"\" appears twice on <"+name+">")
+			t.fail(at, "the attribute \""+shown(attr.Name)+"\" appears twice on <"+shown(name)+">")
 			continue
 		}
 		seen[attr.Name] = true
@@ -711,7 +739,7 @@ func (t *tokenizer) attribute(tag string) Attribute {
 	if t.pos >= len(t.src) || t.src[t.pos] == '>' {
 		// The standard's missing-attribute-value: an attribute with the empty
 		// string for its value, and the tag ends where it ends.
-		t.fail(at, "the attribute \""+name+"\" has no value")
+		t.fail(at, "the attribute \""+shown(name)+"\" has no value")
 		return Attribute{Name: name}
 	}
 
@@ -723,7 +751,7 @@ func (t *tokenizer) attribute(tag string) Attribute {
 			t.pos++
 		}
 		if t.pos >= len(t.src) {
-			t.fail(at, "the value of \""+name+"\" is never closed")
+			t.fail(at, "the value of \""+shown(name)+"\" is never closed")
 			return Attribute{Name: name, Value: t.attrValue(t.src[start:], start)}
 		}
 		v := t.attrValue(t.src[start:t.pos], start)
@@ -743,7 +771,7 @@ func (t *tokenizer) attribute(tag string) Attribute {
 			if !reported {
 				reported = true
 				t.fail(t.pos, fmt.Sprintf("%q in the unquoted value of \"%s\" is part of the "+
-					"value, which is how HTML reads it; quote the value", c, name))
+					"value, which is how HTML reads it; quote the value", c, shown(name)))
 			}
 		}
 		t.pos++
@@ -824,7 +852,7 @@ func (t *tokenizer) readAttrName(tag string) string {
 		if (c == '"' || c == '\'' || c == '<' || c == '=') && !reported {
 			reported = true
 			t.fail(t.pos, fmt.Sprintf("%q in an attribute name of <%s> is part of the name, "+
-				"which is how HTML reads it; a space or a quote is missing", c, tag))
+				"which is how HTML reads it; a space or a quote is missing", c, shown(tag)))
 		}
 		t.pos++
 	}
@@ -929,7 +957,7 @@ func (t *tokenizer) reference(s string, off int, inAttr bool) (string, int, bool
 		if text, found := namedEntities[name]; found {
 			return text, end + 1, true
 		}
-		t.fail(off, "\"&"+name+"\" is not a character reference; write \"&amp;\" for a literal ampersand")
+		t.fail(off, "\"&"+shown(name)+"\" is not a character reference; write \"&amp;\" for a literal ampersand")
 		return "", 0, false
 	}
 

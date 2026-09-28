@@ -29,9 +29,16 @@ import "github.com/mgilbir/forme/font"
 // time, and get the font's answer rather than an assumption about which half
 // the blank was on.
 //
-// That is the whole of the mechanism, and it is not font-feature-settings: a
+// That is the whole of this mechanism, and it is not font-feature-settings: a
 // document cannot reach it, no feature is enabled by it, and asking about a
 // glyph the feature does not cover answers that there is no trimmed form.
+//
+// It answers the trim at the *end* of a line, where only the advance changes.
+// The trim at the start of one moves the ink as well, so layout draws that
+// character with 'halt' asked for by name, on a run of its own that holds that
+// character and no other, and measures the width the feature takes off by
+// shaping it both ways — see layout's markOpeningPunctuation. Beyond that one
+// character the feature is applied only where font-feature-settings asks.
 
 // readHalfWidth reads 'halt' into the layout's own table, applying nothing.
 //
@@ -71,7 +78,7 @@ func (l *layout) halfWidthSubtable(sub []byte) {
 	size := valueSize(valueFormat)
 	switch format {
 	case 1:
-		adj := readValueRecord(sub[6:], valueFormat)
+		adj := valueRecordAt(sub, 6, valueFormat, l.dv)
 		if adj == (singleAdjust{}) {
 			return
 		}
@@ -86,7 +93,7 @@ func (l *layout) halfWidthSubtable(sub []byte) {
 			if i >= n || off+size > len(sub) {
 				return true
 			}
-			if adj := readValueRecord(sub[off:], valueFormat); adj != (singleAdjust{}) {
+			if adj := valueRecordAt(sub, off, valueFormat, l.dv); adj != (singleAdjust{}) {
 				l.setHalfWidth(gid, adj)
 			}
 			return true

@@ -75,16 +75,17 @@ import (
 //     the outlines for the coordinates asked for, and FeatureVariations is read
 //     at those coordinates rather than at the default's — so a record whose
 //     conditions cover the instance is applied, which is how a font states
-//     different lookups for a weight.
+//     different lookups for a weight — and so are the Device tables GPOS states
+//     as VariationIndexes, which move its kerning and its anchors (gposvar.go).
+//   - What HarfBuzz does for a font whose tables do not cover what a model
+//     needs: placing the marks of a face that positions none (fallback.go),
+//     drawing the Arabic joining forms out of the character map, or out of
+//     HarfBuzz's table for a face laid out as Windows-1256 (arabicfallback.go),
+//     and composing Hebrew presentation forms for a face with no mark
+//     positioning (hebrew.go). See plan.go.
 //
 // # What is not, and what each absence costs
 //
-//   - Of what HarfBuzz does for a font whose tables do not cover what a model
-//     needs, the Windows-1256 Arabic fallback. The rest is done: placing the
-//     marks of a face that positions none (fallback.go), drawing the Arabic
-//     joining forms out of the character map (arabicfallback.go), and
-//     composing Hebrew presentation forms for a face with no mark positioning
-//     (hebrew.go). See plan.go.
 //   - Choosing a language from the text. Which script a run is in is decidable
 //     from its characters; which language it is in is not — "colour" and "color"
 //     are the same letters — so the default language system is used unless the
@@ -420,6 +421,10 @@ type layout struct {
 	// asked whether it covers a glyph where a lookup needs to know, rather than
 	// expanded into a set of every glyph it names.
 	markSets []coverageTable
+	// dv is GDEF's item variation store and the location the face was cut at,
+	// which is what the Device tables of GPOS's records and anchors vary by;
+	// nil for a face at its default instance. See gposvar.go.
+	dv *deviceDeltas
 	// kern is the pair-positioning lookups, in the order the font lists them,
 	// read flat for the two things that ask about a pair outside a positioning
 	// pass: the pair across a run boundary (boundarykern.go) and whether a face
@@ -694,6 +699,10 @@ func readPositioning(tables map[string][]byte, sel featureSet, required int, coo
 	allowance := coverageBudget(tables["GPOS"], tables["GDEF"], tables["kern"])
 	l := &layout{covWork: allowance}
 	l.readGDEF(tables["GDEF"])
+	// Before anything reads a ValueRecord or an anchor, which is what it
+	// varies: the kern lookups below keep it, and the positioning pass asks it
+	// of the layout. See gposvar.go.
+	l.dv = readDeviceDeltas(tables["GDEF"], coords)
 	if gpos := tables["GPOS"]; len(gpos) >= 10 {
 		varied := readFeatureVariations(gpos, coords)
 		feats := tableFeatures{sel: sel, varied: varied}
@@ -1152,6 +1161,9 @@ type kernLookup struct {
 	// in them each glyph that can begin a pair is found.
 	subs    [][]byte
 	byFirst map[int][]pairStart
+	// dv varies what the subtables state, for a face cut away from its
+	// default instance; nil for every other. See gposvar.go.
+	dv *deviceDeltas
 }
 
 // pairStart is one subtable's statement that a glyph may begin a pair: which
@@ -1173,7 +1185,7 @@ func (kl *kernLookup) pair(first, second int) (pairAdjust, bool) {
 		return adj, ok
 	}
 	for _, ps := range kl.byFirst[first] {
-		if adj, ok := pairIn(kl.subs[ps.sub], ps.at, second); ok {
+		if adj, ok := pairIn(kl.subs[ps.sub], ps.at, second, kl.dv); ok {
 			return adj, true
 		}
 	}
@@ -1181,8 +1193,9 @@ func (kl *kernLookup) pair(first, second int) (pairAdjust, bool) {
 }
 
 // pairIn searches one pair subtable for the pair beginning at a first glyph
-// whose place in the subtable is at.
-func pairIn(sub []byte, at, second int) (pairAdjust, bool) {
+// whose place in the subtable is at, with the deltas of a face cut away from
+// its default instance (see gposvar.go).
+func pairIn(sub []byte, at, second int, dv *deviceDeltas) (pairAdjust, bool) {
 	fmt1, fmt2 := font.Be16(sub, 4), font.Be16(sub, 6)
 	switch font.Be16(sub, 0) {
 	case 1:
@@ -1202,7 +1215,7 @@ func pairIn(sub []byte, at, second int) (pairAdjust, bool) {
 			case second > g:
 				lo = mid + 1
 			default:
-				return pairAdjustFrom(set[rec+2:], fmt1, fmt2), true
+				return pairAdjustAt(set, rec+2, fmt1, fmt2, dv), true
 			}
 		}
 	case 2:
@@ -1219,7 +1232,7 @@ func pairIn(sub []byte, at, second int) (pairAdjust, bool) {
 		if off+recSize > len(sub) {
 			return pairAdjust{}, false
 		}
-		return pairAdjustFrom(sub[off:], fmt1, fmt2), true
+		return pairAdjustAt(sub, off, fmt1, fmt2, dv), true
 	}
 	return pairAdjust{}, false
 }
@@ -1272,7 +1285,7 @@ func (l *layout) readGPOSPairs(gpos []byte, idx *featureIndex) {
 		if kind != 2 {                                            // 2 = pair adjustment
 			continue
 		}
-		kl := kernLookup{flags: mergedFlags(flags), byFirst: map[int][]pairStart{}}
+		kl := kernLookup{flags: mergedFlags(flags), byFirst: map[int][]pairStart{}, dv: l.dv}
 		// A subtable named twice in one lookup is kept once. The first
 		// subtable to name a pair wins, so the second copy has nothing left
 		// to say — and reading it again once per offset is how an 844-byte
@@ -1408,14 +1421,13 @@ type pairAdjust struct {
 
 func (p pairAdjust) zero() bool { return p == pairAdjust{} }
 
-// pairAdjustFrom reads the two ValueRecords of a pair.
-func pairAdjustFrom(rec []byte, format1, format2 int) pairAdjust {
-	first := readValueRecord(rec, format1)
-	size1 := valueSize(format1)
-	var second singleAdjust
-	if size1 <= len(rec) {
-		second = readValueRecord(rec[size1:], format2)
-	}
+// pairAdjustAt reads the two ValueRecords of a pair, which are at sub[at:] in
+// the table that holds them — a pair set of a listed pair subtable, or a class
+// pair subtable itself, which is what their Device offsets are measured from —
+// with the deltas of a face cut away from its default instance added.
+func pairAdjustAt(sub []byte, at, format1, format2 int, dv *deviceDeltas) pairAdjust {
+	first := valueRecordAt(sub, at, format1, dv)
+	second := valueRecordAt(sub, at+valueSize(format1), format2, dv)
 	return pairAdjust{
 		firstX: clamp16(first.xPlacement), firstY: clamp16(first.yPlacement),
 		firstAdvance: clamp16(first.xAdvance),
