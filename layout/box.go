@@ -772,6 +772,12 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	if !b.room(n) {
 		return nil
 	}
+	if n.Namespace == html.NamespaceMathML {
+		// What of MathML 3 the element uses that Core does not draw: see
+		// mathlegacy.go. An element that is not displayed shows nothing
+		// either way, and is not reported.
+		b.reportMathLegacy(n)
+	}
 	order := b.count
 
 	fontSize := b.fontSizeOf(n, parentFontSize)
