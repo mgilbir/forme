@@ -214,7 +214,6 @@ func TestAFilterIsAContainingBlockItReportsOnlyWhereItIsNot(t *testing.T) {
 		{`<span id="f"><div><div id="a"></div></div></span>`, `#f { filter: blur(1px) } #a { position: fixed }`, true},
 		{`<span id="f"><div id="p"><div id="a"></div></div></span>`,
 			`#f { filter: blur(1px) } #p { position: relative } #a { position: absolute }`, false},
-		{`<span id="f"><div><div id="a"></div></div></span>`, `#f { will-change: filter } #a { position: absolute }`, true},
 	} {
 		_, findings := filterFindings(t, tc.doc, tc.css)
 		got := false

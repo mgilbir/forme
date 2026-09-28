@@ -243,54 +243,8 @@ func TestWillChangeFilterIsAStackingContext(t *testing.T) {
 	}
 }
 
-// TestAWillChangeThisEngineDoesNotActOnIsReported: a will-change naming a
-// property whose values make a stacking context or a containing block asks
-// for one, and where this engine does not make it that is reported, once per
-// name; one naming filter is made and is not reported, and one naming a
-// property that makes neither asks for nothing and is not either. And
-// backdrop-filter, whose stacking context and containing block and filtering
-// of what is behind are none of them done, is still reported where it is
-// declared.
-func TestAWillChangeThisEngineDoesNotActOnIsReported(t *testing.T) {
-	for _, tc := range []struct {
-		value string
-		names []string
-	}{
-		{"transform", []string{"transform"}},
-		{"opacity, filter", []string{"opacity"}},
-		{"filter", nil},
-		{"color, margin-left, scroll-position, contents", nil},
-		{"auto", nil},
-		{"Position, z-index", []string{"position", "z-index"}},
-	} {
-		_, findings := filterFindings(t, `<div class="w">x</div><div class="w">y</div>`, `.w { will-change: `+tc.value+` }`)
-		var got []string
-		for _, f := range findings {
-			if f.Property == "will-change" && f.Rule == RuleUnsupportedValue {
-				got = append(got, f.Message)
-			}
-		}
-		if len(got) != len(tc.names) {
-			t.Errorf("will-change: %s: %d reports %q, want one for each of %q", tc.value, len(got), got, tc.names)
-			continue
-		}
-		for i, n := range tc.names {
-			if !strings.Contains(got[i], `"will-change: `+n+`"`) {
-				t.Errorf("will-change: %s: report %q does not name %s", tc.value, got[i], n)
-			}
-		}
-	}
-	for _, f := range []string{"backdrop-filter: blur(2px)", "backdrop-filter: grayscale(1)"} {
-		built := Build(Input{HTML: `<div id="d">x</div>`, CSS: []Stylesheet{{Source: `#d { ` + f + ` }`}}})
-		reported := false
-		for _, fd := range built.Findings {
-			reported = reported || (fd.Property == "backdrop-filter" && fd.Unsupported())
-		}
-		if !reported {
-			t.Errorf("%s was not reported: %v", f, built.Findings)
-		}
-	}
-}
+// A will-change naming anything else is TestAWillChangeIsNotReported's, in
+// willchange_test.go, and what it makes is the rest of that file's.
 
 // TestAnOverflowFindingFollowsTheFilter: the finding about text that runs out
 // of a positioned box names the clip the box is under, and that clip is its

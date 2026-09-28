@@ -568,7 +568,8 @@ type layouter struct {
 	// witness there is. See TestAligningTableCellsIsLinearInTheOutOfFlowBoxes.
 	absScans int
 	// positioned maps each positioned box to its fragment, and each box a
-	// filter makes a containing block (see containsAbsolutes), which is how an
+	// filter or a will-change makes a containing block (see
+	// containsAbsolutes), which is how an
 	// out-of-flow box finds the containing block §10.1 gives it. It is
 	// a map rather than a walk up the fragment tree because a fragment does not
 	// know its parent — layout builds downwards — and giving it one would add a
@@ -645,8 +646,9 @@ type layouter struct {
 	// both answer "nothing" for almost every box in an ordinary document.
 	inlineDraws  map[*Box]bool
 	inlineChains map[*Box][]*Box
-	// inlineFragments are the fragments a *positioned* or filtered inline box
-	// produced, in line order. §10.1 forms the containing block of an
+	// inlineFragments are the fragments an inline box that containsAbsolutes —
+	// a *positioned* one, or one a filter or a will-change makes a containing
+	// block — produced, in line order. §10.1 forms the containing block of an
 	// out-of-flow descendant from the first and last of them — see
 	// inlineContainingBlock and containsAbsolutes.
 	inlineFragments map[*Box][]*Fragment
@@ -1068,7 +1070,8 @@ func (l *layouter) layBlock(b *Box, containing style.Unit, at flow,
 		// §10.1 makes any positioned ancestor a containing block — that is the
 		// entire reason the "position: relative with no offsets" wrapper is an
 		// idiom rather than a no-op — and for a box with a filter, which Filter
-		// Effects 1 §5 makes one too. See containsAbsolutes.
+		// Effects 1 §5 makes one too, or with a will-change that asks for one,
+		// as css-will-change 1 §3 lets it. See containsAbsolutes.
 		l.setPositioned(b, frag)
 	}
 

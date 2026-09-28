@@ -124,12 +124,13 @@ func (p PositionScheme) outOfFlow() bool {
 // fixed ones. Filter Effects 1 §5 adds one more: "A value other than none for
 // the filter property results in the creation of a containing block for
 // absolute and fixed positioned descendants unless the element it applies to
-// is a document root element". And css-will-change 1 §3 makes a box whose
-// will-change names filter one too, since a value of filter would: "If any
-// non-initial value of a property would cause the element to generate a
-// containing block for absolutely positioned elements, specifying that
-// property in will-change must cause the element to generate a containing
-// block for absolutely positioned elements", and the same for fixed ones.
+// is a document root element". And css-will-change 1 §3 makes a box one
+// wherever a value of a property it names would: "If any non-initial value of
+// a property would cause the element to generate a containing block for
+// absolutely positioned elements, specifying that property in will-change
+// must cause the element to generate a containing block for absolutely
+// positioned elements", and the same for fixed ones. Which properties those
+// are, and on which boxes, is willChangeRules'.
 //
 // The rectangle is the same either way: the padding box of a block, and of an
 // inline box the bounding box of the padding boxes of its first and last
@@ -142,20 +143,37 @@ func (p PositionScheme) outOfFlow() bool {
 // positioned against one rectangle and clipped by another is a box in a place
 // nothing chose. A replaced box holds no boxes to be the containing block of,
 // and its fragment is kept only where it is positioned, as it was.
+//
+// Every box that is the containing block of the fixed boxes inside it is that
+// of the absolute ones as well — position makes the second and not the first,
+// but nothing makes the first and not the second — and
+// containsAbsolutes says so by asking everything containsFixed asks, which is
+// what lets the places that keep a box's fragments ask containsAbsolutes
+// alone.
 
 // containsAbsolutes reports whether a box is the containing block of the
-// absolutely positioned boxes inside it.
-func containsAbsolutes(b *Box) bool { return b.Position.positioned() || filterContains(b) }
+// absolutely positioned boxes inside it: it is positioned, or it is the
+// containing block of the fixed ones, or its will-change asks for it.
+func containsAbsolutes(b *Box) bool { return b.Position.positioned() || containsOtherwise(b) }
 
 // containsFixed reports whether a box is the containing block of the fixed
-// positioned boxes inside it, which only a filter makes one.
-func containsFixed(b *Box) bool { return filterContains(b) }
+// positioned boxes inside it, which a filter makes it, and a will-change
+// naming a property that would.
+func containsFixed(b *Box) bool {
+	return filterContains(b) || willChangeAsksOf(b)&asksFixedContainer != 0
+}
 
-// filterContains reports whether a box's filter, or a will-change naming
-// filter, makes it a containing block: on any box but the root. See
-// willChangeNames for the second.
+// containsOtherwise reports whether a box is the containing block of the
+// absolutely positioned boxes inside it for a reason other than its position:
+// a filter, or its will-change.
+func containsOtherwise(b *Box) bool {
+	return filterContains(b) || willChangeAsksOf(b)&(asksAbsoluteContainer|asksFixedContainer) != 0
+}
+
+// filterContains reports whether a box's filter makes it a containing block:
+// on any box but the root.
 func filterContains(b *Box) bool {
-	return b != nil && b.Parent != nil && (filtersItsPaint(b) || willChangeNames(b, "filter"))
+	return b != nil && b.Parent != nil && filtersItsPaint(b)
 }
 
 // positionOf reads the position property.
@@ -604,12 +622,13 @@ func (l *layouter) layoutAbsolute(c absCandidate, page Rect) {
 //
 // For "absolute" it is the *padding* box of the nearest ancestor that
 // containsAbsolutes — whose position is anything but static, or which has a
-// filter — and the padding box rather than the content box is not a detail —
+// filter or a will-change asking for one — and the padding box rather than the
+// content box is not a detail —
 // it is what makes a positioned box with padding hold an absolutely positioned
 // child inside its padding rather than inset by it, which is the difference
 // every "position: relative" wrapper in the world depends on. For "fixed" it is
 // the padding box of the nearest ancestor that containsFixed — one with a
-// filter, or whose will-change names filter — and otherwise the page box.
+// filter, or whose will-change asks for one — and otherwise the page box.
 //
 // With no such ancestor the answer is the initial containing block, which
 // in this engine is the page box: there is one page, its size is settled before
@@ -649,16 +668,27 @@ func (l *layouter) containingBlockFor(b *Box, page Rect) (Rect, *Box) {
 		// gives no percentage is sized from its own content. Neither reads an
 		// edge of the containing block, so neither is approximated by anything,
 		// and reporting them says a page is wrong that is exactly right.
+		//
+		// The same is true of a box that is not inline and whose fragment was
+		// never kept, which is a table row or row group: the table lays them
+		// out itself and keeps no fragment of either as a containing block, so
+		// a positioned or filtered row, or one whose will-change asks for one,
+		// is skipped the same way and named for what it is.
 		if !l.readsItsContainingBlock(b) {
 			continue
+		}
+		why := "an inline box that generated no fragments, so there are no " +
+			"padding boxes to form one from"
+		if !isInlineBox(anc) {
+			why = "a " + anc.Inner.String() + " box, which this engine does not " +
+				"form a containing block from"
 		}
 		l.rec.ReportDetail(Finding{
 			Rule:   RulePositionApproximated,
 			Source: AtHTML(offsetOf(b)),
 			Message: "the containing block for this " + b.Position.String() +
-				" positioned box is an inline box that generated no fragments, so " +
-				"there are no padding boxes to form one from; it was positioned " +
-				"against the next containing block up instead",
+				" positioned box is " + why + "; it was positioned against the " +
+				"next containing block up instead",
 			Path:     PathOf(b.Element),
 			Property: "position",
 		})

@@ -424,7 +424,7 @@ func (d *inlineDecor) finish(parent *Fragment) {
 		if containsAbsolutes(b) {
 			// Recorded for §10.1: an absolutely positioned descendant of this
 			// box is placed against the bounding box of its first and last
-			// fragments, and so is a fixed one of a box with a filter. They
+			// fragments, and so is a fixed one of a box that containsFixed. They
 			// are in the line's coordinates here and are made absolute with
 			// everything else — see absolutise — and the candidates that read
 			// them are placed after that.
@@ -601,8 +601,8 @@ func (l *layouter) paintedInlines(b *Box) []*Box {
 			// anything, because §10.1 forms the containing block of an
 			// absolutely positioned descendant from the padding boxes of this
 			// box's own fragments — so the fragments have to exist. So is one
-			// with a filter, which is a containing block as well (see
-			// containsAbsolutes). It paints
+			// with a filter, or a will-change asking for one, which is a
+			// containing block as well (see containsAbsolutes). It paints
 			// nothing extra: a fragment with no background and no border draws
 			// nothing, exactly as it did when there was no fragment at all.
 			//

@@ -233,13 +233,6 @@ func filtersItsPaint(b *Box) bool {
 	return raw != "" && !ascii.EqualFold(raw, "none")
 }
 
-// stacksAsAFilter reports whether a box is the stacking context a filter makes
-// it: it has one, or its will-change names filter, which css-will-change 1 §3
-// makes the same stacking context with nothing filtered (see willchange.go).
-func stacksAsAFilter(b *Box) bool {
-	return filtersItsPaint(b) || willChangeNames(b, "filter")
-}
-
 // maxFilterFunctions bounds the functions one filter may list. Each is a group
 // or a pass over what the group holds, so this bounds the work a filter asks
 // of the painter and what a report about it can say; a filter past it is not
@@ -435,40 +428,48 @@ func filterAmount(part []css.ComponentValue) (float64, bool) {
 
 // resolveFilters reads every filter in the document into the chains the painter
 // wraps groups in, and reports what it cannot do: the functions it does not
-// apply, a chain past the bound, a positioned box whose containing block is a
-// filtered inline box it was lifted out of, and a will-change this engine does
-// not act on.
+// apply, a chain past the bound, and a positioned box whose containing block is
+// an inline box it was lifted out of, which a filter or a will-change made one.
 func (l *layouter) resolveFilters(root *Fragment) {
 	if root == nil || root.Box == nil {
 		return
 	}
 	var register func(b *Box)
-	// splitAbsolute and splitFixed say the nearest containing block above a
-	// box, of an absolutely and of a fixed positioned one, is a filtered inline
-	// box §9.2.1.1 broke around a block the box is in.
-	var walk func(b *Box, splitAbsolute, splitFixed bool)
-	walk = func(b *Box, splitAbsolute, splitFixed bool) {
+	// splitAbsolute and splitFixed are the nearest containing block above a
+	// box, of an absolutely and of a fixed positioned one, where that is an
+	// inline box §9.2.1.1 broke around a block the box is in and which a
+	// filter or a will-change made a containing block; nil where it is not.
+	var walk func(b *Box, splitAbsolute, splitFixed *Box)
+	walk = func(b *Box, splitAbsolute, splitFixed *Box) {
 		// The containing block is the ancestor that containsAbsolutes or
 		// containsFixed, found by walking up the box tree (containingBlockFor).
 		// An inline box a block was lifted out of is not above the block in
 		// that tree, and forming its containing block from the pieces it was
 		// broken into is not done: the box is positioned against the next one
 		// up, and that is reported for it.
-		switch {
-		case b.Position == PositionFixed && splitFixed,
-			b.Position == PositionAbsolute && splitAbsolute:
+		var from *Box
+		switch b.Position {
+		case PositionFixed:
+			from = splitFixed
+		case PositionAbsolute:
+			from = splitAbsolute
+		}
+		if from != nil {
+			what, property := "a box with a filter", "filter"
+			if !filterContains(from) {
+				what, property = "a box whose will-change names a property that would make it one", "will-change"
+			}
 			l.rec.ReportDetail(Finding{
 				Rule:   RulePositionApproximated,
 				Source: AtHTML(offsetOf(b)),
-				Message: "a box with a filter is the containing block of the positioned " +
-					"boxes inside it, and this one is inside a block that was lifted " +
-					"out of such an inline box, which this engine does not make it; " +
-					"it was positioned against the next containing block up",
+				Message: what + " is the containing block of the positioned boxes inside " +
+					"it, and this one is inside a block that was lifted out of such an " +
+					"inline box, which this engine does not make it; it was positioned " +
+					"against the next containing block up",
 				Path:     PathOf(b.Element),
-				Property: "filter",
+				Property: property,
 			})
 		}
-		reportWillChange(l, b)
 		// And the inline boxes a block was lifted out of, which §9.2.1.1 left
 		// out of the tree above it and which paint it all the same: a filtered
 		// <span> around a <div> is a group holding the <div>, and may be in
@@ -479,18 +480,24 @@ func (l *layouter) resolveFilters(root *Fragment) {
 		register(b)
 		childAbsolute, childFixed := splitAbsolute, splitFixed
 		for _, from := range b.splitFrom {
+			// A positioned inline box is a containing block this does not
+			// report being lifted out of, as it did not before a filter was
+			// one; one that is a containing block for any other reason is.
 			if containsAbsolutes(from) {
-				childAbsolute = filterContains(from)
+				childAbsolute = nil
+				if containsOtherwise(from) {
+					childAbsolute = from
+				}
 			}
 			if containsFixed(from) {
-				childFixed = true
+				childFixed = from
 			}
 		}
 		if containsAbsolutes(b) {
-			childAbsolute = false
+			childAbsolute = nil
 		}
 		if containsFixed(b) {
-			childFixed = false
+			childFixed = nil
 		}
 		for _, c := range b.Children {
 			walk(c, childAbsolute, childFixed)
@@ -534,7 +541,7 @@ func (l *layouter) resolveFilters(root *Fragment) {
 			Property: "filter",
 		})
 	}
-	walk(root.Box, false, false)
+	walk(root.Box, nil, nil)
 }
 
 // filtering paints what a filtered box paints and puts it in one FilterGroup,

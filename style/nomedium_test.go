@@ -48,8 +48,7 @@ func TestAPropertyWithNothingToApplyToIsReportedWithoutClaimingThePageIsWrong(t 
 		"transition-duration: 2s",
 		// "will-change: transform" stood here, on the hint's definition that
 		// it has no rendering effect. It has two, a stacking context and a
-		// containing block, and layout reports the one it does not make: see
-		// layout's TestAWillChangeThisEngineDoesNotActOnIsReported.
+		// containing block, which layout makes: see layout/willchange_test.go.
 	} {
 		f, ok := findingFor(t, decl)
 		if !ok {

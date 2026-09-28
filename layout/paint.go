@@ -1030,9 +1030,23 @@ func (p *painter) stackLevel(s stackLevel) {
 // "Not auto" is the *used* value, which is auto wherever z-index does not
 // apply — see usedZIndex. A static block with "opacity: 0.5; z-index: -1" is
 // sealed by its opacity and not by the number.
+//
+// And a box that formsAStackingContext for any other reason is one, positioned
+// or not: a "position: relative" box with an opacity, or whose will-change
+// names transform, seals its "z-index: -1" child in.
 func sealsItsDescendants(b *Box) bool {
 	_, auto := usedZIndex(b)
-	return !auto || b.Position == PositionFixed || groupsItsPaint(b) || stacksAsAFilter(b)
+	return !auto || b.Position == PositionFixed || formsAStackingContext(b)
+}
+
+// formsAStackingContext reports whether a box is a stacking context for a
+// reason other than its position and its z-index — the three this engine
+// implements: an opacity below one (CSS Color 4 §3.3), a filter (Filter
+// Effects 1 §5), and a will-change naming a property some value of which would
+// make one (css-will-change 1 §3; see willChangeRules for which, and on which
+// boxes).
+func formsAStackingContext(b *Box) bool {
+	return groupsItsPaint(b) || filtersItsPaint(b) || willChangeStacks(b)
 }
 
 // # Who stacks where
@@ -1083,14 +1097,18 @@ func usedZIndex(b *Box) (z int, auto bool) {
 // §E.2 steps 3, 7 and 8 rather than in the layer its display would put it in:
 // every positioned box and every stacking context.
 //
-// A stacking context that is not positioned is one of three things this engine
-// implements: a box with an opacity below one, which CSS Color 4 paints
-// at the stacking order a positioned element with "z-index: 0" would have; a
-// box with a filter, which Filter Effects 1 §5 makes one "the same way that CSS
-// opacity does", or whose will-change names filter (see willchange.go); and a
-// flex or grid item with a z-index. The first two stack at
-// zero whatever their z-index says, because z-index does not apply to them; the
-// third stacks at its number.
+// A stacking context that is not positioned is one of two things: a box that
+// formsAStackingContext, or a flex or grid item with a z-index. The first
+// stacks at zero whatever its z-index says, because z-index does not apply to
+// it, and the second at its number (and an item that formsAStackingContext
+// with a z-index of auto, at zero). Zero is where the specifications that say
+// place one: CSS Color 4 paints a translucent box "as if it were a positioned
+// element with z-index:0", CSS Transforms 1 §2 a transformed one "at the same
+// stacking order that would be used if it were a positioned element with
+// z-index: 0", and Filter Effects and CSS Masking make theirs "the same way
+// that CSS opacity does". Compositing, Containment, View Transitions and
+// css-will-change say only that the box is a stacking context, and it is
+// painted where every other stacking context that is not positioned is.
 //
 // It is asked of a box, and a non-atomic inline box is one too: what such a
 // box paints is gathered into an inline level and sorted as one entry. A block
@@ -1098,7 +1116,7 @@ func usedZIndex(b *Box) (z int, auto bool) {
 // part of the inline's level, which is how it comes to be painted where the
 // inline is. See inlinestacking.go.
 func stacksAsLevel(b *Box) bool {
-	if b.Position.positioned() || groupsItsPaint(b) || stacksAsAFilter(b) {
+	if b.Position.positioned() || formsAStackingContext(b) {
 		return true
 	}
 	_, auto := usedZIndex(b)
