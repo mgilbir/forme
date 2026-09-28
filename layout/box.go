@@ -910,6 +910,9 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	}
 	b.appendChildren(box, n, cs, fontSize)
 	b.addGenerated(box, n, "after", fontSize)
+	if box.Inner == InnerTableCell && n.Namespace == html.NamespaceMathML && n.Name == "mtd" {
+		b.mathCellRow(box)
+	}
 	if box.Inner == InnerMath {
 		b.mathChildren(box)
 		// §2.2.2: ::first-line and ::first-letter do not apply to a box whose
@@ -985,19 +988,43 @@ func (b *boxBuilder) mathChildren(box *Box) {
 		if c.IsText() && onlyDocumentWhiteSpace([]*Box{c}) {
 			continue
 		}
-		why := "text written directly inside <" + mathName(box) + "> is not laid out: MathML places " +
+		why := "text written directly inside <" + boxElement(box).Name + "> is not laid out: MathML places " +
 			"only elements there, and text belongs in a token element such as <mi>, <mn>, <mo> or <mtext>"
 		if space {
 			why = "an <mspace> is empty, and what is written inside it is not laid out"
 		}
 		b.rec.ReportDetail(Finding{
 			Rule:    RuleInvalidMarkup,
-			Source:  sourceOf(box.Element),
+			Source:  sourceOf(boxElement(box)),
 			Message: why,
-			Path:    PathOf(box.Element),
+			Path:    PathOf(boxElement(box)),
 		})
 	}
 	box.Children = kept
+}
+
+// mathCellRow is MathML Core §3.5.3's anonymous <mrow>: an <mtd>'s children
+// are laid out as one row — side by side on a baseline, operators spaced —
+// in an anonymous box that is the cell's only child, and not stacked one over
+// another as a table cell's blocks are. Text written straight into the cell
+// is dropped and reported as in any row. The row is block-level, so it is
+// centred in the cell as a block formula is.
+func (b *boxBuilder) mathCellRow(cell *Box) {
+	if len(cell.Children) == 0 || !b.roomAt(offsetOf(cell)) {
+		return
+	}
+	row := &Box{
+		Outer: OuterBlock, Inner: InnerMath,
+		Style:    style.Inherited(cell.Style),
+		FontSize: cell.FontSize, fontSizeKnown: cell.fontSizeKnown,
+		Parent:   cell,
+		Children: cell.Children,
+	}
+	for _, c := range row.Children {
+		c.Parent = row
+	}
+	cell.Children = []*Box{row}
+	b.mathChildren(row)
 }
 
 // replacedFallback reports whether an element's children are the content a user

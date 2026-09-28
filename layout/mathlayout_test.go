@@ -411,9 +411,8 @@ func TestAFloatInAFormulaDoesNotFloat(t *testing.T) {
 }
 
 // TestWhatAFormulaCannotDoIsReported: an operator a face has no larger form
-// of is not stretched, an <mtable> is not centred on the axis, and a face with
-// no MATH table sets a formula by the fallbacks; each says so. A formula that
-// asks for none of it reports nothing.
+// of is not stretched, and a face with no MATH table sets a formula by the
+// fallbacks; each says so. A formula that asks for neither reports nothing.
 func TestWhatAFormulaCannotDoIsReported(t *testing.T) {
 	has := func(findings []Finding, rule Rule, text string) bool {
 		for _, f := range findings {
@@ -449,17 +448,6 @@ func TestWhatAFormulaCannotDoIsReported(t *testing.T) {
 	_, got = mathLayout(t, `<math><mo stretchy="false">(</mo><mspace height="3em"></mspace></math>`)
 	if has(got, RuleMathFallback, "no larger forms") {
 		t.Errorf("an operator that is not stretchy is reported as not stretched: %v", got)
-	}
-	for _, doc := range []string{
-		`<math><mtable><mtr><mtd><mn>1</mn></mtd></mtr></mtable></math>`,
-		// MathML Core §4.1: an <mtable> whose display is math is a table all
-		// the same.
-		`<math><mtable style="display: inline math"><mtr><mtd><mn>1</mn></mtd></mtr></mtable></math>`,
-	} {
-		_, got = mathLayout(t, doc)
-		if !has(got, RuleUnsupportedElement, "<mtable> is laid out as a CSS table") {
-			t.Errorf("%s: the mtable is not reported: %v", doc, got)
-		}
 	}
 	_, got = mathLayout(t, `<math style="font-family: serif"><mn>1</mn></math>`)
 	if !has(got, RuleMathFallback, "has no MATH table") {

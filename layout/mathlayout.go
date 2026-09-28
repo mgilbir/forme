@@ -305,27 +305,38 @@ func mathRTL(b *Box) bool {
 // block" on an <mrow>, an <mtable>'s inline table — in a formula: laid out as
 // CSS lays out an inline-block, and measured by its first baseline, or its
 // bottom margin edge where it has none.
+//
+// An <mtable> is the exception (§3.5.1): a CSS table in every other respect,
+// "the center of the table is aligned with the math axis" — the axis of its
+// own first available font — so that a matrix sits in the middle of the
+// brackets around it, where a fraction bar would be, whatever its rows hold.
 func (l *layouter) mathCSSChild(b *Box, containing style.Unit) mathLaid {
-	if b.TableWrapper && len(b.Children) > 0 && b.Children[0].Element != nil &&
-		b.Children[0].Element.Namespace == html.NamespaceMathML && b.Children[0].Element.Name == "mtable" {
-		l.rec.ReportDetail(Finding{
-			Rule:     RuleUnsupportedElement,
-			Source:   sourceOf(b.Children[0].Element),
-			Message:  "<mtable> is laid out as a CSS table on its first row's baseline, and not centred on the math axis as MathML lays it out",
-			Path:     PathOf(b.Children[0].Element),
-			Property: "mtable",
-		})
-	}
 	frag := l.inlineBlockFragment(b, inlineFrame{Containing: containing})
 	frag.BorderRect.X, frag.BorderRect.Y = 0, 0
 	h := frag.MarginRect().H
 	base := h
-	if v, ok := firstBaseline(frag); ok {
+	if table := mathTableIn(b); table != nil {
+		base = h.Div(2).Add(l.mathFontFor(table).constant(shape.MathAxisHeight))
+	} else if v, ok := firstBaseline(frag); ok {
 		base = v.Add(frag.Margin.Top)
 	}
 	w := frag.MarginRect().W
 	return mathLaid{box: b, frag: frag, width: w, ascent: base, descent: h.Sub(base),
 		inkAscent: base, inkDescent: h.Sub(base)}
+}
+
+// mathTableIn is the <mtable> a table wrapper holds, or nil.
+func mathTableIn(b *Box) *Box {
+	if !b.TableWrapper {
+		return nil
+	}
+	for _, c := range b.Children {
+		if c.Inner == InnerTable && c.Element != nil && c.Element.Namespace == html.NamespaceMathML &&
+			c.Element.Name == "mtable" {
+			return c
+		}
+	}
+	return nil
 }
 
 // mathRow is §3.3.1.2's <mrow>: the children side by side on a shared

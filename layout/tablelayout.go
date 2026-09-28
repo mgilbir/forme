@@ -335,6 +335,11 @@ func spanValue(b *Box, name string, limit int) int {
 	if b.Element == nil {
 		return 1
 	}
+	if name == "colspan" && b.Element.Namespace == html.NamespaceMathML {
+		// MathML Core §3.5.3: an <mtd>'s is columnspan, with "the same
+		// syntax and semantics as the colspan attribute on the <td>".
+		name = "columnspan"
+	}
 	raw, ok := b.Element.Attr(name)
 	if !ok {
 		return 1
