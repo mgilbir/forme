@@ -717,7 +717,7 @@ func (l *layouter) mathTokenSize(b *Box) mathSize {
 		accent: c.accent, hasAccent: c.hasAccent}
 	if op, ok := l.mathOperator(b); ok && op.core == b && op.single && op.stretchy && !op.inlineAxis() && mathOnlyText(b) {
 		if m := l.mathFontFor(b); m.table != nil {
-			if gid, ok := m.face.GlyphID(mathMirrored(b, op.char)); ok && m.table.HasConstruction(gid, true) {
+			if gid, got := mathGlyphFor(b, m.face, op.char); got == mathGlyphFound && m.table.HasConstruction(gid, true) {
 				w := m.units(m.table.PreferredStretchWidth(gid))
 				out.min, out.max = w, w
 			}

@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -415,9 +416,10 @@ func TestARootHasItsIndexOverItsSign(t *testing.T) {
 	}
 }
 
-// TestARightToLeftFormulaMirrorsItsConstructions: the parenthesis is drawn as
-// its mirror image, ")" and its variant, and a square root has its sign on the
-// right — drawn as it faces, which is reported.
+// TestARightToLeftFormulaMirrorsItsConstructions: in a face with no 'rtlm',
+// the parenthesis is drawn as its mirror character, ")" and its variant, and a
+// square root has its sign on the right — drawn as it faces, since U+221A has
+// no mirror character and the face no mirrored form of it, which is reported.
 func TestARightToLeftFormulaMirrorsItsConstructions(t *testing.T) {
 	face := mathStretchFace(t, nil)
 	root, ops, _ := mathComposed(t, face,
@@ -436,8 +438,192 @@ func TestARightToLeftFormulaMirrorsItsConstructions(t *testing.T) {
 	if got := q.mathGlyphs; len(got) != 1 || got[0].at.X != 512 {
 		t.Errorf("the rtl sign is %+v, want it from 512", got)
 	}
-	if !mathFinding(findings, RuleUnsupportedValue, "right-to-left") {
+	if !mathFinding(findings, RuleUnsupportedValue, "no mirrored form of the radical sign") {
 		t.Errorf("an rtl radical is not reported: %v", findings)
+	}
+}
+
+// The glyphs mathRTLMFace adds after the stretchy face's: the font's 'rtlm'
+// forms of the radical sign, the parenthesis and the sum, each with size
+// variants of its own, and the sign with an assembly of its own.
+const (
+	mathGlyphRadicalRTLM        = 30 + iota // 900 tall, 400 wide
+	mathGlyphRadicalRTLMVariant             // 1500 tall, 450 wide
+	mathGlyphRadicalRTLMBottom              // the assembly's pieces, 720 wide
+	mathGlyphRadicalRTLMExtender
+	mathGlyphRadicalRTLMTop
+	mathGlyphParenRTLM        // 1024 tall, 390 wide
+	mathGlyphParenRTLMVariant // 1600 tall, 470 wide
+	mathGlyphSumRTLM          // 1000 tall
+	mathGlyphSumRTLMDisplay   // 1600 tall, 1250 wide
+)
+
+// mathRTLMFace is mathStretchFace with an 'rtlm' feature substituting the
+// forms above for the radical sign, "(" and "∑", as Noto Sans Math does for
+// its sign, sum and integral.
+func mathRTLMFace(t testing.TB) *shape.Face {
+	t.Helper()
+	return mathStretchFaceWith(t, nil, func(m *fonttest.MathOptions) {
+		m.VertVariants[mathGlyphRadicalRTLM] = []fonttest.MathVariant{
+			{Glyph: mathGlyphRadicalRTLM, Advance: 900}, {Glyph: mathGlyphRadicalRTLMVariant, Advance: 1500}}
+		m.VertVariants[mathGlyphParenRTLM] = []fonttest.MathVariant{
+			{Glyph: mathGlyphParenRTLM, Advance: 1024}, {Glyph: mathGlyphParenRTLMVariant, Advance: 1600}}
+		m.VertVariants[mathGlyphSumRTLM] = []fonttest.MathVariant{
+			{Glyph: mathGlyphSumRTLM, Advance: 1000}, {Glyph: mathGlyphSumRTLMDisplay, Advance: 1600}}
+		m.VertAssembly[mathGlyphRadicalRTLM] = fonttest.MathAssembly{Parts: []fonttest.MathPart{
+			{Glyph: mathGlyphRadicalRTLMBottom, Start: 0, End: 100, Full: 600},
+			{Glyph: mathGlyphRadicalRTLMExtender, Start: 100, End: 100, Full: 400, Extender: true},
+			{Glyph: mathGlyphRadicalRTLMTop, Start: 100, End: 0, Full: 600},
+		}}
+	}, func(o *fonttest.SFNTOptions) {
+		o.Glyphs = append(slices.Clone(o.Glyphs),
+			fonttest.Glyph{Unmapped: true, Advance: 400, HasShape: true, Ink: [4]int{0, -100, 400, 800}},
+			fonttest.Glyph{Unmapped: true, Advance: 450, HasShape: true, Ink: [4]int{0, -300, 450, 1200}},
+			fonttest.Glyph{Unmapped: true, Advance: 720, HasShape: true, Ink: [4]int{0, 0, 720, 600}},
+			fonttest.Glyph{Unmapped: true, Advance: 720, HasShape: true, Ink: [4]int{20, 0, 120, 400}},
+			fonttest.Glyph{Unmapped: true, Advance: 720, HasShape: true, Ink: [4]int{0, 0, 120, 600}},
+			fonttest.Glyph{Unmapped: true, Advance: 390, HasShape: true, Ink: [4]int{64, -256, 320, 768}},
+			fonttest.Glyph{Unmapped: true, Advance: 470, HasShape: true, Ink: [4]int{50, -500, 420, 1100}},
+			fonttest.Glyph{Unmapped: true, Advance: 800, HasShape: true, Ink: [4]int{0, -200, 800, 800}},
+			fonttest.Glyph{Unmapped: true, Advance: 1250, HasShape: true, Ink: [4]int{0, -400, 1250, 1200}},
+		)
+		o.Extra["GSUB"] = fonttest.GSUBSingle("rtlm",
+			[]int{mathGlyphParen, mathGlyphSum, mathGlyphRadical},
+			[]int{mathGlyphParenRTLM, mathGlyphSumRTLM, mathGlyphRadicalRTLM})
+	})
+}
+
+// TestARightToLeftRadicalIsTheFontsMirroredForm is §3.3.3.1's radical glyph
+// got "given dir" (§5.3.2): in a right-to-left formula, the font's 'rtlm'
+// form of the sign, and that form's constructions. Over the "1" (704 of ink)
+// the sign is asked for 40 + 50 + 704 = 794 and is the form itself, 400 wide,
+// drawn by index since no text draws it; over a space 1024 up it is asked for
+// 1114 and is the form's variant, 450 wide; over one 2560 up it is asked for
+// 2650 and is the form's assembly, 720 wide. The sign is on the right, from
+// the base's width, and nothing is reported. Left to right the same formula
+// is the sign's own glyph, 600 wide. The sign's preferred width, which a
+// float holding the formula is sized by, is the form's widest construction:
+// 720, where the sign's own is 700.
+func TestARightToLeftRadicalIsTheFontsMirroredForm(t *testing.T) {
+	face := mathRTLMFace(t)
+	for _, c := range []struct {
+		base  string
+		width style.Unit // the base's
+		gids  []int
+		sign  style.Unit
+	}{
+		{`<mn>1</mn>`, 512, []int{mathGlyphRadicalRTLM}, 400},
+		{`<mspace width="1em" height="1em"></mspace>`, 1024, []int{mathGlyphRadicalRTLMVariant}, 450},
+		{`<mspace width="1em" height="40px"></mspace>`, 1024, nil, 720},
+	} {
+		root, ops, findings := mathComposed(t, face, `<math dir="rtl"><msqrt id="q">`+c.base+`</msqrt></math>`)
+		for _, f := range findings {
+			t.Errorf("%s: finding: %v", c.base, f)
+		}
+		q := find(t, root, "q")
+		if w := q.ContentRect().W; w != c.width.Add(c.sign) {
+			t.Errorf("%s: the square root is %d wide, want %d + %d", c.base, w, c.width, c.sign)
+		}
+		if got := q.mathGlyphs; len(got) != 1 || got[0].at.X != c.width {
+			t.Errorf("%s: the sign is %+v, want it from %d", c.base, got, c.width)
+		}
+		gs := glyphsIn(ops)
+		if len(gs) != 1 {
+			t.Fatalf("%s: %d DrawGlyphs, want the sign's: %v", c.base, len(gs), ops)
+		}
+		if c.gids != nil {
+			if len(gs[0].Glyphs) != 1 || gs[0].Glyphs[0].GID != c.gids[0] {
+				t.Errorf("%s: the sign is drawn as %+v, want glyph %d", c.base, gs[0].Glyphs, c.gids[0])
+			}
+			continue
+		}
+		for _, g := range gs[0].Glyphs {
+			if g.GID < mathGlyphRadicalRTLMBottom || g.GID > mathGlyphRadicalRTLMTop {
+				t.Errorf("%s: the assembled sign has glyph %d, which is not a piece of the mirrored form's assembly", c.base, g.GID)
+			}
+		}
+	}
+
+	root, ops, _ := mathComposed(t, face, `<math><msqrt id="q"><mn>1</mn></msqrt></math>`)
+	if w := find(t, root, "q").ContentRect().W; w != 512+600 {
+		t.Errorf("left to right the square root is %d wide, want 512 + 600", w)
+	}
+	for _, g := range glyphsIn(ops) {
+		t.Errorf("left to right the sign is drawn by index, %+v, and not as its text", g.Glyphs)
+	}
+
+	for dir, want := range map[string]style.Unit{"rtl": 720 + 512, "ltr": 700 + 512} {
+		root, _, _ := mathComposed(t, face, `<div id="d" style="float: left"><math dir="`+dir+
+			`"><msqrt><mn>1</mn></msqrt></math></div>`)
+		if w := find(t, root, "d").ContentRect().W; w != want {
+			t.Errorf("%s: the float holding the square root is %d wide, want %d", dir, w, want)
+		}
+	}
+}
+
+// TestARightToLeftOperatorIsTheFontsMirroredForm: the font's 'rtlm' form of
+// an operator's glyph comes before the glyph of its mirror character. Beside
+// the "1" the parenthesis is its form, 390 wide, drawn by index — its text,
+// set right to left, would draw ")"; beside a space 1024 up and 512 down it is
+// the form's variant, 470 wide, not ")"'s. In display, "∑" (which has no
+// mirror character) is its form's display variant, 1250 wide. A float holding
+// a stretchy parenthesis is sized by the form's widest, 470, not ")"'s 460.
+func TestARightToLeftOperatorIsTheFontsMirroredForm(t *testing.T) {
+	face := mathRTLMFace(t)
+	for _, c := range []struct {
+		doc   string
+		gid   int
+		width style.Unit
+	}{
+		{`<math dir="rtl"><mo id="p">(</mo><mn>1</mn></math>`, mathGlyphParenRTLM, 390},
+		{`<math dir="rtl"><mo id="p">(</mo><mspace height="1em" depth="0.5em"></mspace></math>`, mathGlyphParenRTLMVariant, 470},
+		{`<math dir="rtl" display="block"><mo id="p">∑</mo></math>`, mathGlyphSumRTLMDisplay, 1250},
+	} {
+		root, ops, findings := mathComposed(t, face, c.doc)
+		for _, f := range findings {
+			t.Errorf("%s: finding: %v", c.doc, f)
+		}
+		if gs := glyphsIn(ops); len(gs) != 1 || len(gs[0].Glyphs) != 1 || gs[0].Glyphs[0].GID != c.gid {
+			t.Errorf("%s: drawn as %+v, want glyph %d", c.doc, gs, c.gid)
+		}
+		if w := find(t, root, "p").BorderRect.W; w != c.width {
+			t.Errorf("%s: the operator is %d wide, want %d", c.doc, w, c.width)
+		}
+	}
+	root, _, _ := mathComposed(t, face, `<div id="d" style="float: left"><math dir="rtl"><mo>(</mo>`+
+		`<mspace height="1em" depth="0.5em"></mspace></math></div>`)
+	if w := find(t, root, "d").ContentRect().W; w != 470 {
+		t.Errorf("the float holding the parenthesis is %d wide, want 470", w)
+	}
+}
+
+// TestAnOperatorItsFontCannotMirrorIsItsText: "∑" is to be mirrored and has
+// no mirror character, so in a face with no 'rtlm' form of it §5.3.2 fails,
+// and §3.2.4.3 lays it out as its text: in display it is not enlarged, which
+// is reported. Left to right it is its display variant, 1200 wide; a "+",
+// which is not mirrored, is its own glyph either way.
+func TestAnOperatorItsFontCannotMirrorIsItsText(t *testing.T) {
+	face := mathStretchFace(t, nil)
+	root, ops, findings := mathComposed(t, face, `<math dir="rtl" display="block"><mo id="p">∑</mo></math>`)
+	if gs := glyphsIn(ops); len(gs) != 0 {
+		t.Errorf("the rtl sum is drawn as %+v, want its text", gs)
+	}
+	if w := find(t, root, "p").BorderRect.W; w != 800 {
+		t.Errorf("the rtl sum is %d wide, want its text's 800", w)
+	}
+	if !mathFinding(findings, RuleMathFallback, "no mirrored form of") {
+		t.Errorf("the unmirrored sum is not reported: %v", findings)
+	}
+	_, ops, findings = mathComposed(t, face, `<math display="block"><mo id="p">∑</mo></math>`)
+	if gs := glyphsIn(ops); len(gs) != 1 || gs[0].Glyphs[0].GID != 26 {
+		t.Errorf("the ltr sum is drawn as %+v, want its display variant", gs)
+	}
+	if mathFinding(findings, RuleMathFallback, "no mirrored form of") {
+		t.Errorf("a left-to-right sum is reported unmirrored: %v", findings)
+	}
+	_, _, findings = mathComposed(t, face, `<math dir="rtl"><mo>+</mo><mn>1</mn></math>`)
+	if mathFinding(findings, RuleMathFallback, "no mirrored form of") {
+		t.Errorf("a plus is reported unmirrored: %v", findings)
 	}
 }
 

@@ -10,7 +10,12 @@ import (
 // A square root is its base — the <msqrt>'s children, as a row — under a bar,
 // after the radical sign: U+221A's glyph in the element's first available
 // font, stretched along the block axis (§5.3.2) to reach from the bar's top
-// to the bottom of the base's ink and a gap. A root is the same with an index,
+// to the bottom of the base's ink and a gap. In a right-to-left formula the
+// sign is on the right, and the glyph is the font's mirrored form of it
+// (mathGlyphFor): its 'rtlm' form, with that form's own size variants and
+// assembly. U+221A has no mirror character, so a font with no 'rtlm' form of
+// it has no mirrored sign to give; MathML Core says nothing of that case, and
+// the sign is then drawn as it faces in the font, which is reported. A root is the same with an index,
 // raised over the sign's foot and kerned into it by the font's constants.
 //
 // The sign and the bar are the element's own marks, drawn in its colour and
@@ -22,9 +27,28 @@ const radicalSign = '√'
 
 // mathSurd is the radical sign as the layout measures it: its advance, and how
 // far it reaches above and below its own baseline; and the sign to draw.
+// unmirrored says it is drawn as it faces in the font in a right-to-left
+// formula, for want of a mirrored form.
 type mathSurd struct {
 	width, ascent, descent style.Unit
 	draw                   mathGlyphDraw
+	unmirrored             bool
+}
+
+// mathSurdGlyph is the glyph the radical sign is built from (see
+// mathGlyphFor): its mirrored form in a right-to-left formula, and the sign's
+// own glyph where the font has no mirrored form, which unmirrored says. ok is
+// false where the font has no glyph for the sign at all.
+func mathSurdGlyph(b *Box, face *shape.Face) (gid int, unmirrored, ok bool) {
+	gid, got := mathGlyphFor(b, face, radicalSign)
+	switch got {
+	case mathGlyphMissing:
+		return 0, false, false
+	case mathGlyphUnmirrorable:
+		gid, _ = face.GlyphID(radicalSign)
+		return gid, true, true
+	}
+	return gid, false, true
 }
 
 // mathSurdFor is the radical sign stretched to a height.
@@ -38,7 +62,7 @@ func (l *layouter) mathSurdFor(b *Box, m mathFont, height style.Unit) mathSurd {
 	if m.face == nil {
 		return mathSurd{}
 	}
-	gid, ok := m.face.GlyphID(radicalSign)
+	gid, unmirrored, ok := mathSurdGlyph(b, m.face)
 	if !ok {
 		l.checkGlyphs(b, m.face, text)
 		return mathSurd{}
@@ -50,10 +74,15 @@ func (l *layouter) mathSurdFor(b *Box, m mathFont, height style.Unit) mathSurd {
 	if m.table == nil || m.scale == 0 {
 		// A face with no glyph metrics of the MATH table's kind — one of the
 		// standard faces, or any face with no MATH table — is measured as the
-		// text is: its advance, and its character's ink.
+		// text is: its advance, and its character's ink. Its mirrored form,
+		// where it has one, is measured the same way, as the glyph it is.
 		size := b.FontSize.Px()
+		if own, _ := m.face.GlyphID(radicalSign); gid != own {
+			return mathSurdOfGlyph(m.face, b.FontSize, gid, text)
+		}
 		w, _ := style.FromPx(m.face.Measure(text, size))
-		s := mathSurd{width: w, draw: mathGlyphDraw{text: text, face: m.face, size: b.FontSize}}
+		s := mathSurd{width: w, draw: mathGlyphDraw{text: text, face: m.face, size: b.FontSize},
+			unmirrored: unmirrored}
 		if above, below, ok := m.face.InkExtent(text, size); ok {
 			s.ascent, _ = style.FromPx(above)
 			s.descent, _ = style.FromPx(below)
@@ -67,8 +96,28 @@ func (l *layouter) mathSurdFor(b *Box, m mathFont, height style.Unit) mathSurd {
 	st = l.mathBounded(b, st)
 	return mathSurd{
 		width: m.units(st.Width), ascent: m.units(st.Ascent), descent: m.units(st.Descent),
-		draw: mathGlyphDrawOf(m.face, b.FontSize, st, gid, text),
+		draw:       mathGlyphDrawOf(m.face, b.FontSize, st, gid, text),
+		unmirrored: unmirrored,
 	}
+}
+
+// mathSurdOfGlyph is a sign that is one glyph of a face with no MATH table:
+// its advance and its ink, as the face states them, drawn as that glyph.
+func mathSurdOfGlyph(face *shape.Face, size style.Unit, gid int, text string) mathSurd {
+	upem := float64(face.UnitsPerEm())
+	if upem <= 0 {
+		return mathSurd{}
+	}
+	px := size.Px()
+	s := mathSurd{}
+	s.width, _ = style.FromPx(face.GlyphAdvance(gid) * px / 1000)
+	if _, yb, _, h, ok := face.GlyphExtents(gid); ok && h != 0 {
+		s.ascent, _ = style.FromPx(float64(yb) * px / upem)
+		s.descent, _ = style.FromPx(-float64(yb+h) * px / upem)
+	}
+	st := shape.MathStretch{Glyph: gid, Width: face.GlyphAdvance(gid) * upem / 1000}
+	s.draw = mathGlyphDraw{text: text, face: face, size: size, glyphs: mathGlyphsOf(face, st)}
+	return s
 }
 
 // mathGlyphDrawOf is a construction as it is drawn: as its text, where it is
@@ -111,11 +160,13 @@ func (l *layouter) mathRadical(b *Box, base mathContent) mathContent {
 	top := c.ascent.Sub(extra)
 	c.marks = append(c.marks, mathMark{x: surd.width, width: base.width, top: top, height: rule})
 	c.glyphs = append(c.glyphs, mathGlyphMark{width: surd.width, baseline: top.Sub(surd.ascent), draw: surd.draw})
-	if mathRTL(b) {
+	if surd.unmirrored {
 		l.rec.ReportDetail(Finding{
-			Rule:     RuleUnsupportedValue,
-			Source:   sourceOf(boxElement(b)),
-			Message:  "a radical in a right-to-left formula has its sign on the right, and the sign is drawn as it faces in the font, not mirrored",
+			Rule:   RuleUnsupportedValue,
+			Source: sourceOf(boxElement(b)),
+			Message: "the font " + quoteValue(m.face.Name()) + " has no mirrored form of the radical sign " +
+				"(no 'rtlm' form of U+221A, which has no mirror character), so in this right-to-left " +
+				"formula the sign is on the right and drawn as it faces in the font",
 			Path:     PathOf(b.Element),
 			Property: "direction",
 		})
@@ -182,11 +233,14 @@ func (l *layouter) mathSurdWidth(b *Box) style.Unit {
 	if m.face == nil {
 		return 0
 	}
-	gid, ok := m.face.GlyphID(radicalSign)
+	gid, _, ok := mathSurdGlyph(b, m.face)
 	if !ok {
 		return 0
 	}
 	if m.table == nil || m.scale == 0 {
+		if own, _ := m.face.GlyphID(radicalSign); gid != own {
+			return mathSurdOfGlyph(m.face, b.FontSize, gid, "").width
+		}
 		w, _ := style.FromPx(m.face.Measure(string(radicalSign), b.FontSize.Px()))
 		return w
 	}

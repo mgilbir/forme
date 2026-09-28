@@ -30,7 +30,10 @@ import (
 // construction for it along the axis asked, §3.2.4.3 lays the operator out as
 // its text. The first is reported once for the face (see mathTableOf); the
 // third is reported where the formula asked the operator to be larger than
-// its glyph.
+// its glyph. In a right-to-left formula the glyph is the character's mirrored
+// one (see mathGlyphFor), and a character the font cannot mirror is laid out
+// as its text too, which is reported where it was to be stretched or
+// enlarged.
 
 // mathOpDrawn is what §3.2.4.3 decided an operator is drawn as.
 type mathOpDrawn struct {
@@ -58,8 +61,19 @@ func (l *layouter) mathOperatorDrawn(b *Box, op *mathOp, s mathStretch) (mathOpD
 	if m.table == nil || m.scale == 0 {
 		return mathOpDrawn{}, false
 	}
-	gid, ok := m.face.GlyphID(mathMirrored(b, op.char))
-	if !ok || l.overBudget() {
+	gid, got := mathGlyphFor(b, m.face, op.char)
+	if got == mathGlyphUnmirrorable && mathWouldConstruct(b, op, s) {
+		l.rec.ReportDetail(Finding{
+			Rule:   RuleMathFallback,
+			Source: sourceOf(boxElement(b)),
+			Message: "the font " + quoteValue(m.face.Name()) + " has no mirrored form of " + describeRune(op.char) +
+				" (no 'rtlm' form of its glyph, and no mirror character to draw), so in this right-to-left " +
+				"formula it is laid out as its text, not stretched or enlarged",
+			Path:     PathOf(b.Element),
+			Property: "direction",
+		})
+	}
+	if got != mathGlyphFound || l.overBudget() {
 		// Past the layout's work budget nothing more is built: what is left
 		// of the document is laid out empty, and the budget says so.
 		return mathOpDrawn{}, false
@@ -121,17 +135,66 @@ func (l *layouter) mathOperatorDrawn(b *Box, op *mathOp, s mathStretch) (mathOpD
 	return mathOpDrawn{}, false
 }
 
-// mathMirrored is the character an operator is drawn with: in a right-to-left
-// formula, a character with a mirror image is drawn as it, as a line of
-// right-to-left text draws it — "(" as ")" — and its glyph and constructions
-// are the mirror's.
-func mathMirrored(b *Box, r rune) rune {
-	if mathRTL(b) {
-		if m, ok := bidi.MirrorOf(r); ok {
-			return m
+// mathGlyphResult is what mathGlyphFor found.
+type mathGlyphResult int
+
+const (
+	mathGlyphFound mathGlyphResult = iota
+	// mathGlyphMissing is a face with no glyph for the character at all.
+	mathGlyphMissing
+	// mathGlyphUnmirrorable is a right-to-left formula and a character that
+	// is to be mirrored, which the face has no mirrored form of.
+	mathGlyphUnmirrorable
+)
+
+// mathGlyphFor is MathML Core's algorithm to "get a glyph corresponding to a
+// character c given a directionality dir" (§5.3.2, Editor's Draft of 27 July
+// 2026), in a face: the glyph an operator is stretched or enlarged from
+// (§3.2.4.3), and a radical sign (§3.3.3.1), with its size variants and its
+// assembly, since those are the glyph's.
+//
+// In a left-to-right formula it is the character's glyph. In a right-to-left
+// one it is, in this order: the face's 'rtlm' form of that glyph (see
+// shape.Face.MirroredForm); for a character that is Bidi_Mirrored, the glyph
+// of its mirror character — "(" drawn as ")" — or nothing, where it has no
+// mirror character (U+221A, U+2211, U+222B) or the face no glyph for that;
+// and for any other character its own glyph. The 'rtlm' form comes first:
+// it is the one a font draws the constructions of, where a line of text asks
+// for Unicode's mirror first and the font's form only for what that left.
+func mathGlyphFor(b *Box, face *shape.Face, c rune) (int, mathGlyphResult) {
+	g, ok := face.GlyphID(c)
+	if !ok {
+		return 0, mathGlyphMissing
+	}
+	if !mathRTL(b) {
+		return g, mathGlyphFound
+	}
+	if form, ok := face.MirroredForm(c); ok {
+		return form, mathGlyphFound
+	}
+	if !bidi.Mirrored(c) {
+		return g, mathGlyphFound
+	}
+	if m, ok := bidi.MirrorOf(c); ok {
+		if gm, ok := face.GlyphID(m); ok {
+			return gm, mathGlyphFound
 		}
 	}
-	return r
+	return 0, mathGlyphUnmirrorable
+}
+
+// mathWouldConstruct reports whether §3.2.4.3 would draw an operator as a
+// construction of its font rather than as its text, were there a glyph to
+// build it from: a stretchy one asked to cover something along its axis, or
+// a large operator in display mathematics.
+func mathWouldConstruct(b *Box, op *mathOp, s mathStretch) bool {
+	switch {
+	case op.stretchy && op.inlineAxis():
+		return s.inline
+	case op.stretchy:
+		return s.block
+	}
+	return op.largeop && mathStyleNormal(b)
 }
 
 // mathBounded is a construction within the bound on an assembly, and charged
