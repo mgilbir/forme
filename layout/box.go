@@ -1651,10 +1651,11 @@ func outOfFlowDisplay(outer Outer, inner Inner, float FloatSide, position Positi
 	switch inner {
 	case InnerFlow, InnerFlowRoot:
 		return OuterBlock, InnerFlowRoot
-	case InnerTable, InnerFlex, InnerGrid:
+	case InnerTable, InnerFlex, InnerGrid, InnerMath:
 		// The two-value forms whose inner half survives blockification: an
 		// inline-table floats as a table, an inline-flex as a flex container,
-		// an inline-grid as a grid.
+		// an inline-grid as a grid — and "inline math" is "block math"
+		// (MathML Core §4.1), a formula laid out by its own algorithm still.
 		return OuterBlock, inner
 	}
 	// The table-internal displays. §9.7 turns each into its block-level

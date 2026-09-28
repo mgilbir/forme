@@ -738,3 +738,17 @@ func TestAFormulaInAStandardFontIsMeasuredByItsCharacters(t *testing.T) {
 			n.BorderRect.H, n.mathBaseline, wantA.Add(wantD), wantA)
 	}
 }
+
+// TestAFloatedOrPositionedFormulaIsStillAFormula: §9.7 blockifies a <math>
+// that floats or is absolutely positioned, and "inline math" blockified is
+// "block math": its children are still a row.
+func TestAFloatedOrPositionedFormulaIsStillAFormula(t *testing.T) {
+	for _, style := range []string{"float: left", "position: absolute"} {
+		root, _ := mathLayout(t, `<math id="m" style="`+style+`"><mn id="a">1</mn><mn id="b">2</mn></math>`)
+		a, b := find(t, root, "a"), find(t, root, "b")
+		if b.BorderRect.X.Sub(a.BorderRect.X) != 512 || b.BorderRect.Y != a.BorderRect.Y {
+			t.Errorf("%s: the 2 is at (%d, %d) from the 1, want (512, 0): side by side",
+				style, b.BorderRect.X.Sub(a.BorderRect.X), b.BorderRect.Y.Sub(a.BorderRect.Y))
+		}
+	}
+}
