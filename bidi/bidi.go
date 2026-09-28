@@ -111,6 +111,16 @@ func MirrorOf(r rune) (rune, bool) {
 	return r, false
 }
 
+// Mirrored reports whether a character is Bidi_Mirrored: whether its glyph is
+// to be mirrored in a right-to-left run. It is wider than MirrorOf, which
+// answers only for the characters another character is the mirror image of:
+// U+221A SQUARE ROOT is mirrored and has no mirror character, so a
+// right-to-left square root is the font's to draw, by glyph, if it can.
+func Mirrored(r rune) bool {
+	i := sort.Search(len(mirroredRanges), func(i int) bool { return mirroredRanges[i][1] >= r })
+	return i < len(mirroredRanges) && r >= mirroredRanges[i][0]
+}
+
 // BracketOf reports whether a character is a paired bracket, which one it
 // pairs with, and whether this is the opening half.
 func BracketOf(r rune) (paired rune, open, ok bool) {

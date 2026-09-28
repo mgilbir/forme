@@ -36,6 +36,16 @@
 // BidiMirroring.txt. Neither is derivable from the other: every bracket
 // mirrors, but not everything that mirrors is a bracket.
 //
+// Nor is everything that mirrors in BidiMirroring.txt. Bidi_Mirrored, field 9
+// of UnicodeData.txt, is the wider property: a character whose glyph is to be
+// mirrored in a right-to-left run, whether or not another character is that
+// mirror image. U+221A SQUARE ROOT and U+2211 N-ARY SUMMATION are mirrored and
+// have no mirror character; a font draws their mirrored forms by glyph, with
+// its 'rtlm' feature, if at all. MathML Core's algorithm to "get a glyph
+// corresponding to a character given a directionality" (§5.3.2) asks both
+// questions, so both are generated, and every character BidiMirroring.txt
+// pairs must have Bidi_Mirrored — a disagreement is two versions of Unicode.
+//
 //	go run ./cmd/genbidi -version <X.Y.Z> <UnicodeData.txt> <DerivedBidiClass.txt> <BidiBrackets.txt> <BidiMirroring.txt> > bidi/tables.go
 package main
 
@@ -111,7 +121,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "genbidi:", err)
 		os.Exit(1)
 	}
-	assigned := readUnicodeData(args[0])
+	assigned, mirrored := readUnicodeData(args[0])
 	defaults, explicit := readDerived(args[1])
 	brackets := readBrackets(args[2])
 	mirrors := readMirroring(args[3])
@@ -149,6 +159,34 @@ func main() {
 				"the two files are not from the same version of Unicode\n", r, c, classes[r])
 			os.Exit(1)
 		}
+	}
+
+	// Bidi_Mirroring_Glyph is stated only for characters that are
+	// Bidi_Mirrored. UnicodeData.txt and BidiMirroring.txt are generated from
+	// the same database, so a pair whose character is not mirrored is a
+	// mixture of versions, as a class disagreement is above.
+	for _, m := range mirrors {
+		if !mirrored[m.from] {
+			fmt.Fprintf(os.Stderr, "genbidi: U+%04X has a Bidi_Mirroring_Glyph in BidiMirroring.txt and is not\n"+
+				"Bidi_Mirrored in UnicodeData.txt; the two files are not from the same version of Unicode\n", m.from)
+			os.Exit(1)
+		}
+	}
+	var mirroredRanges [][2]rune
+	for r := rune(0); r < maxRune; r++ {
+		if !mirrored[r] {
+			continue
+		}
+		if n := len(mirroredRanges); n > 0 && mirroredRanges[n-1][1]+1 == r {
+			mirroredRanges[n-1][1] = r
+			continue
+		}
+		mirroredRanges = append(mirroredRanges, [2]rune{r, r})
+	}
+	if len(mirroredRanges) == 0 {
+		fmt.Fprintln(os.Stderr, "genbidi: UnicodeData.txt marked no character Bidi_Mirrored;\n"+
+			"field 9 is where the property is stated, so this is the wrong file or a changed format")
+		os.Exit(1)
 	}
 
 	// Every value the algorithm names must be in the data.
@@ -241,6 +279,17 @@ var mirrors = [...]mirrorPair{
 	for _, m := range mirrors {
 		fmt.Fprintf(w, "\t{0x%04X, 0x%04X},\n", m.from, m.to)
 	}
+	fmt.Fprint(w, `}
+
+// mirroredRanges is the Bidi_Mirrored property, sorted by code point: the
+// characters whose glyph is mirrored in a right-to-left run, whether or not
+// mirrors names a character for the mirror image. Each is an inclusive
+// range.
+var mirroredRanges = [...][2]rune{
+`)
+	for _, r := range mirroredRanges {
+		fmt.Fprintf(w, "\t{0x%04X, 0x%04X},\n", r[0], r[1])
+	}
 	fmt.Fprintln(w, "}")
 
 	src, err := format.Source(w.Bytes())
@@ -254,14 +303,14 @@ var mirrors = [...]mirrorPair{
 	}
 }
 
-// readUnicodeData parses field 4 of UnicodeData.txt, the Bidi_Class of every
-// assigned character.
+// readUnicodeData parses fields 4 and 9 of UnicodeData.txt: the Bidi_Class of
+// every assigned character, and the ones that are Bidi_Mirrored.
 //
 // The file states a long block of characters as a "First>"/"Last>" pair rather
 // than one line each, so the ranges have to be expanded; a reader that took each
 // line as one character would miss every CJK ideograph and every Hangul
 // syllable.
-func readUnicodeData(path string) map[rune]string {
+func readUnicodeData(path string) (map[rune]string, map[rune]bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -270,13 +319,14 @@ func readUnicodeData(path string) map[rune]string {
 	defer f.Close()
 
 	out := map[rune]string{}
+	mirrored := map[rune]bool{}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	pendingFirst := rune(-1)
 	pendingClass := ""
 	for sc.Scan() {
 		fields := strings.Split(sc.Text(), ";")
-		if len(fields) < 5 {
+		if len(fields) < 10 {
 			continue
 		}
 		cp, err := strconv.ParseUint(strings.TrimSpace(fields[0]), 16, 32)
@@ -285,6 +335,22 @@ func readUnicodeData(path string) map[rune]string {
 		}
 		class := strings.TrimSpace(fields[4])
 		name := strings.TrimSpace(fields[1])
+		switch m := strings.TrimSpace(fields[9]); m {
+		case "Y":
+			// No block stated as a First/Last pair is mirrored, and the
+			// property is read per line: a pair that were would say so on
+			// its "Last>" line too, and is refused below rather than
+			// half-read.
+			if strings.HasSuffix(name, ", First>") || strings.HasSuffix(name, ", Last>") {
+				fmt.Fprintf(os.Stderr, "genbidi: the range %s is Bidi_Mirrored, which this reader does not expand\n", name)
+				os.Exit(1)
+			}
+			mirrored[rune(cp)] = true
+		case "N":
+		default:
+			fmt.Fprintf(os.Stderr, "genbidi: U+%04X has Bidi_Mirrored %q, which is neither Y nor N\n", cp, m)
+			os.Exit(1)
+		}
 		switch {
 		case strings.HasSuffix(name, ", First>"):
 			pendingFirst, pendingClass = rune(cp), class
@@ -301,7 +367,7 @@ func readUnicodeData(path string) map[rune]string {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	return out
+	return out, mirrored
 }
 
 type classRange struct {
