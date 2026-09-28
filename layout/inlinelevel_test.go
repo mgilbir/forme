@@ -157,10 +157,11 @@ func TestATranslucentSpanIsPaintedAsOneGroup(t *testing.T) {
 
 // TestASpanWithAZIndexSealsWhatItContains is §9.9.1: a z-index that is not auto
 // makes the span a stacking context, so a "z-index: -1" box written inside it
-// is painted inside the span's context — over the span's own background,
-// under its words, and over the paragraph's background, which is outside it.
-// Without the span's z-index the box is hoisted into the root's context and
-// goes under the paragraph.
+// is painted inside the span's context — over the paragraph's background,
+// which is outside it, and under the span's own background and its words,
+// which Appendix E §E.2 paints for an inline stacking context at step 7,
+// after its negative levels at step 3. Without the span's z-index the box is
+// hoisted into the root's context and goes under the paragraph.
 func TestASpanWithAZIndexSealsWhatItContains(t *testing.T) {
 	const doc = `<div id="a">aa <span id="s">xx<span id="neg"></span></span></div>`
 	const base = noDefaults + `body { font-family: Courier; font-size: 20px }
@@ -172,10 +173,10 @@ func TestASpanWithAZIndexSealsWhatItContains(t *testing.T) {
 
 	sealed := marksAt(t, paintOf(t, doc, base+`#s { position: relative; z-index: 1 }`),
 		"sealed", colours, "xx")
-	if !(sealed["paragraph"] < sealed["span"] && sealed["span"] < sealed["inside"] &&
-		sealed["inside"] < sealed["xx"]) {
-		t.Errorf("want the paragraph, then the span's own background, then the "+
-			"negative box inside it, then its words; got %v", sealed)
+	if !(sealed["paragraph"] < sealed["inside"] && sealed["inside"] < sealed["span"] &&
+		sealed["span"] < sealed["xx"]) {
+		t.Errorf("want the paragraph, then the negative box inside the span, then "+
+			"the span's own background, then its words; got %v", sealed)
 	}
 	if n := len(fillsOf(paintOf(t, doc, base+`#s { position: relative; z-index: 1 }`), yellow)); n != 1 {
 		t.Errorf("the span's own background was painted %d times, want once", n)
@@ -185,6 +186,35 @@ func TestASpanWithAZIndexSealsWhatItContains(t *testing.T) {
 	if !(hoisted["inside"] < hoisted["paragraph"]) {
 		t.Errorf("control: a span at z-index auto seals nothing, so the negative "+
 			"box goes under the paragraph; got %v", hoisted)
+	}
+}
+
+// TestAnInlineStackingContextPaintsItsBoxAtStep7: Appendix E §E.2 paints an
+// inline element that is a stacking context by its line boxes, at step 7,
+// after what steps 3 to 5 paint inside it: a negative level, the background
+// of a block §9.2.1.1 lifted out of it, a float. So each of those is painted
+// under the span's own background and not over it; and where the span is not
+// a stacking context, as a "position: relative" one is not, the same order
+// holds for the blocks and floats it paints as a unit.
+func TestAnInlineStackingContextPaintsItsBoxAtStep7(t *testing.T) {
+	const css = noDefaults + `body { font-family: Courier; font-size: 20px }
+		#s { background-color: #ffff00 }
+		#in { background-color: #008000 }`
+	for _, tc := range []struct{ name, doc, css string }{
+		{"a negative level", `<div>aa <span id="s">xx<span id="in"></span></span></div>`,
+			`#s { position: relative; z-index: 1 } #in { position: absolute; z-index: -1; width: 10px; height: 10px }`},
+		{"a lifted block", `<div><span id="s">aa<div id="in">b</div>cc</span></div>`,
+			`#s { position: relative; z-index: 1 }`},
+		{"a float", `<div><span id="s">aa<span id="in">b</span>cc</span></div>`,
+			`#s { position: relative; z-index: 1 } #in { float: left; width: 10px; height: 10px }`},
+		{"a lifted block, not a stacking context", `<div><span id="s">aa<div id="in">b</div>cc</span></div>`,
+			`#s { position: relative }`},
+	} {
+		ops := paintOf(t, tc.doc, css+tc.css)
+		at := marksAt(t, ops, tc.name, map[string]style.RGBA{"span": yellow, "inside": green})
+		if !(at["inside"] < at["span"]) {
+			t.Errorf("%s: want what is inside the span under its background; got %v", tc.name, at)
+		}
 	}
 }
 

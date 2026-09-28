@@ -141,8 +141,10 @@ func TestWillChangeZIndexIsAStackingContextWhereZIndexApplies(t *testing.T) {
 
 // TestWillChangeOnAnInlineBox: a span #f, blue, holds a "z-index: -1" span,
 // red, in a block, green. Where #f is a stacking context the red span is
-// painted inside it, and so after the green block's background; where it is
-// not, the red span is hoisted to the root's step 3, before it. A transform,
+// painted inside it, after the green block's background and — Appendix E
+// paints an inline stacking context's own box at step 7 — before #f's: green,
+// red, blue. Where it is not, the red span is hoisted to the root's step 3:
+// red, green, blue. A transform,
 // and containment, do not apply to a non-atomic inline box, so naming them
 // makes none; a filter, an opacity and a position do.
 func TestWillChangeOnAnInlineBox(t *testing.T) {
@@ -167,12 +169,12 @@ func TestWillChangeOnAnInlineBox(t *testing.T) {
 			noDefaults+`#c { background: rgb(0, 128, 0); font: 20px/20px Courier }
 			#f { background: blue; will-change: `+tc.wc+` }
 			#z { position: relative; z-index: -1; background: red }`)))
-		green, red := strings.Index(got, "green"), strings.Index(got, "red")
-		if green < 0 || red < 0 || !strings.Contains(got, "blue") {
-			t.Fatalf("will-change: %s on a span painted %s", tc.wc, got)
+		want := "red, green, blue"
+		if tc.stacking {
+			want = "green, red, blue"
 		}
-		if (green < red) != tc.stacking {
-			t.Errorf("will-change: %s on a span painted %s: a stacking context=%v, want %v", tc.wc, got, green < red, tc.stacking)
+		if got != want {
+			t.Errorf("will-change: %s on a span painted %s, want %s", tc.wc, got, want)
 		}
 	}
 }

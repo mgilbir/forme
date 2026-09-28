@@ -314,24 +314,22 @@ func (p *painter) gatherLevel(l *inlineLevel, lv *layers, collect bool) {
 // box with "z-index: auto": the same layers without the levels, which were
 // hoisted.
 //
-// Step 1, the root's own background and border, is the fragments of the
-// element's own inline box on each line. The inline boxes inside it are its
-// content and are painted with its words in step 6, in the line's order.
+// The root's own background and border — the fragments of the element's own
+// inline box on each line — are not step 1 here. Appendix E §E.2 gives step 1
+// to "a block, list-item, or other block equivalent", and paints "an inline
+// element that generates a stacking context" at step 7: "For each line box
+// that the element is in: Jump to 7.2.1 for the box(es) of the element in
+// that line box", whose first entries are the box's background and border.
+// CSS Positioned Layout 4 §4 says the same: an inline-level root is painted
+// by "paint a box in a line box" after its negative levels, its lifted
+// blocks' decorations and its floats. So a "z-index: -1" box inside a span
+// with a z-index is painted under the span's background, and a block lifted
+// out of the span under it too. The inline boxes inside it are its content
+// and are painted with its words, in the line's order.
 func (p *painter) paintLevel(l *inlineLevel) {
 	seal := l.seals()
 	lv := &layers{}
 	p.gatherLevel(l, lv, seal)
-
-	for _, pt := range l.parts {
-		for _, m := range pt.marks {
-			if m.box < 0 {
-				continue
-			}
-			if box := pt.frag.Lines[m.line].Boxes[m.box]; l.owns(box.Box) {
-				p.inlineDecorations(box, pt.frag.clipContent, pt.frag.roundContent)
-			}
-		}
-	}
 
 	sortLevels(lv.positioned)
 	at := 0
@@ -347,6 +345,16 @@ func (p *painter) paintLevel(l *inlineLevel) {
 	}
 	for _, g := range lv.floats {
 		p.unit(g)
+	}
+	for _, pt := range l.parts {
+		for _, m := range pt.marks {
+			if m.box < 0 {
+				continue
+			}
+			if box := pt.frag.Lines[m.line].Boxes[m.box]; l.owns(box.Box) {
+				p.inlineDecorations(box, pt.frag.clipContent, pt.frag.roundContent)
+			}
+		}
 	}
 	for _, g := range lv.content {
 		p.contentItem(g)
