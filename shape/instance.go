@@ -286,11 +286,11 @@ func instanceProgram(data []byte, want map[string]float64, varcInk *map[int]exte
 	// placed by matching points is placed by the points of other glyphs as
 	// they are there (pointmatch.go).
 	varied := make([]*varGlyph, numGlyphs)
-	// The em HarfBuzz reads, which is a thousand units where head states one
-	// outside the range the format allows.
-	upem := font.Be16(head, 18)
-	if upem < 16 || upem > 16384 {
-		upem = 1000
+	// The em, which a font stating one outside the range the format allows
+	// is refused for, as loadFace refuses it (and would refuse the instance).
+	upem, err := headUnitsPerEm(head)
+	if err != nil {
+		return nil, nil, err
 	}
 	for gid := 0; gid < numGlyphs; gid++ {
 		start, end := offsets[gid], offsets[gid+1]

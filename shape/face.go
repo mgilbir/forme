@@ -267,6 +267,33 @@ func noCmapError(prog *font.Program) error {
 	return errors.New("fonts: the font has no Unicode character map")
 }
 
+// headUnitsPerEm is the em a font's glyphs are drawn on: head's unitsPerEm,
+// and a thousand units where the font has no head HarfBuzz reads (one shorter
+// than the table's fifty-four bytes), as HarfBuzz takes it.
+//
+// A head that states an em outside 16..16384 is refused. OpenType allows no
+// other (since 1.8.2), and nothing else agrees what such a font is. HarfBuzz
+// reads it as a thousand units (hb-ot-head-table.hh, get_upem). FreeType
+// refuses the font outright, and so do the browsers' font sanitizer and every
+// PDF reader built on FreeType. pdf.js takes the em as stated for its metrics.
+// So there is no number this package could measure and write a document's
+// widths with that the readers of the embedded program would agree with:
+// HarfBuzz's thousand is not the em the program states, and the stated em is
+// not one most readers will draw at all. Refusing it is what the author can
+// act on; either reading is a page drawn wrong.
+func headUnitsPerEm(head []byte) (int, error) {
+	if len(head) < 54 {
+		return 1000, nil
+	}
+	u := font.Be16(head, 18)
+	if u < 16 || u > 16384 {
+		return 0, fmt.Errorf("fonts: the font's head table states %d units to the em, "+
+			"outside the 16 to 16384 OpenType allows; FreeType and the browsers refuse "+
+			"such a font, so no reader would draw it as measured", u)
+	}
+	return u, nil
+}
+
 // Load parses an sfnt font program — TrueType or OpenType — and prepares it for
 // embedding. The bytes are retained as they are, and Subset cuts them down.
 //
@@ -294,6 +321,10 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	tables := font.SFNTTables(data)
 	if tables == nil {
 		return nil, errors.New("fonts: not an sfnt font program (TrueType or OpenType)")
+	}
+	unitsPerEm, err := headUnitsPerEm(tables["head"])
+	if err != nil {
+		return nil, err
 	}
 	_, hasGlyf := tables["glyf"]
 	_, hasCFF := tables["CFF "]
@@ -388,15 +419,12 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		supplement: supplement,
 		prog:       prog,
 		cff:        !hasGlyf,
-		unitsPerEm: 1000,
+		unitsPerEm: unitsPerEm,
 		varCoords:  coords,
 		used:       map[int]bool{},
 	}
 	head := tables["head"]
 	if len(head) >= 54 {
-		if u := font.Be16(head, 18); u > 0 {
-			f.unitsPerEm = u
-		}
 		f.bbox = [4]int{
 			signed16(font.Be16(head, 36)), signed16(font.Be16(head, 38)),
 			signed16(font.Be16(head, 40)), signed16(font.Be16(head, 42)),
