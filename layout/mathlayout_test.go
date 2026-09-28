@@ -37,6 +37,22 @@ var mathTestGlyphs = []fonttest.Glyph{
 	{Rune: 0x222B, Advance: 400, HasShape: true, Ink: [4]int{0, -200, 500, 800}}, // ∫
 	{Rune: 0x2211, Advance: 800, HasShape: true, Ink: [4]int{0, -200, 800, 800}}, // ∑
 	{Rune: 0x2192, Advance: 600, HasShape: true, Ink: [4]int{0, 200, 600, 400}},  // →
+	// The radical sign, 900 tall, and the forms larger than their text that a
+	// stretchy face (mathStretchFace) builds constructions from. No character
+	// maps to any of them after the sign.
+	{Rune: 0x221A, Advance: 600, HasShape: true, Ink: [4]int{0, -100, 600, 800}},      // 17 √
+	{Unmapped: true, Advance: 650, HasShape: true, Ink: [4]int{0, -300, 650, 1200}},   // 18 √, 1500 tall
+	{Unmapped: true, Advance: 700, HasShape: true, Ink: [4]int{0, 0, 700, 600}},       // 19 √'s bottom
+	{Unmapped: true, Advance: 700, HasShape: true, Ink: [4]int{500, 0, 600, 400}},     // 20 √'s extender
+	{Unmapped: true, Advance: 700, HasShape: true, Ink: [4]int{500, 0, 700, 600}},     // 21 √'s top
+	{Unmapped: true, Advance: 450, HasShape: true, Ink: [4]int{50, -500, 400, 1100}},  // 22 (, 1600 tall
+	{Unmapped: true, Advance: 500, HasShape: true, Ink: [4]int{50, 0, 450, 600}},      // 23 ('s bottom
+	{Unmapped: true, Advance: 500, HasShape: true, Ink: [4]int{50, 0, 150, 400}},      // 24 ('s extender
+	{Unmapped: true, Advance: 500, HasShape: true, Ink: [4]int{50, 0, 450, 600}},      // 25 ('s top
+	{Unmapped: true, Advance: 1200, HasShape: true, Ink: [4]int{0, -400, 1200, 1200}}, // 26 ∑ in display
+	{Unmapped: true, Advance: 1200, HasShape: true, Ink: [4]int{0, 200, 1200, 400}},   // 27 →, 1200 long
+	{Unmapped: true, Advance: 460, HasShape: true, Ink: [4]int{50, -500, 410, 1100}},  // 28 ), 1600 tall
+	{Unmapped: true, Advance: 1500, HasShape: true, Ink: [4]int{0, -500, 1500, 1500}}, // 29 ∑, 2000 tall
 }
 
 // Glyph indices in the face: one more than the position above.
@@ -44,6 +60,11 @@ const (
 	mathGlyphItalicX  = 3
 	mathGlyphItalicF  = 4
 	mathGlyphIntegral = 14
+	mathGlyphParen    = 12
+	mathGlyphCloser   = 13
+	mathGlyphSum      = 15
+	mathGlyphArrow    = 16
+	mathGlyphRadical  = 17
 )
 
 func mathTestFace(t testing.TB) *shape.Face {
@@ -389,9 +410,9 @@ func TestAFloatInAFormulaDoesNotFloat(t *testing.T) {
 	}
 }
 
-// TestWhatAFormulaCannotDoIsReported: in this change an operator is not
-// stretched and an <mtable> is not centred on the axis, and a face with no
-// MATH table sets a formula by the fallbacks; each says so. A formula that
+// TestWhatAFormulaCannotDoIsReported: an operator a face has no larger form
+// of is not stretched, an <mtable> is not centred on the axis, and a face with
+// no MATH table sets a formula by the fallbacks; each says so. A formula that
 // asks for none of it reports nothing.
 func TestWhatAFormulaCannotDoIsReported(t *testing.T) {
 	has := func(findings []Finding, rule Rule, text string) bool {
@@ -406,24 +427,27 @@ func TestWhatAFormulaCannotDoIsReported(t *testing.T) {
 	for _, f := range quiet {
 		t.Errorf("a formula this change lays out whole reported %v", f)
 	}
+	// This face has a MATH table and no larger forms of anything: an
+	// operator asked to be larger than its glyph is drawn at its text size,
+	// as §3.2.4.3 says, and said to be.
 	_, got := mathLayout(t, `<math><mo>(</mo><mspace height="3em"></mspace></math>`)
-	if !has(got, RuleUnsupportedValue, "stretchy operator is drawn at its text size") {
+	if !has(got, RuleMathFallback, "no larger forms of U+0028") {
 		t.Errorf("an operator that should stretch is not reported: %v", got)
 	}
 	_, got = mathLayout(t, `<math display="block"><mo>∑</mo></math>`)
-	if !has(got, RuleUnsupportedValue, "large operator in display mathematics") {
+	if !has(got, RuleMathFallback, "no larger forms of U+2211") {
 		t.Errorf("a large operator in display is not reported: %v", got)
 	}
 	_, got = mathLayout(t, `<math><mo>∑</mo></math>`)
-	if has(got, RuleUnsupportedValue, "large operator") {
+	if has(got, RuleMathFallback, "no larger forms") {
 		t.Errorf("a large operator in inline mathematics is reported: %v", got)
 	}
 	_, got = mathLayout(t, `<math><mo>(</mo><mspace depth="2em"></mspace></math>`)
-	if !has(got, RuleUnsupportedValue, "stretchy operator is drawn at its text size") {
+	if !has(got, RuleMathFallback, "no larger forms") {
 		t.Errorf("an operator that should stretch below the baseline is not reported: %v", got)
 	}
 	_, got = mathLayout(t, `<math><mo stretchy="false">(</mo><mspace height="3em"></mspace></math>`)
-	if has(got, RuleUnsupportedValue, "stretchy") {
+	if has(got, RuleMathFallback, "no larger forms") {
 		t.Errorf("an operator that is not stretchy is reported as not stretched: %v", got)
 	}
 	for _, doc := range []string{
@@ -499,13 +523,13 @@ func TestARowReachesNoFurtherThanItsChildren(t *testing.T) {
 // TestABorderIsInk: §3.1.2, a box's border moves its ink edge out to the
 // border box — which a stretchy operator beside it is stretched to. The "1"
 // is 704 tall, a parenthesis 768, so beside a bare "1" the parenthesis is
-// tall enough; beside one with a border above it, it is not, and this change
-// says it draws it at its text size.
+// tall enough; beside one with a border above it, it is not, and a face with
+// no larger parenthesis says it draws it at its text size.
 func TestABorderIsInk(t *testing.T) {
 	stretchReported := func(doc string) bool {
 		_, findings := mathLayout(t, doc)
 		for _, f := range findings {
-			if f.Rule == RuleUnsupportedValue && strings.Contains(f.Message, "stretchy") {
+			if f.Rule == RuleMathFallback && strings.Contains(f.Message, "no larger forms") {
 				return true
 			}
 		}

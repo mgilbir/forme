@@ -773,6 +773,9 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 	// The shape each marking run is clipped to, where it was drawn inside a
 	// ClipPath: part of what the mark is, exactly as a rectangle clip is.
 	var markingPaths []string
+	// A formula's glyphs named by index, and the curves they are cut by.
+	var glyphRuns []DrawGlyphs
+	var glyphPaths []string
 	for i, op := range ops {
 		// A shadow of a run is the run's glyphs, moved and recoloured, and a
 		// sharp one is exactly those glyphs in that colour: it is compared as
@@ -798,6 +801,21 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 				}
 				key = k
 			}
+		case DrawGlyphs:
+			// Glyphs a formula draws by index are marks glyph by glyph, as a
+			// run's are, each where its offsets put it — the pieces of an
+			// assembly are placed by nothing else. Ink the colour of what is
+			// under it is still counted, which errs towards two pages being
+			// different.
+			ink := glyphsInk(o)
+			if len(o.Glyphs) == 0 || o.Color.A == 0 || buriedUnder(covers, i, ink) ||
+				!page.Empty() && intersect(ink, page).Empty() ||
+				o.Clip.Active && intersect(ink, o.Clip.Rect).Empty() {
+				continue
+			}
+			glyphRuns = append(glyphRuns, o)
+			glyphPaths = append(glyphPaths, key)
+			continue
 		default:
 			continue
 		}
@@ -898,6 +916,26 @@ func texts(ops []Op, under []coloured, page Rect) []textMark {
 			shape += " clipped to path " + p
 		}
 		out = append(out, glyphMarks(v, what, shape, v.Color.A >= 1)...)
+	}
+	for gi, v := range glyphRuns {
+		shape := fmt.Sprintf("glyphs in %s size %s", faceKey(v.Face), num(v.Size))
+		if v.Clip.Active {
+			shape += " clipped to " + rectKey(v.Clip.Rect)
+		}
+		if p := glyphPaths[gi]; p != "" {
+			shape += " clipped to path " + p
+		}
+		what := shape + " " + colourKey(v.Color)
+		pen := 0.0
+		for _, g := range v.Glyphs {
+			x, _ := style.FromPx((pen + g.XOffset) * v.Size.Px() / 1000)
+			y, _ := style.FromPx(-g.YOffset * v.Size.Px() / 1000)
+			out = append(out, textMark{
+				what: fmt.Sprintf("%s glyph %d", what, g.GID), x: v.At.X.Add(x), y: v.At.Y.Add(y),
+				shape: fmt.Sprintf("%s glyph %d", shape, g.GID), opaque: v.Color.A >= 1,
+			})
+			pen += g.XAdvance
+		}
 	}
 	out = buriedUnderInk(out)
 	sort.Slice(out, func(i, j int) bool {

@@ -168,11 +168,14 @@ func (m mathFont) constant(c shape.MathConstant) style.Unit {
 	return 0
 }
 
-// radicalDegreeBottomRaise is §5.1's radicalDegreeBottomRaisePercent as a
-// fraction: the table's percentage over a hundred, or 0.6.
-func (m mathFont) radicalDegreeBottomRaise() float64 {
+// radicalDegreeBottomRaise is §5.1's radicalDegreeBottomRaisePercent of a
+// length: the table's percentage of it, or 60%, truncated to the unit. It is
+// worked in whole numbers, as the percentage is one: 0.6 has no exact binary
+// fraction, and a length times it can fall a unit short of three fifths.
+func (m mathFont) radicalDegreeBottomRaise(of style.Unit) style.Unit {
+	percent := 60
 	if v, ok := m.table.Constant(shape.MathRadicalDegreeBottomRaisePercent); ok {
-		return float64(v) / 100
+		percent = v
 	}
-	return 0.6
+	return style.Unit(int64(of) * int64(percent) / 100)
 }

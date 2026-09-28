@@ -211,6 +211,9 @@ func writeRenderKey(b *strings.Builder, ops []Op) {
 			fmt.Fprintf(b, "link %v %q\n", v.Rects, v.Href)
 		case FillPath:
 			fmt.Fprintf(b, "path %s %v clip=%v overhang=%v\n", v.Path, v.Color, v.Clip, v.Overhang)
+		case DrawGlyphs:
+			fmt.Fprintf(b, "glyphs %q at %v,%v %s %v %v %+v clip=%v\n",
+				v.Text, v.At.X, v.At.Y, faceName(v.Face), v.Size, v.Color, v.Glyphs, v.Clip)
 		case DrawEmphasisMark:
 			b.WriteString("mark {\n")
 			writeRenderKey(b, []Op{v.Mark})

@@ -2200,6 +2200,12 @@ func normaliseOps(ops []Op) string {
 				continue
 			}
 			lines = append(lines, fmt.Sprintf("path %s %s", v.Path, v.Color))
+		case DrawGlyphs:
+			if len(v.Glyphs) == 0 || v.Color.A == 0 {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("glyphs %v at %s,%s size %s",
+				v.Glyphs, num(v.At.X), num(v.At.Y), num(v.Size)))
 		case DrawEmphasisMark:
 			if strings.TrimSpace(v.Mark.Text) == "" || v.Mark.Color.A == 0 {
 				continue

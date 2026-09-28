@@ -38,8 +38,9 @@ import (
 // rather than a "border" primitive, because a backend that had to understand
 // border-collapse would be a second layout engine.
 //
-// There are eleven: FillRect, DrawText, DrawTextShadow, DrawEmphasisMark,
-// DrawImage, TileImage, FillGradient and FillPath, which put ink on the page;
+// There are twelve: FillRect, DrawText, DrawTextShadow, DrawEmphasisMark,
+// DrawGlyphs, DrawImage, TileImage, FillGradient and FillPath, which put ink
+// on the page;
 // ClipPath and FilterGroup, which hold operations and clip what they put there
 // to a shape or filter it as a group; and Link, which puts none and says where
 // a hyperlink is. A backend that switches over them must have a case for each,
@@ -1188,7 +1189,7 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 		// own.
 		lv.tables = append(lv.tables, f)
 	}
-	if len(f.Lines) > 0 || f.Marker != nil || f.Box.Replaced != nil || len(f.mathMarks) > 0 {
+	if len(f.Lines) > 0 || f.Marker != nil || f.Box.Replaced != nil || len(f.mathMarks) > 0 || len(f.mathGlyphs) > 0 {
 		lv.content = append(lv.content, contentItem{frag: f})
 	}
 	if collect {
@@ -1553,6 +1554,19 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 			v.Rects = rects
 			kept = append(kept, v)
 
+		case DrawGlyphs:
+			// Glyphs named by index are cut as a run of text is, by the same
+			// two questions; their ink is known exactly, so both are asked of
+			// it (see glyphsInk).
+			ink := glyphsInk(v)
+			if c.hides(ink) {
+				continue
+			}
+			if !c.admits(ink) {
+				v.Clip = v.Clip.meet(c)
+			}
+			kept = append(kept, v)
+
 		case DrawText:
 			ink := textInk(v)
 			if ink.Empty() {
@@ -1894,7 +1908,8 @@ func (p *painter) paintContent(f *Fragment) {
 			})
 		}
 	}
-	// A formula's bars: content, as a replaced element's is. See mathpaint.go.
+	// A formula's rules and glyphs: content, as a replaced element's is. See
+	// mathpaint.go.
 	p.mathMarks(f)
 	if m := f.Marker; m != nil && m.Image != nil && m.Image.Image != nil && !hidden {
 		// §12.6.2: the image *replaces* the marker the type would have made, so

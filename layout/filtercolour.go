@@ -211,6 +211,10 @@ func eachColour(ops []Op, f func(style.RGBA) bool) bool {
 			if !f(v.Mark.Color) {
 				return false
 			}
+		case DrawGlyphs:
+			if !f(v.Color) {
+				return false
+			}
 		case ClipPath:
 			if !eachColour(v.Ops, f) {
 				return false
@@ -268,6 +272,9 @@ func mapColours(ops []Op, f func(style.RGBA) style.RGBA) []Op {
 		case DrawEmphasisMark:
 			v.Mark.Color = f(v.Mark.Color)
 			op = v
+		case DrawGlyphs:
+			v.Color = f(v.Color)
+			op = v
 		case ClipPath:
 			v.Ops = mapColours(v.Ops, f)
 			op = v
@@ -324,6 +331,8 @@ func unmixed(ops []Op, m [20]float64) bool {
 				marks = append(marks, mark{r, v.Color.A < 1})
 			case DrawEmphasisMark:
 				marks = append(marks, mark{r, v.Mark.Color.A < 1})
+			case DrawGlyphs:
+				marks = append(marks, mark{r, v.Color.A < 1})
 			case DrawTextShadow:
 				marks = append(marks, mark{r, v.Run.Color.A < 1 || v.StdDev > 0})
 			case FillGradient:
@@ -379,7 +388,7 @@ func unmixed(ops []Op, m [20]float64) bool {
 func shadowable(ops []Op) bool {
 	for _, op := range ops {
 		switch v := op.(type) {
-		case FillRect, FillPath, FillGradient, DrawText, DrawTextShadow, DrawEmphasisMark, Link:
+		case FillRect, FillPath, FillGradient, DrawText, DrawTextShadow, DrawEmphasisMark, DrawGlyphs, Link:
 		case ClipPath:
 			if !shadowable(v.Ops) {
 				return false
@@ -476,6 +485,11 @@ func shadowMarks(ops []Op, d Point, c style.RGBA) []Op {
 			out = append(out, v)
 		case DrawEmphasisMark:
 			out = append(out, DrawTextShadow{Run: moveRun(v.Mark)})
+		case DrawGlyphs:
+			// The same glyphs, moved and in the shadow's colour, and standing
+			// for no text: a shadow is not the document's text twice.
+			v.At, v.Clip, v.Color, v.Text = movePoint(v.At), moveClip(v.Clip), tint(v.Color.A), ""
+			out = append(out, v)
 		case ClipPath:
 			inner := shadowMarks(v.Ops, d, c)
 			if len(inner) > 0 {

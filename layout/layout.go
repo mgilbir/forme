@@ -96,9 +96,12 @@ type Fragment struct {
 	mathBaseline    style.Unit
 	hasMathBaseline bool
 	// mathMarks are the rules a MathML box draws that are not boxes — a
-	// fraction bar — each measured from its content box, as its children are.
-	// See mathpaint.go.
+	// fraction bar, a radical's overbar — each measured from its content box,
+	// as its children are. See mathpaint.go.
 	mathMarks []Rect
+	// mathGlyphs are the glyph constructions it draws that are not its text:
+	// a stretched operator, a radical sign.
+	mathGlyphs []mathGlyphDraw
 	// column is which column of its parent's pour this fragment was put in,
 	// counted from one, and nought where its parent was not poured — a box
 	// whose parent is not a multicol container, or is one that laid its

@@ -104,3 +104,28 @@ func TestANestedFormulaIsLaidOutInLinearTime(t *testing.T) {
 		t.Errorf("four times the depth allocated %.1f times as much", ratio)
 	}
 }
+
+// TestStretchedOperatorsAreLaidOutInLinearTime: a row of n parentheses and
+// radicals beside something five ems tall, each built as an assembly of the
+// same size, and a row of four times as many. (How many pieces one assembly
+// has grows with what it covers, and is bounded by
+// shape.MaxMathAssemblyGlyphs and charged to the work budget; nested ones grow
+// with their nesting, as the drawing does.)
+func TestStretchedOperatorsAreLaidOutInLinearTime(t *testing.T) {
+	set := namedFaceSet{family: "math", face: mathStretchFace(t, nil), standard: StandardFonts()}
+	doc := func(n int) Built {
+		return Build(Input{HTML: `<math>` + strings.Repeat(`<mo>(</mo><msqrt><mspace height="5em"></mspace></msqrt>`, n) +
+			`</math>`, Fonts: set})
+	}
+	small, large := doc(40), doc(160)
+	w, _ := style.FromPx(1e6)
+	run := func(b Built) func() {
+		return func() { Paint(Layout(b.Root, Size{W: w, H: w}, set, nil)) }
+	}
+	if r := costtest.Time(t, "a row of stretched operators", run(small), run(large)); r.Ratio > 8 {
+		t.Errorf("four times the row cost %.1f times as much; linear is about four\n%v", r.Ratio, r)
+	}
+	if ratio := costtest.Allocated(t, "a row of stretched operators", run(small), run(large)); ratio > 8 {
+		t.Errorf("four times the row allocated %.1f times as much", ratio)
+	}
+}

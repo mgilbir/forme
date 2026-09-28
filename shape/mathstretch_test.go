@@ -139,6 +139,23 @@ func TestStretchTakesTheFirstThatReaches(t *testing.T) {
 	}
 }
 
+// TestAGlyphIsMeasuredAsStretchMeasuresIt: Glyph is Stretch's answer for one
+// glyph — its advance, its ink either side of the baseline, its italics
+// correction — for any glyph, a size variant included.
+func TestAGlyphIsMeasuredAsStretchMeasuresIt(t *testing.T) {
+	_, m := stretchFace(t, stretchOptions())
+	for _, gid := range []int{gParen, gParenV1, gParenV2, gArrow} {
+		want := m.single(gid)
+		if got := m.Glyph(gid); got.Glyph != gid || len(got.Parts) != 0 || got.Width != want.Width ||
+			got.Ascent != want.Ascent || got.Descent != want.Descent || got.ItalicsCorrection != want.ItalicsCorrection {
+			t.Errorf("Glyph(%d) = %+v, want %+v", gid, got, want)
+		}
+	}
+	if g := m.Glyph(gParenV1); g.Width != 350 || g.Ascent != 1100 || g.Descent != 400 || g.ItalicsCorrection != 17 {
+		t.Errorf("the first variant is measured as %+v, want 350 wide, 1100 up, 400 down and leaning 17", g)
+	}
+}
+
 // TestStretchBuildsTheAssembly is §5.3.1's arithmetic for a target of 2500:
 // the ends are 800 each (1600) and the extender 600, the least overlap 50, so
 //

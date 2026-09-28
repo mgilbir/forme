@@ -78,19 +78,47 @@ type mathContent struct {
 	hasAccent bool
 
 	kids []mathPlaced
-	// marks are what the element draws that is not a child: see mathMark.
-	marks []mathMark
+	// marks and glyphs are what the element draws that is not a child: see
+	// mathMark and mathGlyphMark.
+	marks  []mathMark
+	glyphs []mathGlyphMark
 	// centred says the math content box is centred along the inline axis in
 	// a content box wider than it, where the other algorithms put it at the
 	// inline start (§3.1.2).
 	centred bool
 }
 
-// mathMark is a rule a formula draws that is not a box — a fraction bar —
-// across its element's content box, its top edge top above the baseline and
-// height tall. See mathpaint.go.
+// mathMark is a rule a formula draws that is not a box — a fraction bar, a
+// radical's overbar — in its element's math content box: from x along the
+// inline axis for width, its top edge top above the baseline, height tall.
+// full says it spans the element's content box instead, which is wider than
+// the math content box where the element states its width: a fraction bar
+// does. See mathpaint.go.
 type mathMark struct {
+	x, width    style.Unit
 	top, height style.Unit
+	full        bool
+}
+
+// mathGlyphMark is a glyph construction a formula draws that is not a box's
+// text: a stretched or enlarged operator, a radical sign. It is width wide,
+// from x along the inline axis of its element's math content box, with its
+// baseline baseline above the element's.
+type mathGlyphMark struct {
+	x, width style.Unit
+	baseline style.Unit
+	draw     mathGlyphDraw
+}
+
+// mathGlyphDraw is a construction as it is drawn: its origin, on its
+// baseline, from the content box of the fragment that draws it; the text it
+// stands for; and its glyphs, or none where it is drawn as that text.
+type mathGlyphDraw struct {
+	at     Point
+	text   string
+	glyphs []shape.Glyph
+	face   *shape.Face
+	size   style.Unit
 }
 
 // mathPlaced is a child where its algorithm puts it: the inline offset of its
@@ -160,24 +188,13 @@ func (l *layouter) mathContentOf(b *Box, containing style.Unit, s mathStretch) m
 		return l.mathScripts(b, kids, alg.scripts, containing, s)
 	case mathKindUnderOver:
 		return l.mathUnderOver(b, kids, alg.under, alg.over, containing, s)
-	}
-	switch mathName(b) {
-	case "msqrt", "mroot":
-		l.mathNotYet(b)
+	case mathKindSqrt:
+		// §3.3.3: the <msqrt>'s children are its base, an anonymous row.
+		return l.mathRadical(b, l.mathRow(b, kids, containing, mathStretch{}))
+	case mathKindRoot:
+		return l.mathRoot(b, kids[0], kids[1], containing)
 	}
 	return l.mathRow(b, kids, containing, s)
-}
-
-// mathNotYet reports an element this engine lays out as a row where MathML
-// Core has an algorithm of its own for it.
-func (l *layouter) mathNotYet(b *Box) {
-	l.rec.ReportDetail(Finding{
-		Rule:     RuleUnsupportedElement,
-		Source:   sourceOf(boxElement(b)),
-		Message:  "<" + mathName(b) + "> is laid out as a row, side by side, and not by its own MathML layout",
-		Path:     PathOf(b.Element),
-		Property: mathName(b),
-	})
 }
 
 // mathWrap turns a math content box into the element's box: the content box,
@@ -259,7 +276,23 @@ func (l *layouter) mathPlace(b *Box, frag *Fragment, c mathContent, width, ascen
 		frag.Children = append(frag.Children, kf)
 	}
 	for _, mk := range c.marks {
-		frag.mathMarks = append(frag.mathMarks, Rect{Y: ascent.Sub(mk.top), W: width, H: mk.height})
+		x, w := dx.Add(mk.x), mk.width
+		if mk.full {
+			x, w = 0, width
+		}
+		if rtl {
+			x = width.Sub(x).Sub(w)
+		}
+		frag.mathMarks = append(frag.mathMarks, Rect{X: x, Y: ascent.Sub(mk.top), W: w, H: mk.height})
+	}
+	for _, g := range c.glyphs {
+		x := dx.Add(g.x)
+		if rtl {
+			x = width.Sub(x).Sub(g.width)
+		}
+		d := g.draw
+		d.at = Point{X: x, Y: ascent.Sub(g.baseline)}
+		frag.mathGlyphs = append(frag.mathGlyphs, d)
 	}
 }
 
@@ -510,6 +543,23 @@ func (l *layouter) mathContentSize(b *Box) mathSize {
 			loic, _ := l.mathScriptsItalics(kids[0], min[0].italic)
 			out.min, _ = mathUnderOverX(loic, min, 0, alg.under, alg.over)
 			out.max, _ = mathUnderOverX(loic, max, 0, alg.under, alg.over)
+		case mathKindSqrt:
+			// §3.3.3.2: the radical sign's preferred width and the base's.
+			out = l.mathRowSize(b, kids)
+			surd := l.mathSurdWidth(b)
+			out = mathSize{min: out.min.Add(surd), max: out.max.Add(surd)}
+		case mathKindRoot:
+			// §3.3.3.3: the kerns, the index and the square root of the base.
+			base, index := l.mathOuterSize(kids[0]), l.mathOuterSize(kids[1])
+			m := l.mathFontFor(b)
+			surd := l.mathSurdWidth(b)
+			for _, w := range []struct {
+				into        *style.Unit
+				base, index style.Unit
+			}{{&out.min, base.min, index.min}, {&out.max, base.max, index.max}} {
+				before, after := mathRootKerns(m, w.index)
+				*w.into = before.Add(w.index).Add(after).Add(surd).Add(w.base)
+			}
 		default:
 			out = l.mathRowSize(b, kids)
 			if name == "mpadded" {
@@ -595,10 +645,23 @@ func (l *layouter) mathRowSize(b *Box, kids []*Box) mathSize {
 // wraps, as MathML treats white-space as nowrap (§2.2.2) — and, where it is
 // one glyph, that glyph's italic correction, which is found by laying the
 // token out.
+//
+// A stretchy operator of block axis is the exception (§3.2.4.3): its sizes are
+// the widest form its font can draw it in, whatever it is stretched to later,
+// where the font has a construction for it at all.
 func (l *layouter) mathTokenSize(b *Box) mathSize {
 	c, _ := l.mathToken(b, 0, Edges{}, mathStretch{})
-	return mathSize{min: c.width, max: c.width, italic: c.italic, hasItalic: c.hasItalic,
+	out := mathSize{min: c.width, max: c.width, italic: c.italic, hasItalic: c.hasItalic,
 		accent: c.accent, hasAccent: c.hasAccent}
+	if op, ok := l.mathOperator(b); ok && op.core == b && op.single && op.stretchy && !op.inlineAxis() && mathOnlyText(b) {
+		if m := l.mathFontFor(b); m.table != nil {
+			if gid, ok := m.face.GlyphID(mathMirrored(b, op.char)); ok && m.table.HasConstruction(gid, true) {
+				w := m.units(m.table.PreferredStretchWidth(gid))
+				out.min, out.max = w, w
+			}
+		}
+	}
+	return out
 }
 
 // isMathMLRoot reports whether a node is a <math> element.

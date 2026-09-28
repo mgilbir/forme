@@ -727,6 +727,14 @@ func (m *MathTable) glyphSize(gid int, vertical bool) float64 {
 	return float64(-e.height)
 }
 
+// Glyph is one glyph measured as Stretch measures the constructions it
+// answers with: its advance, how far its ink reaches above and below its
+// baseline, and its italics correction. It is for a caller that chooses a
+// glyph itself — MathML Core §3.2.4.3's large operator, which is the first of
+// its size variants tall enough and never an assembly — and lays it out as
+// Stretch's answers are laid out.
+func (m *MathTable) Glyph(gid int) MathStretch { return m.single(gid) }
+
 // single is the answer for one glyph: drawn at the origin, measured by its
 // advance and its ink, with its own italics correction.
 func (m *MathTable) single(gid int) MathStretch {

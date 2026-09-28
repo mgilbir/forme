@@ -66,6 +66,8 @@ const (
 	mathKindFraction
 	mathKindScripts
 	mathKindUnderOver
+	mathKindSqrt
+	mathKindRoot
 )
 
 // mathAlgorithm is an element's algorithm, with what it needs to know of the
@@ -104,6 +106,13 @@ func (l *layouter) mathAlgorithmOf(b *Box, kids []*Box) mathAlgorithm {
 			return count(2)
 		}
 		return mathAlgorithm{kind: mathKindFraction}
+	case "msqrt":
+		return mathAlgorithm{kind: mathKindSqrt}
+	case "mroot":
+		if len(kids) != 2 {
+			return count(2)
+		}
+		return mathAlgorithm{kind: mathKindRoot}
 	case "msub", "msup", "munder", "mover":
 		if len(kids) != 2 {
 			return count(2)

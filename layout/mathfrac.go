@@ -50,7 +50,7 @@ func (l *layouter) mathFraction(b *Box, num, den *Box, containing style.Unit, s 
 		// The bar: as wide as the content box, its middle on the axis. Its
 		// top is the axis plus the half of it above; an odd thickness puts
 		// the extra sixty-fourth of a pixel above.
-		c.marks = append(c.marks, mathMark{top: axis.Add(t.Sub(half)), height: t})
+		c.marks = append(c.marks, mathMark{full: true, top: axis.Add(t.Sub(half)), height: t})
 	} else {
 		// §3.3.2.2.
 		up = pick(shape.MathStackTopShiftUp, shape.MathStackTopDisplayStyleShiftUp)

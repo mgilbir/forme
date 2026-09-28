@@ -547,11 +547,11 @@ func TestAnAccentIsCentredByItsAttachment(t *testing.T) {
 func TestAStretchyOperatorOverABaseIsAskedToReachAcrossIt(t *testing.T) {
 	face := mathFaceWith(t, mathUnderOverConstants)
 	_, findings := mathLayoutIn(t, face, `<math><mover><mspace width="3em"></mspace><mo>→</mo></mover></math>`)
-	if !mathFinding(findings, RuleUnsupportedValue, "stretchy") {
+	if !mathFinding(findings, RuleMathFallback, "no larger forms") {
 		t.Errorf("an arrow over a wide base is not reported unstretched: %v", findings)
 	}
 	_, findings = mathLayoutIn(t, face, `<math><mover><mspace width="5px"></mspace><mo>→</mo></mover></math>`)
-	if mathFinding(findings, RuleUnsupportedValue, "stretchy") {
+	if mathFinding(findings, RuleMathFallback, "no larger forms") {
 		t.Errorf("an arrow over a narrow base is reported: %v", findings)
 	}
 }
@@ -624,7 +624,7 @@ func TestAStretchIsPassedToTheOperatorAnElementEmbellishes(t *testing.T) {
 		{`<msub><mn>1</mn><mo>(</mo></msub>`, false},
 	} {
 		_, findings := mathLayoutIn(t, face, `<math>`+tc.inner+`<mspace height="4em"></mspace></math>`)
-		if got := mathFinding(findings, RuleUnsupportedValue, "stretchy"); got != tc.asked {
+		if got := mathFinding(findings, RuleMathFallback, "no larger forms"); got != tc.asked {
 			t.Errorf("%s: asked to stretch %v, want %v", tc.inner, got, tc.asked)
 		}
 	}
@@ -638,7 +638,7 @@ func TestAStretchIsPassedToTheOperatorAnElementEmbellishes(t *testing.T) {
 		_, findings := mathLayoutIn(t, face, `<math>`+inner+`<mspace height="4em"></mspace></math>`)
 		n := 0
 		for _, f := range findings {
-			if f.Rule == RuleUnsupportedValue && strings.Contains(f.Message, "stretchy") {
+			if f.Rule == RuleMathFallback && strings.Contains(f.Message, "no larger forms") {
 				n++
 			}
 		}
@@ -725,12 +725,12 @@ func TestUnderAndOverscriptsReachPastTheirShifts(t *testing.T) {
 		t.Errorf("the parenthesis's underscript reaches %d down, want the underbar gap's %d",
 			f.ContentRect().H.Sub(f.mathBaseline), 256+30+64+20)
 	}
-	if mathFinding(findings, RuleUnsupportedValue, "stretchy") {
+	if mathFinding(findings, RuleMathFallback, "no larger forms") {
 		t.Errorf("a parenthesis is asked to stretch across its underscript: %v", findings)
 	}
 	_, findings = mathLayoutIn(t, face, `<math display="block"><munder><mspace width="3em" height="1px"></mspace>`+
 		`<mo>(</mo></munder></math>`)
-	if mathFinding(findings, RuleUnsupportedValue, "stretchy") {
+	if mathFinding(findings, RuleMathFallback, "no larger forms") {
 		t.Errorf("a parenthesis under a base is asked to stretch across it: %v", findings)
 	}
 
@@ -779,7 +779,7 @@ func TestAnOverscriptOnAMovableOperatorIsASuperscript(t *testing.T) {
 func TestAStretchyOperatorIsStretchedToTheWidestOfTheOthers(t *testing.T) {
 	face := mathFaceWith(t, mathUnderOverConstants)
 	_, findings := mathLayoutIn(t, face, `<math><munderover><mspace width="3em"></mspace><mo>→</mo><mn>1</mn></munderover></math>`)
-	if !mathFinding(findings, RuleUnsupportedValue, "stretchy") {
+	if !mathFinding(findings, RuleMathFallback, "no larger forms") {
 		t.Errorf("an arrow under a wide base, over a narrow script, is not asked to reach the base: %v", findings)
 	}
 }

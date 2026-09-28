@@ -633,8 +633,8 @@ func (c *layoutCache) unlink(e *layoutEntry) {
 // chains of rounded clips, which resolveClips builds once the tree is final and
 // only ever extends by a new link at the head, the root's table of filter
 // chains, which resolveFilters builds once and nothing writes to after, and a
-// formula's rules, which its layout places once in the box's own content box
-// and nothing moves after.
+// formula's rules and glyphs, which its layout places once in the box's own
+// content box and nothing moves after.
 //
 // A slice that was nil stays nil and one that was empty stays empty, so a copy
 // is indistinguishable from the original to anything that compares them.

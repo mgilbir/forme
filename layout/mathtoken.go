@@ -27,42 +27,57 @@ import (
 
 // mathToken lays a token out: its fragment, holding its line, and its content
 // box's measurements.
+//
+// An <mo> that a formula stretches, or a large operator in display
+// mathematics, may be drawn as a construction of its font rather than as its
+// text (see mathstretch.go). Where the construction is the glyph the text is
+// drawn with, the token is its text, moved down by §3.2.4.3's Δ; otherwise it
+// is the construction, drawn as the token's own mark, and the token has no
+// line and no fragment of its own yet.
 func (l *layouter) mathToken(b *Box, containing style.Unit, margin Edges, s mathStretch) (mathContent, *Fragment) {
+	var drawn mathOpDrawn
+	isDrawn := false
+	op, isOp := l.mathOperator(b)
+	if isOp && op.core == b {
+		drawn, isDrawn = l.mathOperatorDrawn(b, op, s)
+		if isDrawn && !drawn.isBase() {
+			return l.mathOpContent(b, drawn, op.text), nil
+		}
+	}
 	width := l.contentWidths(b).max
 	held := l.mathTextBox
 	l.mathTextBox = b
 	frag, _ := l.layBlock(b, containing, aloneFlow(0, false), &forcedGeometry{margin: margin, width: width})
 	l.mathTextBox = held
-	c := l.mathTokenContent(b, frag, width)
-	op, isOp := l.mathOperator(b)
-	if isOp && (s.block && (s.ascent > c.inkAscent || s.descent > c.inkDescent) || s.inline && s.size > c.width) {
-		// Asked to grow past its own glyph, which this change does not do.
-		l.mathNotStretched(b)
-	}
-	if isOp && op.largeop && mathStyleNormal(b) {
-		// §3.2.4.3's large operator, drawn larger in display mathematics:
-		// not done by this change either.
-		l.rec.ReportDetail(Finding{
-			Rule:     RuleUnsupportedValue,
-			Source:   sourceOf(boxElement(b)),
-			Message:  "a large operator in display mathematics is drawn at its text size: this engine does not enlarge operators yet",
-			Path:     PathOf(b.Element),
-			Property: "largeop",
-		})
+	c, ink := l.mathTokenContent(b, frag, width)
+	if isDrawn {
+		// The operator's own glyph is what it was asked to be — if its text
+		// is drawn with that glyph. Text a font's shaping draws with another
+		// glyph, or sets in another face, is not, and the construction is
+		// drawn instead. Moving the math baseline up by Δ leaves the line
+		// where it is: its glyph is then Δ below the baseline, as §3.2.4.3
+		// places it.
+		if !ink.single || ink.face != l.mathFontFor(b).face || ink.gid != drawn.gid {
+			return l.mathOpContent(b, drawn, op.text), nil
+		}
+		c.ascent, c.descent = c.ascent.Sub(drawn.delta), c.descent.Add(drawn.delta)
+		c.inkAscent, c.inkDescent = c.ascent, c.descent
 	}
 	return c, frag
 }
 
 // mathTokenContent measures a token's laid out lines as §3.2.1.1 measures
 // them, moving the line so that its baseline is at the top of the content box
-// plus the ascent the measurement arrived at.
-func (l *layouter) mathTokenContent(b *Box, frag *Fragment, width style.Unit) mathContent {
+// plus the ascent the measurement arrived at; and says which glyph it is,
+// where it is one.
+func (l *layouter) mathTokenContent(b *Box, frag *Fragment, width style.Unit) (mathContent, mathInk) {
 	c := mathContent{width: width}
+	var ink mathInk
 	inset := frag.Border.Top.Add(frag.Padding.Top)
 	switch {
 	case len(frag.Lines) == 1 && mathOnlyText(b):
 		line := &frag.Lines[0]
-		ink := l.mathLineInk(line)
+		ink = l.mathLineInk(line)
 		c.ascent, c.descent = ink.ascent, ink.descent
 		line.move(0, c.ascent.Sub(line.Rect.Y.Add(line.Baseline)))
 		if ink.single {
@@ -87,21 +102,32 @@ func (l *layouter) mathTokenContent(b *Box, frag *Fragment, width style.Unit) ma
 		c.descent = h.Sub(c.ascent)
 	}
 	c.inkAscent, c.inkDescent = c.ascent, c.descent
-	return c
+	return c, ink
 }
 
 // mathTokenBlockContent is a token that block layout reached — a token laid
 // out as block math because its parent is a CSS box — measured and placed as
 // mathToken places it, into the fragment block layout made for it, centred.
+// Nothing stretches it, since nothing is beside it; a large operator in
+// display mathematics is still drawn large.
 func (l *layouter) mathTokenBlockContent(b *Box, parent *Fragment, width style.Unit,
 	topOpen, bottomOpen bool, origin flow) style.Unit {
 
+	if op, ok := l.mathOperator(b); ok && op.core == b {
+		if drawn, ok := l.mathOperatorDrawn(b, op, mathStretch{}); ok && !drawn.isBase() {
+			c := l.mathOpContent(b, drawn, op.text)
+			c.centred = width > c.width
+			l.mathPlace(b, parent, c, style.Max(width, c.width), c.ascent)
+			parent.mathBaseline, parent.hasMathBaseline = c.ascent, true
+			return c.ascent.Add(c.descent)
+		}
+	}
 	held := l.mathTextBox
 	l.mathTextBox = b
 	l.children(b, parent, width, topOpen, bottomOpen, origin)
 	l.mathTextBox = held
 	advance := l.contentWidths(b).max
-	c := l.mathTokenContent(b, parent, advance)
+	c, _ := l.mathTokenContent(b, parent, advance)
 	if dx := width.Sub(advance).Div(2); dx > 0 && len(parent.Lines) == 1 {
 		parent.Lines[0].move(dx, 0)
 	}
@@ -176,18 +202,6 @@ func (l *layouter) mathLineInk(line *LineFragment) mathInk {
 		out.descent, _ = style.FromPx(-bottom)
 	}
 	return out
-}
-
-// mathNotStretched reports an operator that a formula asked to stretch and
-// that is drawn at its text size.
-func (l *layouter) mathNotStretched(b *Box) {
-	l.rec.ReportDetail(Finding{
-		Rule:     RuleUnsupportedValue,
-		Source:   sourceOf(boxElement(b)),
-		Message:  "a stretchy operator is drawn at its text size: this engine does not stretch operators yet",
-		Path:     PathOf(b.Element),
-		Property: "stretchy",
-	})
 }
 
 // mathStyleNormal reports whether a box's math-style is normal: set as display

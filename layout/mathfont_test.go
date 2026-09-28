@@ -58,8 +58,8 @@ func TestTheConstantsFallBackAsSection51Says(t *testing.T) {
 			t.Errorf("%v falls back to %d, want %d", c, got, want)
 		}
 	}
-	if got := m.radicalDegreeBottomRaise(); got != 0.6 {
-		t.Errorf("radicalDegreeBottomRaisePercent falls back to %v, want 0.6", got)
+	if got := m.radicalDegreeBottomRaise(930); got != 558 {
+		t.Errorf("radicalDegreeBottomRaisePercent falls back to %d of 930, want 60%%, 558", got)
 	}
 
 	// With a table, every constant is the table's, nought included.
@@ -72,8 +72,8 @@ func TestTheConstantsFallBackAsSection51Says(t *testing.T) {
 	if got := mt.constant(shape.MathStackGapMin); got != 0 {
 		t.Errorf("the table's stack gap is read as %d, want its nought", got)
 	}
-	if got := mt.radicalDegreeBottomRaise(); got != 0 {
-		t.Errorf("the table's radicalDegreeBottomRaisePercent is read as %v, want its nought", got)
+	if got := mt.radicalDegreeBottomRaise(930); got != 0 {
+		t.Errorf("the table's radicalDegreeBottomRaisePercent is read as %v of 930, want its nought", got)
 	}
 }
 
@@ -114,7 +114,7 @@ func TestAFormulasFontIsItsFirstAvailableFontAtItsSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	tbl, _ := face.MathTable()
-	if got := (mathFont{face: face, table: tbl}).radicalDegreeBottomRaise(); got != 0.65 {
-		t.Errorf("a raise of 65%% is read as %v", got)
+	if got := (mathFont{face: face, table: tbl}).radicalDegreeBottomRaise(1000); got != 650 {
+		t.Errorf("a raise of 65%% of 1000 is %d", got)
 	}
 }

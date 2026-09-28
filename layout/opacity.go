@@ -197,6 +197,18 @@ func dimOps(ops []Op, at int, alpha float64) ([]Op, []groupMark) {
 			}
 			v.Color.A *= alpha
 			kept = append(kept, v)
+		case DrawGlyphs:
+			// Glyphs carry a colour, as a run of text does.
+			if v.Color.A == 0 || len(v.Glyphs) == 0 {
+				kept = append(kept, op)
+				continue
+			}
+			marks = append(marks, groupMark{text: true})
+			if alpha == 0 {
+				continue
+			}
+			v.Color.A *= alpha
+			kept = append(kept, v)
 		case DrawEmphasisMark:
 			// A mark carries a colour, as the run beside it does.
 			if v.Mark.Color.A == 0 || v.Mark.Text == "" {
