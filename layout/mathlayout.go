@@ -160,7 +160,43 @@ func (l *layouter) mathBox(b *Box, containing style.Unit, s mathStretch) mathLai
 	if frag == nil {
 		frag = &Fragment{Box: b}
 	}
-	return l.mathWrap(b, frag, content, containing, margin, border, padding)
+	laid := l.mathWrap(b, frag, content, containing, margin, border, padding)
+	if !isMathToken(b) {
+		// A token's content is laid out by the block and inline layout that
+		// queue what is positioned in it themselves.
+		l.mathDeferPositioned(b, frag, frag.ContentRect().W)
+	}
+	return laid
+}
+
+// mathDeferPositioned queues the absolutely and fixed positioned children of a
+// MathML element whose content its own algorithm lays out, to be placed once
+// the tree is absolute.
+//
+// §3.1.2 lists "layout and positioning of absolutely-positioned and
+// fixed-positioned boxes, as described in [CSS-POSITION-3]" as the last step
+// of every algorithm, after the in-flow children — the only ones the
+// algorithms themselves place (mathInFlow) — have their offsets. Leaving them
+// out of the formula without queueing them anywhere drew nothing of them and
+// said nothing about it.
+//
+// MathML Core gives an out-of-flow child no place in a row, a fraction or a
+// script, so its static position — where §10.3.7 and §10.6.4 put a box that
+// states no offset — is the one point of the element that none of them
+// decides: the inline-start corner of its content box. As a point rather than
+// a box it is measured from both edges, nought from the start and the content
+// width from the end; the start is the right in a right-to-left formula.
+func (l *layouter) mathDeferPositioned(b *Box, frag *Fragment, width style.Unit) {
+	for _, c := range b.Children {
+		if !c.Position.outOfFlow() {
+			continue
+		}
+		x, end := style.Unit(0), width
+		if mathRTL(b) {
+			x, end = width, 0
+		}
+		l.deferAbsolute(c, frag, x, 0, end, 0)
+	}
 }
 
 // mathContentOf is an element's algorithm, for every element but a token,
@@ -521,6 +557,7 @@ func (l *layouter) mathBlockContent(b *Box, parent *Fragment, width style.Unit,
 	}
 	l.mathPlace(b, parent, c, inner, c.ascent)
 	parent.mathBaseline, parent.hasMathBaseline = c.ascent, true
+	l.mathDeferPositioned(b, parent, width)
 	return c.ascent.Add(c.descent)
 }
 

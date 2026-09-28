@@ -410,6 +410,58 @@ func TestAFloatInAFormulaDoesNotFloat(t *testing.T) {
 	}
 }
 
+// TestAPositionedChildOfAFormulaIsPlaced is §3.1.2's last step. Children of a
+// row that are absolutely or fixed positioned take no room in it — the 2 is
+// 512 on, straight after the 1 — and are placed as CSS places them: the a
+// against the positioned <div>, 30px (1920) across and 40px (2560) down from
+// its padding box; the y against the page, 5px (320) and 6px (384) in. The b,
+// which states no offset, is at its static position, the inline-start corner
+// of the row's content box: its left edge at the row's left in a left-to-right
+// row, and its right edge at the row's right in a right-to-left one — the row
+// is the 1 and the 2, 1024 wide, and the b 512, so it is at 512.
+func TestAPositionedChildOfAFormulaIsPlaced(t *testing.T) {
+	root, _ := mathLayout(t, `<div id="d" style="position: relative; padding: 1px">`+
+		`<math><mrow id="r"><mn>1</mn>`+
+		`<mn id="a" style="position: absolute; left: 30px; top: 40px">a</mn>`+
+		`<mn id="s" style="position: absolute">b</mn>`+
+		`<mn id="f" style="position: fixed; left: 5px; top: 6px">y</mn>`+
+		`<mn id="b">2</mn></mrow></math></div>`)
+	d, r := find(t, root, "d"), find(t, root, "r")
+	if x, _ := at(find(t, root, "b"), r); x != 512 {
+		t.Errorf("the 2 is at %d in the row, want 512: the positioned children took room", x)
+	}
+	a := find(t, root, "a")
+	if x, y := a.BorderRect.X.Sub(d.PaddingRect().X), a.BorderRect.Y.Sub(d.PaddingRect().Y); x != 1920 || y != 2560 {
+		t.Errorf("the absolutely positioned a is at (%d, %d) in the div's padding box, want (1920, 2560)", x, y)
+	}
+	if x, y := at(find(t, root, "s"), r); x != 0 || y != 0 {
+		t.Errorf("the b with no offsets is at (%d, %d) in the row, want its static position (0, 0)", x, y)
+	}
+	if f := find(t, root, "f"); f.BorderRect.X != 320 || f.BorderRect.Y != 384 {
+		t.Errorf("the fixed y is at (%d, %d), want (320, 384) on the page", f.BorderRect.X, f.BorderRect.Y)
+	}
+
+	// The same of the <math> root's own children, which block layout hands to
+	// the row algorithm rather than a parent's algorithm laying them out.
+	root, _ = mathLayout(t, `<div id="d" style="position: relative"><math id="m"><mn>1</mn>`+
+		`<mn id="a" style="position: absolute; left: 1px; top: 2px">a</mn><mn id="s" style="position: absolute">b</mn></math></div>`)
+	d, m := find(t, root, "d"), find(t, root, "m")
+	if a := find(t, root, "a"); a.BorderRect.X.Sub(d.PaddingRect().X) != 64 || a.BorderRect.Y.Sub(d.PaddingRect().Y) != 128 {
+		t.Errorf("the root's absolutely positioned a is at (%d, %d) in the div, want (64, 128)",
+			a.BorderRect.X.Sub(d.PaddingRect().X), a.BorderRect.Y.Sub(d.PaddingRect().Y))
+	}
+	if x, y := at(find(t, root, "s"), m); x != 0 || y != 0 {
+		t.Errorf("the root's b is at (%d, %d) in it, want (0, 0)", x, y)
+	}
+
+	root, _ = mathLayout(t, `<div style="position: relative"><math dir="rtl"><mrow id="r"><mn>1</mn><mn>2</mn>`+
+		`<mn id="s" style="position: absolute">b</mn></mrow></math></div>`)
+	r = find(t, root, "r")
+	if x, y := at(find(t, root, "s"), r); x != 512 || y != 0 {
+		t.Errorf("in a right-to-left row the b is at (%d, %d), want (512, 0): its right edge at the row's", x, y)
+	}
+}
+
 // TestWhatAFormulaCannotDoIsReported: an operator a face has no larger form
 // of is not stretched, and a face with no MATH table sets a formula by the
 // fallbacks; each says so. A formula that asks for neither reports nothing.
