@@ -95,6 +95,10 @@ type Fragment struct {
 	// are not. See mathlayout.go.
 	mathBaseline    style.Unit
 	hasMathBaseline bool
+	// mathMarks are the rules a MathML box draws that are not boxes — a
+	// fraction bar — each measured from its content box, as its children are.
+	// See mathpaint.go.
+	mathMarks []Rect
 	// column is which column of its parent's pour this fragment was put in,
 	// counted from one, and nought where its parent was not poured — a box
 	// whose parent is not a multicol container, or is one that laid its
@@ -456,13 +460,12 @@ type layouter struct {
 	// What laying out MathML keeps for the run: each face's MATH table, read
 	// once; each box's class as an embellished operator or a space-like
 	// element, and each core operator's properties, which every row asks of
-	// its children; each box's intrinsic sizes; the token whose text block
-	// layout is laying out as a line rather than as MathML. See mathlayout.go.
+	// its children, and each row's ends; the token whose text block layout is
+	// laying out as a line rather than as MathML. See mathlayout.go.
 	mathTables  map[*shape.Face]*shape.MathTable
 	mathClasses map[*Box]mathClass
 	mathOps     map[*Box]*mathOp
 	mathEnds    map[*Box]mathEnds
-	mathSizes   map[*Box]mathSize
 	mathTextBox *Box
 
 	// languageMemo answers the language questions each text box asks. See

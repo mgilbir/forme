@@ -3,6 +3,7 @@ package layout
 import (
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/internal/ascii"
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -77,10 +78,19 @@ type mathContent struct {
 	hasAccent bool
 
 	kids []mathPlaced
+	// marks are what the element draws that is not a child: see mathMark.
+	marks []mathMark
 	// centred says the math content box is centred along the inline axis in
 	// a content box wider than it, where the other algorithms put it at the
 	// inline start (§3.1.2).
 	centred bool
+}
+
+// mathMark is a rule a formula draws that is not a box — a fraction bar —
+// across its element's content box, its top edge top above the baseline and
+// height tall. See mathpaint.go.
+type mathMark struct {
+	top, height style.Unit
 }
 
 // mathPlaced is a child where its algorithm puts it: the inline offset of its
@@ -128,16 +138,34 @@ func (l *layouter) mathBox(b *Box, containing style.Unit, s mathStretch) mathLai
 // mathContentOf is an element's algorithm, for every element but a token,
 // whose content is text: see mathToken.
 func (l *layouter) mathContentOf(b *Box, containing style.Unit, s mathStretch) mathContent {
-	switch mathName(b) {
-	case "mspace":
+	kids := mathInFlow(b)
+	alg := l.mathAlgorithmOf(b, kids)
+	if alg.why != "" {
+		l.rec.ReportDetail(Finding{
+			Rule:     RuleInvalidMarkup,
+			Source:   sourceOf(boxElement(b)),
+			Message:  alg.why,
+			Path:     PathOf(b.Element),
+			Property: mathName(b),
+		})
+	}
+	switch alg.kind {
+	case mathKindSpace:
 		return l.mathSpace(b, containing)
-	case "mpadded":
+	case mathKindPadded:
 		return l.mathPadded(b, containing, s)
-	case "mfrac", "msqrt", "mroot", "msub", "msup", "msubsup", "munder", "mover",
-		"munderover", "mmultiscripts":
+	case mathKindFraction:
+		return l.mathFraction(b, kids[0], kids[1], containing, s)
+	case mathKindScripts:
+		return l.mathScripts(b, kids, alg.scripts, containing, s)
+	case mathKindUnderOver:
+		return l.mathUnderOver(b, kids, alg.under, alg.over, containing, s)
+	}
+	switch mathName(b) {
+	case "msqrt", "mroot":
 		l.mathNotYet(b)
 	}
-	return l.mathRow(b, mathInFlow(b), containing, s)
+	return l.mathRow(b, kids, containing, s)
 }
 
 // mathNotYet reports an element this engine lays out as a row where MathML
@@ -229,6 +257,9 @@ func (l *layouter) mathPlace(b *Box, frag *Fragment, c mathContent, width, ascen
 		kf.BorderRect.X = x.Add(kf.Margin.Left)
 		kf.BorderRect.Y = ascent.Sub(k.shift).Sub(k.laid.ascent).Add(kf.Margin.Top)
 		frag.Children = append(frag.Children, kf)
+	}
+	for _, mk := range c.marks {
+		frag.mathMarks = append(frag.mathMarks, Rect{Y: ascent.Sub(mk.top), W: width, H: mk.height})
 	}
 }
 
@@ -443,20 +474,17 @@ type mathSize struct {
 	min, max  style.Unit
 	italic    style.Unit
 	hasItalic bool
+	// accent is the box's top accent attachment, where it has one, which an
+	// <mover> centres its overscript by.
+	accent    style.Unit
+	hasAccent bool
 }
 
 // mathContentSize is a MathML box's min-content and max-content inline sizes,
-// of its math content box, by its algorithm (§3), memoized: everything that
-// sizes a formula before laying it out asks — a shrink-to-fit inline <math>,
-// a table cell, a float — and a row asks each child.
+// of its math content box, by its algorithm (§3). It is not kept: it is asked
+// once of each box, by its parent's or — for the box a CSS box holds — by
+// contentWidths, which keeps it.
 func (l *layouter) mathContentSize(b *Box) mathSize {
-	if got, ok := l.mathSizes[b]; ok {
-		return got
-	}
-	if l.mathSizes == nil {
-		l.mathSizes = map[*Box]mathSize{}
-	}
-	l.mathSizes[b] = mathSize{}
 	var out mathSize
 	switch name := mathName(b); {
 	case isMathToken(b):
@@ -465,14 +493,32 @@ func (l *layouter) mathContentSize(b *Box) mathSize {
 		w, _ := l.explicitWidth(b, 0)
 		out = mathSize{min: w, max: w}
 	default:
-		out = l.mathRowSize(b, mathInFlow(b))
-		if name == "mpadded" {
-			if w, ok := l.explicitWidth(b, 0); ok {
-				out = mathSize{min: w, max: w}
+		kids := mathInFlow(b)
+		switch alg := l.mathAlgorithmOf(b, kids); alg.kind {
+		case mathKindFraction:
+			n, d := l.mathOuterSize(kids[0]), l.mathOuterSize(kids[1])
+			out = mathSize{min: style.Max(n.min, d.min), max: style.Max(n.max, d.max)}
+		case mathKindScripts:
+			min, max := l.mathSizesH(kids)
+			italic := min[alg.scripts.base].italic
+			loic, ic := l.mathScriptsItalics(kids[alg.scripts.base], italic)
+			space := l.mathFontFor(b).constant(shape.MathSpaceAfterScript)
+			out.min, _ = mathScriptsX(space, loic, ic, alg.scripts, min)
+			out.max, _ = mathScriptsX(space, loic, ic, alg.scripts, max)
+		case mathKindUnderOver:
+			min, max := l.mathSizesH(kids)
+			loic, _ := l.mathScriptsItalics(kids[0], min[0].italic)
+			out.min, _ = mathUnderOverX(loic, min, 0, alg.under, alg.over)
+			out.max, _ = mathUnderOverX(loic, max, 0, alg.under, alg.over)
+		default:
+			out = l.mathRowSize(b, kids)
+			if name == "mpadded" {
+				if w, ok := l.explicitWidth(b, 0); ok {
+					out = mathSize{min: w, max: w}
+				}
 			}
 		}
 	}
-	l.mathSizes[b] = out
 	return out
 }
 
@@ -492,14 +538,31 @@ func (l *layouter) mathOuterSize(b *Box) mathSize {
 	margin, border, padding := l.edges(b, "margin", 0), l.borderWidths(b), l.paddingOf(b, 0)
 	edges := margin.Horizontal().Add(border.Horizontal()).Add(padding.Horizontal())
 	w.min, w.max = w.min.Add(edges), w.max.Add(edges)
+	start, end := margin.Left.Add(border.Left).Add(padding.Left), margin.Right.Add(border.Right).Add(padding.Right)
+	if mathRTL(b) {
+		start, end = end, start
+	}
 	if w.hasItalic {
-		end := margin.Right.Add(border.Right).Add(padding.Right)
-		if mathRTL(b) {
-			end = margin.Left.Add(border.Left).Add(padding.Left)
-		}
 		w.italic = w.italic.Add(end)
 	}
+	if w.hasAccent {
+		w.accent = w.accent.Add(start)
+	}
 	return w
+}
+
+// mathSizesH is each child's intrinsic sizes as the inline half of a layout
+// reads them: the min-content sizes, and the max-content ones.
+func (l *layouter) mathSizesH(kids []*Box) (min, max []mathH) {
+	for _, k := range kids {
+		w := l.mathOuterSize(k)
+		h := mathH{italic: w.italic, accent: w.accent, hasAccent: w.hasAccent}
+		h.w = w.min
+		min = append(min, h)
+		h.w = w.max
+		max = append(max, h)
+	}
+	return min, max
 }
 
 // mathRowSize is §3.3.1.2's min-content and max-content inline sizes of a row:
@@ -534,7 +597,8 @@ func (l *layouter) mathRowSize(b *Box, kids []*Box) mathSize {
 // token out.
 func (l *layouter) mathTokenSize(b *Box) mathSize {
 	c, _ := l.mathToken(b, 0, Edges{}, mathStretch{})
-	return mathSize{min: c.width, max: c.width, italic: c.italic, hasItalic: c.hasItalic}
+	return mathSize{min: c.width, max: c.width, italic: c.italic, hasItalic: c.hasItalic,
+		accent: c.accent, hasAccent: c.hasAccent}
 }
 
 // isMathMLRoot reports whether a node is a <math> element.

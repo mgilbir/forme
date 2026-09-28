@@ -34,12 +34,16 @@ var mathTestGlyphs = []fonttest.Glyph{
 	{Rune: 'y', Advance: 512, HasShape: true, Ink: [4]int{0, -192, 512, 448}},
 	{Rune: '(', Advance: 384, HasShape: true, Ink: [4]int{64, -256, 320, 768}},
 	{Rune: ')', Advance: 384, HasShape: true, Ink: [4]int{64, -256, 320, 768}},
+	{Rune: 0x222B, Advance: 400, HasShape: true, Ink: [4]int{0, -200, 500, 800}}, // ∫
+	{Rune: 0x2211, Advance: 800, HasShape: true, Ink: [4]int{0, -200, 800, 800}}, // ∑
+	{Rune: 0x2192, Advance: 600, HasShape: true, Ink: [4]int{0, 200, 600, 400}},  // →
 }
 
 // Glyph indices in the face: one more than the position above.
 const (
-	mathGlyphItalicX = 3
-	mathGlyphItalicF = 4
+	mathGlyphItalicX  = 3
+	mathGlyphItalicF  = 4
+	mathGlyphIntegral = 14
 )
 
 func mathTestFace(t testing.TB) *shape.Face {

@@ -68,3 +68,39 @@ func TestAnOperatorsPropertiesAreFoundInLinearTime(t *testing.T) {
 		t.Errorf("four times the operators cost %.1f times as much; linear is about four\n%v", r.Ratio, r)
 	}
 }
+
+// mathNestedDoc is a formula n deep: each level a fraction whose numerator is
+// a base with a subscript and a superscript, and whose base is the next level.
+func mathNestedDoc(t *testing.T, n int) (Built, FontSet) {
+	set := namedFaceSet{family: "math", face: mathFaceWith(t, mathScriptConstants), standard: StandardFonts()}
+	var sb strings.Builder
+	sb.WriteString("<math>")
+	for i := 0; i < n; i++ {
+		sb.WriteString("<mfrac><msubsup>")
+	}
+	sb.WriteString("<mi>x</mi>")
+	for i := 0; i < n; i++ {
+		sb.WriteString("<mn>1</mn><mn>2</mn></msubsup><munderover><mo>∑</mo><mn>1</mn><mn>2</mn></munderover></mfrac>")
+	}
+	sb.WriteString("</math>")
+	return Build(Input{HTML: sb.String(), Fonts: set}), set
+}
+
+// TestANestedFormulaIsLaidOutInLinearTime: fractions and scripts nested n
+// deep and four times as deep. Each element's intrinsic size is asked by its
+// parent's and is its children's, so a size not kept would be asked once per
+// ancestor — the square of the depth.
+func TestANestedFormulaIsLaidOutInLinearTime(t *testing.T) {
+	small, set := mathNestedDoc(t, 12)
+	large, _ := mathNestedDoc(t, 48)
+	w, _ := style.FromPx(1e6)
+	run := func(b Built) func() {
+		return func() { Layout(b.Root, Size{W: w, H: w}, set, nil) }
+	}
+	if r := costtest.Time(t, "a nested formula", run(small), run(large)); r.Ratio > 8 {
+		t.Errorf("four times the depth cost %.1f times as much; linear is about four\n%v", r.Ratio, r)
+	}
+	if ratio := costtest.Allocated(t, "a nested formula", run(small), run(large)); ratio > 8 {
+		t.Errorf("four times the depth allocated %.1f times as much", ratio)
+	}
+}

@@ -34,11 +34,12 @@ func (l *layouter) mathToken(b *Box, containing style.Unit, margin Edges, s math
 	frag, _ := l.layBlock(b, containing, aloneFlow(0, false), &forcedGeometry{margin: margin, width: width})
 	l.mathTextBox = held
 	c := l.mathTokenContent(b, frag, width)
-	if s.block && (s.ascent > c.inkAscent || s.descent > c.inkDescent) || s.inline && s.size > c.width {
+	op, isOp := l.mathOperator(b)
+	if isOp && (s.block && (s.ascent > c.inkAscent || s.descent > c.inkDescent) || s.inline && s.size > c.width) {
 		// Asked to grow past its own glyph, which this change does not do.
 		l.mathNotStretched(b)
 	}
-	if op, ok := l.mathOperator(b); ok && op.largeop && mathStyleNormal(b) {
+	if isOp && op.largeop && mathStyleNormal(b) {
 		// §3.2.4.3's large operator, drawn larger in display mathematics:
 		// not done by this change either.
 		l.rec.ReportDetail(Finding{

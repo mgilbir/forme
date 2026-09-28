@@ -1188,7 +1188,7 @@ func (p *painter) gather(f *Fragment, lv *layers, root, collect bool) {
 		// own.
 		lv.tables = append(lv.tables, f)
 	}
-	if len(f.Lines) > 0 || f.Marker != nil || f.Box.Replaced != nil {
+	if len(f.Lines) > 0 || f.Marker != nil || f.Box.Replaced != nil || len(f.mathMarks) > 0 {
 		lv.content = append(lv.content, contentItem{frag: f})
 	}
 	if collect {
@@ -1894,6 +1894,8 @@ func (p *painter) paintContent(f *Fragment) {
 			})
 		}
 	}
+	// A formula's bars: content, as a replaced element's is. See mathpaint.go.
+	p.mathMarks(f)
 	if m := f.Marker; m != nil && m.Image != nil && m.Image.Image != nil && !hidden {
 		// §12.6.2: the image *replaces* the marker the type would have made, so
 		// the text below is not drawn as well. It is still on the Marker, which
