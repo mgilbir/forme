@@ -1049,6 +1049,14 @@ type glyfWalk struct {
 	points []point32
 	edges  int
 	dec    decycler
+	// contours, when it is set, has the walk keep what the outline needs
+	// beyond its points: onCurve says of each point in points whether it is
+	// on the curve, and ends the index in points of the last point of each
+	// contour. Those are what Face.GlyphOutline draws from; a box needs
+	// neither, and leaves this off.
+	contours bool
+	onCurve  []bool
+	ends     []int
 }
 
 // maxGlyfPoints is HB_GLYF_MAX_POINTS, the most points one glyph may gather.
@@ -1097,8 +1105,17 @@ func (c *colrInk) glyfPoints(gid, depth int, w *glyfWalk) bool {
 		if decodeSimple(v, g, contours) != nil {
 			return false
 		}
+		start := len(w.points)
 		for i := 0; i < v.numOutlinePoints(); i++ {
 			w.points = append(w.points, point32{float32(v.x[i]), float32(v.y[i])})
+		}
+		if w.contours {
+			for i := 0; i < v.numOutlinePoints(); i++ {
+				w.onCurve = append(w.onCurve, v.flags[i]&0x01 != 0)
+			}
+			for _, e := range v.ends {
+				w.ends = append(w.ends, start+e)
+			}
 		}
 	case contours < 0:
 		if !c.glyfComposite(g, depth, w, &phantoms) {
@@ -1106,6 +1123,9 @@ func (c *colrInk) glyfPoints(gid, depth int, w *glyfWalk) bool {
 		}
 	}
 	w.points = append(w.points, phantoms[:]...)
+	if w.contours {
+		w.onCurve = append(w.onCurve, false, false, false, false)
+	}
 	return len(w.points) <= maxGlyfPoints
 }
 
@@ -1162,6 +1182,9 @@ func (c *colrInk) glyfComposite(g []byte, depth int, w *glyfWalk, phantoms *[4]p
 			}
 		}
 		w.points = w.points[:len(w.points)-4]
+		if w.contours {
+			w.onCurve = w.onCurve[:len(w.points)]
+		}
 		if len(w.points) > maxGlyfPoints {
 			ok = false
 			return false

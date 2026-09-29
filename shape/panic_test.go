@@ -509,6 +509,7 @@ func useFace(face *Face) {
 		_ = face.GlyphCode(gid)
 		_, _, _ = face.HalfWidthTrim(gid)
 		_, _, _, _, _ = face.GlyphExtents(gid)
+		_ = face.GlyphOutline(gid, func(Segment) bool { return true })
 	}
 	// And the ink of the first few dozen glyphs, which is read from whichever
 	// table answers for each — a bitmap's strike, a colour glyph's paint, a
@@ -517,6 +518,10 @@ func useFace(face *Face) {
 	// maps the sample text to.
 	for gid := 2; gid < min(face.NumGlyphs(), 64); gid++ {
 		_, _, _, _, _ = face.GlyphExtents(gid)
+		// The outline of each, drawn from the same tables by the same walks,
+		// and a stop after the first segment as well as a full one.
+		_ = face.GlyphOutline(gid, func(Segment) bool { return true })
+		_ = face.GlyphOutline(gid, func(Segment) bool { return false })
 	}
 	_, _, _ = face.ScriptOffsets()
 	// The MATH table, where the font has one: every question, for glyphs in

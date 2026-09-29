@@ -149,14 +149,7 @@ func newCFF2Ink(d *cff2Default) *cffInk {
 // extents is a glyph's ink in font units, HarfBuzz's hb_glyph_extents_t for it
 // at a scale of one unit to the unit, and false where HarfBuzz has none.
 func (c *cffInk) extents(gid int) (extents, bool) {
-	c.once.Do(func() {
-		if c.cff2 != nil {
-			c.budget = font.NewBudget(cffInkWork(len(c.cff2.tables["CFF2"])))
-			return
-		}
-		c.outlines, _ = readCFFOutlines(c.table, c.numGlyphs)
-		c.budget = font.NewBudget(cffInkWork(len(c.table)))
-	})
+	c.load()
 	o, run := c.outlines, gid
 	switch {
 	case gid < 0 || gid >= c.numGlyphs:
@@ -191,6 +184,18 @@ func (c *cffInk) extents(gid int) (extents, bool) {
 	}
 	c.answers[gid] = a
 	return a.ext, a.ok
+}
+
+// load reads the table, the first time anything asks for its charstrings.
+func (c *cffInk) load() {
+	c.once.Do(func() {
+		if c.cff2 != nil {
+			c.budget = font.NewBudget(cffInkWork(len(c.cff2.tables["CFF2"])))
+			return
+		}
+		c.outlines, _ = readCFFOutlines(c.table, c.numGlyphs)
+		c.budget = font.NewBudget(cffInkWork(len(c.table)))
+	})
 }
 
 // limits are the bounds measuring glyphs has run into so far, in words that

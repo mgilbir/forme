@@ -1,4 +1,4 @@
-.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -186,7 +186,7 @@ hbenv:
 # indiccategories.expected.txt — are read from a source checkout of the same
 # release: HarfBuzz's own generators, and its own source; see
 # usecategories.py, usescripts.py and indiccategories.py.
-hboracles: hbshaping hbvertical hbcffink cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried hblanguages varinstance
+hboracles: hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried hblanguages varinstance
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
@@ -254,6 +254,28 @@ hbcffink:
 		NotoSansTC-Regular.otf=$(CJK_DIR)/NotoSansTC-Regular.otf \
 		NotoSansHK-Regular.otf=$(CJK_DIR)/NotoSansHK-Regular.otf \
 		NotoSerifJP-Regular.otf=$(CJK_DIR)/NotoSerifJP-Regular.otf
+
+# The outlines themselves, drawn by HarfBuzz and by fontTools, for what
+# Face.GlyphOutline hands out. The first block is the faces in the tree; the
+# second is the corpora's, each sampled, which shape/outline_test.go leaves out
+# where they are not fetched. See outline.py.
+hboutline:
+	$(PYTHON) $(HARFBUZZ_DIR)/outline.py $(HARFBUZZ_DIR)/outline.expected.txt \
+		CFFInk=$(HARFBUZZ_DIR)/fonts/CFFInk.otf \
+		CFF2Blend=$(HARFBUZZ_DIR)/fonts/CFF2Blend.otf \
+		CFF2Blend-mid='$(HARFBUZZ_DIR)/fonts/CFF2Blend.otf@{"wght":8192,"XOPQ":4096}' \
+		PointMatch=$(HARFBUZZ_DIR)/fonts/PointMatch.ttf \
+		PointMatchPhantom=$(HARFBUZZ_DIR)/fonts/PointMatchPhantom.ttf \
+		VerticalComposites=$(HARFBUZZ_DIR)/fonts/VerticalComposites.ttf \
+		VarComposite=$(HARFBUZZ_DIR)/fonts/VarComposite.ttf \
+		VarComposite-bold='$(HARFBUZZ_DIR)/fonts/VarComposite.ttf@{"wght":700}' \
+		VariedAxes-bold-narrow='$(HARFBUZZ_DIR)/fonts/VariedAxes.ttf@{"wght":700,"wdth":60}' \
+		NotoSansArabic=$(HARFBUZZ_DIR)/fonts/NotoSansArabic.ttf#60 \
+		NotoSansArabic-black='$(HARFBUZZ_DIR)/fonts/NotoSansArabic.ttf@{"wght":900}#90' \
+		NotoSansKhmer-light-condensed='$(HARFBUZZ_DIR)/fonts/NotoSansKhmer.ttf@{"wght":250,"wdth":90}#40' \
+		NotoSans-Regular=$(NOTO_DIR)/NotoSans-Regular.ttf#40 \
+		SourceSans3-Regular=$(CFF_DIR)/SourceSans3-Regular.otf#40 \
+		SourceSerif4Variable-Roman=$(CFF_DIR)/SourceSerif4Variable-Roman.otf#25
 
 # CFF2 variable fonts, drawn by HarfBuzz at several locations and cut there by
 # fontTools: a face built here for what no real one does (cff2_fixture.py), and
