@@ -935,6 +935,10 @@ func (f *Face) codeForGID(gid int) int {
 
 // Used returns the glyph indices this face has encoded, in order. It is what a
 // subsetter will keep, and what /CIDSet is written from.
+//
+// Shaping records every glyph it returns and Encode every code it writes, so
+// text is here however it is set. A glyph drawn by its index is not text and
+// reaches neither: it is here because whoever drew it said so, with Use.
 func (f *Face) Used() []int {
 	out := make([]int, 0, len(f.used))
 	for gid := range f.used {
@@ -942,6 +946,29 @@ func (f *Face) Used() []int {
 	}
 	sort.Ints(out)
 	return out
+}
+
+// Use records glyphs drawn by their indices, so that Used lists them and a
+// subset keeps them.
+//
+// It is for a glyph no shaping returned and no Encode wrote: a formula's
+// stretched operator, a size variant or the pieces of an assembly, which stand
+// for no character and are drawn by index (layout.DrawGlyphs, which layout
+// records itself), or any glyph a caller draws by index for reasons of its
+// own. A subset built without them draws nothing where they are, and a /CIDSet
+// written without them says the page draws glyphs the program does not have.
+//
+// The indices are the ones Used and SubsetGlyphs report. One the face does not
+// have — negative, or past NumGlyphs — is not recorded: it is no glyph of this
+// face, and a record naming it would have /CIDSet claim a glyph no subset can
+// keep. A standard face has no glyph indices, and records nothing.
+func (f *Face) Use(gids ...int) {
+	n := f.NumGlyphs()
+	for _, gid := range gids {
+		if gid >= 0 && gid < n {
+			f.used[gid] = true
+		}
+	}
 }
 
 // UnitsPerEm is the font's own coordinate grid: how many units make one em.

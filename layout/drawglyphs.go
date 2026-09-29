@@ -34,6 +34,11 @@ import (
 // text of the document: the drop shadow of a formula's glyphs is glyphs, and
 // is not the formula a second time.
 //
+// The glyphs are in Face's record of use (shape.Face.Used), as a run's are
+// once it is shaped: the painter records them there, since no shaping
+// returned them, so a subset of the face keeps them and a /CIDSet written from
+// the record lists them.
+//
 // A backend that meets this and cannot draw it has met a kind of operation it
 // has no case for, and says so, as Op asks of every new kind.
 type DrawGlyphs struct {

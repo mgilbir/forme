@@ -1,11 +1,14 @@
 package layout
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/fonts/notosans"
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -194,6 +197,120 @@ func TestEmPerUnitKeepsTheTotal(t *testing.T) {
 	for _, g := range glyphs {
 		if g.YAdvance != want[g.GID] {
 			t.Errorf("glyph %d advances %g, want %g", g.GID, g.YAdvance, want[g.GID])
+		}
+	}
+}
+
+// TestAnUprightGlyphIsCentredInTheEmItAdvances is #858: where the face states
+// no vertical metrics, ShapedGlyphs advances each character an em and hangs
+// each glyph so that its ink is centred in that em, as shaping would have
+// centred it in the line it advances by instead. Before, the origin was
+// shaping's and the advance layout's, and Noto Sans's ink sat 181 thousandths
+// below the middle of its cell.
+//
+// Over faces whose line is taller than the em (Noto Sans, 1362; the fallback
+// face, 1200), as tall (the CFF face, whose ink is its charstrings'), and
+// shorter (800, which moves the glyphs down), and with marks, which advance
+// nothing and must keep their place against the letter they are on: every
+// glyph is moved by the same amount from the origin the face's own metrics
+// give it, half the line less the em.
+func TestAnUprightGlyphIsCentredInTheEmItAdvances(t *testing.T) {
+	noto, err := notosans.Face()
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, err := shape.Load(fonttest.SFNT(fonttest.SFNTOptions{Ascent: 500, Descent: -300,
+		Glyphs: []fonttest.Glyph{
+			{Rune: 'o', Advance: 500, HasShape: true, Ink: [4]int{50, -100, 450, 500}},
+			{Rune: 'x', Advance: 500, HasShape: true, Ink: [4]int{50, 0, 450, 300}},
+		}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		face *shape.Face
+		text string
+		line float64
+	}{
+		{"Noto Sans", noto, "AgÉ", 1362},
+		{"VerticalFallbacks.ttf", uprightFace(t, "VerticalFallbacks.ttf"), "ox.0x̣́o", 1200},
+		{"CFFInk.otf", uprightFace(t, "CFFInk.otf"), "ABH", 1000},
+		{"a line shorter than the em", short, "oxo", 800},
+	} {
+		if tc.face.StatesVerticalMetrics() {
+			t.Fatalf("%s states vertical metrics, and this is about a face that does not", tc.name)
+		}
+		if line, centred := tc.face.CentredVerticalOrigins(); !centred || line != tc.line {
+			t.Fatalf("%s: shaping centres its glyphs %v in a line of %g, want in one of %g",
+				tc.name, centred, line, tc.line)
+		}
+		run := uprightRunsOf(t, tc.face, tc.text)[0]
+		glyphs, _ := ShapedGlyphs(run)
+		k := 1000 / float64(run.Face.UnitsPerEm())
+		// Half a font unit: shaping floors the centring to a whole unit, as
+		// HarfBuzz does.
+		tolerance := k / 2
+		pen, cells := 0.0, 0
+		for _, g := range glyphs {
+			_, _, originY := run.Face.GlyphVerticalMetrics(g.GID)
+			if moved, want := g.VOriginY-originY, -(tc.line-1000)/2; math.Abs(moved-want) > 1e-9 {
+				t.Errorf("%s: glyph %d is hung %g from where its face's metrics hang it, want %g",
+					tc.name, g.GID, moved, want)
+			}
+			_, yb, _, h, ok := run.Face.GlyphExtents(g.GID)
+			if ok && h != 0 && g.YAdvance != 0 {
+				cells++
+				// y up, from the run's start: the glyph's horizontal origin is
+				// its pen moved by its offset, less where it is hung from.
+				origin := -pen + g.YOffset - g.VOriginY
+				ink := origin + (float64(yb)+float64(h)/2)*k
+				cell := -pen + g.YAdvance/2
+				if math.Abs(ink-cell) > tolerance {
+					t.Errorf("%s: glyph %d's ink is centred %g from the middle of the em it advances, "+
+						"want within %g", tc.name, g.GID, ink-cell, tolerance)
+				}
+			}
+			pen -= g.YAdvance
+		}
+		if cells == 0 {
+			t.Errorf("%s, %q: no glyph with ink advances, so nothing was checked", tc.name, tc.text)
+		}
+	}
+}
+
+// TestAFaceThatHangsItsGlyphsIsNotRehung: where the face states the origins —
+// VORG, even with no vmtx to state the advances, and a TrueType face's vmtx
+// with its phantom points — ShapedGlyphs hangs each glyph where the face says,
+// whatever it advances by.
+func TestAFaceThatHangsItsGlyphsIsNotRehung(t *testing.T) {
+	// VORG version 1.0, every glyph hung 880 down, no records of its own.
+	vorg := []byte{0, 1, 0, 0, 0x03, 0x70, 0, 0}
+	hung, err := shape.Load(fonttest.SFNT(fonttest.SFNTOptions{
+		Glyphs: []fonttest.Glyph{{Rune: 'o', Advance: 500, HasShape: true, Ink: [4]int{50, -100, 450, 500}}},
+		Extra:  map[string][]byte{"VORG": vorg}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		face *shape.Face
+		text string
+	}{
+		{"VORG and no vmtx", hung, "ooo"},
+		{"VerticalComposites.ttf", uprightFace(t, "VerticalComposites.ttf"), "AAAA"},
+	} {
+		if _, centred := tc.face.CentredVerticalOrigins(); centred {
+			t.Errorf("%s: shaping is said to centre glyphs the face hangs itself", tc.name)
+		}
+		glyphs, _ := ShapedGlyphs(uprightRunsOf(t, tc.face, tc.text)[0])
+		for _, g := range glyphs {
+			if _, _, originY := tc.face.GlyphVerticalMetrics(g.GID); g.VOriginY != originY {
+				t.Errorf("%s: glyph %d is hung %g down, and the face hangs it %g", tc.name, g.GID, g.VOriginY, originY)
+			}
+		}
+		if len(glyphs) == 0 {
+			t.Errorf("%s: no glyphs", tc.name)
 		}
 	}
 }

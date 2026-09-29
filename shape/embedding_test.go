@@ -97,3 +97,56 @@ func TestSubsetGlyphsReportsWhatItKept(t *testing.T) {
 		}
 	}
 }
+
+// TestAGlyphDrawnByIndexIsKept: a glyph no shaping returned — the kind a
+// formula's stretched operator is drawn with — is in Used and in the subset
+// once Use has recorded it, for glyf outlines and for CFF ones, since each has
+// its own subsetter reading the record. An index the face does not have is not
+// recorded, a standard face has no indices to record, and a clone's record is
+// its own.
+func TestAGlyphDrawnByIndexIsKept(t *testing.T) {
+	noto, err := NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cff, err := Load(harfbuzzFont(t, "CFFInk.otf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, f := range map[string]*Face{"glyf": noto.Clone(), "CFF": cff.Clone()} {
+		last := f.NumGlyphs() - 1
+		if last < 2 {
+			t.Fatalf("%s: the face has %d glyphs", name, f.NumGlyphs())
+		}
+		if len(f.Used()) != 0 {
+			t.Fatalf("%s: a fresh clone has used %v", name, f.Used())
+		}
+		f.Use(last, 1, -1, f.NumGlyphs(), 1<<20)
+		if got := f.Used(); len(got) != 2 || got[0] != 1 || got[1] != last {
+			t.Errorf("%s: Used is %v after Use(%d, 1) and three indices past the face, want [1 %d]",
+				name, got, last, last)
+		}
+		_, kept, err := f.SubsetGlyphs()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		in := map[int]bool{}
+		for _, g := range kept {
+			in[g] = true
+		}
+		if !in[1] || !in[last] {
+			t.Errorf("%s: the subset kept %v, which lacks a glyph drawn by index", name, kept)
+		}
+	}
+	if len(noto.Used()) != 0 || len(cff.Used()) != 0 {
+		t.Errorf("Use on a clone reached the face it was made from: %v, %v", noto.Used(), cff.Used())
+	}
+	std, err := Standard("Helvetica")
+	if err != nil {
+		t.Fatal(err)
+	}
+	std.Use(0, 65)
+	if got := std.Used(); len(got) != 0 {
+		t.Errorf("a standard face recorded %v, and has no glyph indices", got)
+	}
+}

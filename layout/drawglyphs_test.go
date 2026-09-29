@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/mgilbir/forme/shape"
@@ -171,5 +172,95 @@ func TestTheComparisonSeesEveryGlyph(t *testing.T) {
 	}
 	if normaliseOps([]Op{v}) == "" {
 		t.Error("the blank-page check does not see glyphs")
+	}
+}
+
+// TestEveryGlyphTheListDrawsIsInItsFacesRecord: a backend draws a run's glyphs
+// by shaping it and a DrawGlyphs's as they are listed, and whatever it draws
+// has to be in the face's record of use — Used, which /CIDSet is written from,
+// and so in SubsetGlyphs, which is the program embedded. Formulas whose signs
+// and operators are size variants and assemblies, drawn plainly, through a
+// filter and under a rounded corner, which put them inside a FilterGroup and
+// a ClipPath.
+func TestEveryGlyphTheListDrawsIsInItsFacesRecord(t *testing.T) {
+	formulas := []string{
+		`<msqrt><mspace width="1em" height="1.5em"></mspace></msqrt>`,
+		`<msqrt><mspace width="1em" height="0.9em"></mspace></msqrt>`,
+		`<mo>(</mo><mspace height="1.5em" depth="0.5em"></mspace>`,
+		`<mo>(</mo><mspace height="0.75em" depth="0.5em"></mspace>`,
+		`<mover><mspace width="17.1875px"></mspace><mo>→</mo></mover>`,
+		`<mo>∑</mo>`,
+	}
+	// inside is the operation each wrapping has to put the glyphs in, or the
+	// walk into it is not being checked. A blur's group holds the only copy of
+	// what it blurs; a shadow's holds a second copy of glyphs drawn outside it
+	// too, so only the blur shows a group's glyphs being missed.
+	wraps := []struct{ how, wrap, inside string }{
+		{"plainly", `%s`, ""},
+		{"through a filter", `<div style="filter: blur(1px)">%s</div>`, "FilterGroup"},
+		{"with a shadow", `<div style="filter: drop-shadow(2px 2px 1px red)">%s</div>`, "FilterGroup"},
+		{"under a round clip", `<div style="border-radius: 50%%; overflow: hidden; width: 20px; height: 20px">%s</div>`, "ClipPath"},
+		{"at half its opacity", `<div style="opacity: 0.5">%s</div>`, ""},
+	}
+	for _, w := range wraps {
+		how, wrap := w.how, w.wrap
+		for _, formula := range formulas {
+			doc := fmt.Sprintf(wrap, `<math display="block">`+formula+`</math>`)
+			_, ops, _ := mathComposed(t, mathStretchFace(t, nil), doc)
+			drawn := map[*shape.Face][]int{}
+			byIndex, nested := 0, 0
+			var walk func([]Op, string)
+			walk = func(ops []Op, in string) {
+				for _, op := range ops {
+					switch o := op.(type) {
+					case DrawGlyphs:
+						byIndex++
+						if in != "" && in == w.inside {
+							nested++
+						}
+						for _, g := range o.Glyphs {
+							drawn[o.Face] = append(drawn[o.Face], g.GID)
+						}
+					case DrawText:
+						gs, _ := ShapedGlyphs(o)
+						for _, g := range gs {
+							drawn[o.Face] = append(drawn[o.Face], g.GID)
+						}
+					case FilterGroup:
+						walk(o.Ops, "FilterGroup")
+					case ClipPath:
+						walk(o.Ops, "ClipPath")
+					}
+				}
+			}
+			walk(ops, "")
+			if byIndex == 0 {
+				t.Errorf("%s, %s: nothing is drawn by index, so this checks nothing", how, formula)
+			}
+			if w.inside != "" && nested == 0 {
+				t.Errorf("%s, %s: no glyphs are drawn inside a %s, so the walk into one is unchecked",
+					how, formula, w.inside)
+			}
+			for face, gids := range drawn {
+				used := map[int]bool{}
+				for _, g := range face.Used() {
+					used[g] = true
+				}
+				_, kept, err := face.SubsetGlyphs()
+				if err != nil {
+					t.Fatal(err)
+				}
+				inSubset := map[int]bool{}
+				for _, g := range kept {
+					inSubset[g] = true
+				}
+				for _, g := range gids {
+					if !used[g] || !inSubset[g] {
+						t.Errorf("%s, %s: glyph %d is drawn, and is in Used %v and in the subset %v",
+							how, formula, g, used[g], inSubset[g])
+					}
+				}
+			}
+		}
 	}
 }
