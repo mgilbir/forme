@@ -77,6 +77,15 @@ func (f *Face) subset() ([]byte, []int, error) {
 	if f.std != nil {
 		return nil, nil, errors.New("fonts: a standard font has no program to subset")
 	}
+	n := f.prog.NumGlyphs
+	if n <= 0 {
+		// A font declaring no glyphs at all. Every sfnt has .notdef at index
+		// zero, so this is a malformed maxp rather than an empty font — and the
+		// subsetter would otherwise write .notdef into a slice with no room for
+		// it. That holds whatever the outlines are: a CFF or CFF2 face sizes
+		// its keep set from the same count, and went past it the same way.
+		return nil, nil, fmt.Errorf("fonts: the font declares %d glyphs; every font has at least .notdef", n)
+	}
 	if f.cff2 != nil || f.cff {
 		if gid, ok := f.usesVARCGlyph(); ok {
 			// A CFF charstring cannot carry the outline VARC draws, so the
@@ -102,14 +111,6 @@ func (f *Face) subset() ([]byte, []int, error) {
 		return nil, nil, errors.New("fonts: the font program lacks head, loca or glyf")
 	}
 	longLoca := binary.BigEndian.Uint16(head[50:]) == 1
-	n := f.prog.NumGlyphs
-	if n <= 0 {
-		// A font declaring no glyphs at all. Every sfnt has .notdef at index
-		// zero, so this is a malformed maxp rather than an empty font — and the
-		// subsetter would otherwise write .notdef into a slice with no room for
-		// it.
-		return nil, nil, fmt.Errorf("fonts: the font declares %d glyphs; every font has at least .notdef", n)
-	}
 
 	offsets, err := parseLoca(loca, n, longLoca)
 	if err != nil {
