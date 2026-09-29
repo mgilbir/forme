@@ -471,6 +471,10 @@ type layout struct {
 	// run in the order the font lists them, and a contextual rule names one by
 	// its index here.
 	gpos []rawLookup
+	// gposGates is, for each of the lookups above, the glyphs it can start at,
+	// built when a pass first walks it. The slice is shared by every layout
+	// copied from this one, as gpos is. See gposgate.go.
+	gposGates []gposGate
 	// gposFeatures maps each positioning feature the run's script and language
 	// selected to the lookups it names, as featureLookups does for GSUB; a
 	// plan chooses from it which of them apply. gposRequired is the language
@@ -715,6 +719,7 @@ func readPositioning(tables map[string][]byte, sel featureSet, required int, coo
 		// in order at each glyph, as the font states them, rather than from
 		// tables flattened out of them at load. See position.go.
 		l.gpos = gposLookups(gpos)
+		l.gposGates = make([]gposGate, len(l.gpos))
 		l.gposFeatures = idx.lookupIndices()
 		// A feature the language system declares with no lookups is still
 		// declared, and whether the font offers 'kern' at all is a question a

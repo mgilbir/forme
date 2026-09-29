@@ -288,7 +288,14 @@ func (sh shaper) applyPositioningLookup(pl planLookup, buf []Glyph) {
 	sh.lookupMask = pl.mask
 	sh.manualZWJ, sh.manualZWNJ = pl.manualZWJ, pl.manualZWNJ
 	sh.gp.lastBase, sh.gp.lastBaseUntil = -1, 0
+	gate := sh.l.gateFor(pl.index)
 	for i := 0; i < len(buf); {
+		// A glyph no subtable of the lookup can start at is stepped over
+		// without asking; see gposGate.
+		if !gate.startsAt(buf[i].GID) {
+			i++
+			continue
+		}
 		sh.markSet = lk.markSet
 		if !sh.maskAllows(buf[i]) || sh.ignores(lk.flags, buf[i]) {
 			i++
