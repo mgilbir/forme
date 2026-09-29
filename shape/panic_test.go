@@ -1,9 +1,12 @@
 package shape
 
 import (
+	"encoding/binary"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -614,28 +617,144 @@ func useFace(face *Face) {
 	_ = face.LayoutLimits()
 }
 
-// TestAFontDeclaringNoGlyphsIsRefused pins the crash the fuzzer found.
+// TestAFontDeclaringNoGlyphsIsRefused pins the crash the fuzzer found, and the
+// same crash in the CFF subsetter, which issue #863 found.
 //
-// maxp holds the glyph count, and a font can declare zero. Every sfnt has
-// .notdef at index zero, so that is malformed rather than empty — but the
-// subsetter believed it, and writing .notdef into a slice sized from the count
-// indexed past the end of nothing. The fuzz corpus is not committed, so the
-// case is stated here instead.
+// maxp holds the glyph count, and a font can declare zero. It can also carry no
+// maxp at all, which the reader takes as zero: the font in #863 had its tag
+// mangled to "maxi". Every sfnt has .notdef at index zero, so that is malformed
+// rather than empty — but the subsetter believed it, and writing .notdef into a
+// slice sized from the count indexed past the end of nothing. The guard was
+// written in the glyf path only, and a CFF face sized its own keep set from the
+// same count.
+//
+// So every kind of face a program can become is here, each broken both ways:
+// the outline formats, the containers that unwrap to them, the simple
+// embedding and the two kinds of instance. A CFF2 face and an instance never
+// reach Subset declaring none — the CFF2 reader refuses a table whose
+// charstrings the count does not match, and the instancer a font without
+// glyphs — and the cases say so rather than skip, so that a reader which
+// starts accepting them is noticed here. The fuzz corpus is not committed, so
+// the cases are stated here instead.
 func TestAFontDeclaringNoGlyphsIsRefused(t *testing.T) {
-	good := fonttest.SFNT(fonttest.SFNTOptions{
-		Glyphs: []fonttest.Glyph{{Rune: 'a', Advance: 500, HasShape: true}},
-	})
-	broken := corruptMaxpGlyphCount(t, good, 0)
-
-	face, err := Load(broken)
-	if err != nil {
-		t.Skipf("the reader rejected it first, which is also fine: %v", err)
+	var latin []fonttest.Glyph
+	for r := 'A'; r <= 'z'; r++ {
+		latin = append(latin, fonttest.Glyph{Rune: r, Advance: 500, HasShape: true})
 	}
-	noPanic(t, "Subset", func() {
-		if _, err := face.Subset(); err == nil {
-			t.Error("a font declaring no glyphs was subsetted rather than refused")
+	glyf := fonttest.SFNT(fonttest.SFNTOptions{Glyphs: aGlyph})
+	cff := fonttest.OTTO(fonttest.CFF(fonttest.CFFOptions{Glyphs: 2}), fonttest.SFNTOptions{Glyphs: aGlyph})
+	cff2 := cff2Sfnt(twoGlyphs([]byte{139, 139, 21}).bytes(), aGlyph)
+	cff2Tables := font.SFNTTables(cff2)
+	cff2Tables["fvar"] = fonttest.FVAR(wghtWdth, nil)
+	cff2Variable := assembleOTTO(cff2Tables)
+	instance := func(data []byte) (*Face, error) {
+		return LoadInstance(data, map[string]float64{"wght": 700})
+	}
+
+	type kind struct {
+		name string
+		data func(t *testing.T) []byte
+		wrap func([]byte) []byte
+		load func([]byte) (*Face, error)
+		// refused is a face Load turns away once it declares no glyphs.
+		refused bool
+	}
+	fixed := func(b []byte) func(*testing.T) []byte { return func(*testing.T) []byte { return b } }
+	kinds := []kind{
+		{name: "glyf", data: fixed(glyf), load: Load},
+		{name: "glyf simple", data: fixed(fonttest.SFNT(fonttest.SFNTOptions{Glyphs: latin})), load: LoadSimple},
+		{name: "CFF", data: fixed(cff), load: Load},
+		{name: "WOFF glyf", data: fixed(glyf), wrap: asWOFF, load: Load},
+		{name: "WOFF CFF", data: fixed(cff), wrap: asWOFF, load: Load},
+		{name: "WOFF2 CFF", data: fixed(cff), wrap: asWOFF2, load: Load},
+		{name: "CFF2", data: fixed(cff2), load: Load, refused: true},
+		{name: "glyf instance", data: fixed(varyingVariableFont(t, nil)), load: instance, refused: true},
+		{name: "CFF2 instance", data: fixed(cff2Variable), load: instance, refused: true},
+		// fonttest's CID-keyed CFF has no FDSelect, which a subset needs, so
+		// the CID-keyed case is a real one.
+		{name: "CID-keyed CFF", data: func(t *testing.T) []byte {
+			return fonttest.CJKFile(t, "NotoSansJP-Regular.otf")
+		}, load: Load},
+	}
+	for _, k := range kinds {
+		for _, broken := range []struct {
+			name  string
+			apply func(*testing.T, []byte) []byte
+		}{
+			{"maxp declaring 0", func(t *testing.T, b []byte) []byte { return corruptMaxpGlyphCount(t, b, 0) }},
+			{"no maxp", renameMaxp},
+		} {
+			t.Run(k.name+"/"+broken.name, func(t *testing.T) {
+				wrap := func(b []byte) []byte { return b }
+				if k.wrap != nil {
+					wrap = k.wrap
+				}
+				data := k.data(t)
+				if _, err := k.load(wrap(data)); err != nil {
+					t.Fatalf("the fixture does not load before it is broken: %v", err)
+				}
+				noPanic(t, "Load and Subset", func() {
+					face, err := k.load(wrap(broken.apply(t, data)))
+					if k.refused {
+						if err == nil {
+							t.Error("the face was loaded, and this test assumed it never could be: " +
+								"check that its subsetter is guarded, then move it to the others")
+						}
+						return
+					}
+					if err != nil {
+						t.Fatalf("the face was refused at load, and this test assumed it would not be: %v", err)
+					}
+					face.Use(0, 1, 2)
+					if _, err := face.Subset(); err == nil {
+						t.Error("Subset wrote a font declaring no glyphs rather than refusing it")
+					}
+					if _, _, err := face.SubsetGlyphs(); err == nil {
+						t.Error("SubsetGlyphs wrote a font declaring no glyphs rather than refusing it")
+					}
+				})
+			})
 		}
-	})
+	}
+}
+
+// renameMaxp gives a font's maxp record another tag, so the font carries no
+// maxp at all, as the font in #863 did.
+func renameMaxp(t *testing.T, data []byte) []byte {
+	t.Helper()
+	out := append([]byte(nil), data...)
+	for i := 0; i < int(be16(out, 4)); i++ {
+		rec := 12 + 16*i
+		if rec+16 <= len(out) && string(out[rec:rec+4]) == "maxp" {
+			copy(out[rec:], "maxi")
+			return out
+		}
+	}
+	t.Fatal("the fixture has no maxp table to rename")
+	return nil
+}
+
+// asWOFF and asWOFF2 wrap an sfnt, table for table, in each container.
+func asWOFF(sfnt []byte) []byte {
+	var tables []fonttest.WOFFTable
+	for _, tag := range sortedTags(sfnt) {
+		tables = append(tables, fonttest.WOFFTable{Tag: tag, Data: font.SFNTTables(sfnt)[tag]})
+	}
+	return fonttest.WOFF(fonttest.WOFFOptions{Flavor: binary.BigEndian.Uint32(sfnt), Tables: tables})
+}
+
+func asWOFF2(sfnt []byte) []byte {
+	var tables []fonttest.WOFF2Table
+	for _, tag := range sortedTags(sfnt) {
+		tables = append(tables, fonttest.WOFF2Table{Tag: tag, Data: font.SFNTTables(sfnt)[tag]})
+	}
+	return fonttest.WOFF2(fonttest.WOFF2Options{Flavor: binary.BigEndian.Uint32(sfnt), Tables: tables, SpellOutTags: true})
+}
+
+func sortedTags(sfnt []byte) []string {
+	tags := slices.Collect(maps.Keys(font.SFNTTables(sfnt)))
+	slices.Sort(tags)
+	return tags
 }
 
 // corruptMaxpGlyphCount rewrites the glyph count in a font's maxp table, which
