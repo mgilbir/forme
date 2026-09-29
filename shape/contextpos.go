@@ -116,10 +116,10 @@ func (sh shaper) applyValue(g *Glyph, sub []byte, rec, format int) {
 	g.XOffset += sh.f.scale(adj.xPlacement)
 	g.YOffset += sh.f.scale(adj.yPlacement)
 	if sh.features.Vertical {
-		g.YAdvance -= sh.f.scale(yAdvanceAt(sub, rec, format, sh.l.dv))
+		g.addYAdvance(-sh.f.scale(yAdvanceAt(sub, rec, format, sh.l.dv)))
 		return
 	}
-	g.XAdvance += sh.f.scale(adj.xAdvance)
+	g.addXAdvance(sh.f.scale(adj.xAdvance))
 }
 
 // pairPosAt applies a type 2 subtable to the pair beginning at a position: the
@@ -268,19 +268,19 @@ func (sh shaper) cursiveAt(sub []byte, buf []Glyph, at, flags int) int {
 		// and it is the vertical advance that gives ground: HarfBuzz's
 		// top-to-bottom case, which is the left-to-right one on the other
 		// axis.
-		buf[i].YAdvance = sh.f.scale(exit.y) + buf[i].YOffset
+		buf[i].setYAdvance(sh.f.scale(exit.y) + buf[i].YOffset)
 		d := sh.f.scale(entry.y) + buf[j].YOffset
-		buf[j].YAdvance -= d
+		buf[j].addYAdvance(-d)
 		buf[j].YOffset -= d
 	case sh.rtl:
 		d := sh.f.scale(exit.x) + buf[i].XOffset
-		buf[i].XAdvance -= d
+		buf[i].addXAdvance(-d)
 		buf[i].XOffset -= d
-		buf[j].XAdvance = sh.f.scale(entry.x) + buf[j].XOffset
+		buf[j].setXAdvance(sh.f.scale(entry.x) + buf[j].XOffset)
 	default:
-		buf[i].XAdvance = sh.f.scale(exit.x) + buf[i].XOffset
+		buf[i].setXAdvance(sh.f.scale(exit.x) + buf[i].XOffset)
 		d := sh.f.scale(entry.x) + buf[j].XOffset
-		buf[j].XAdvance -= d
+		buf[j].addXAdvance(-d)
 		buf[j].XOffset -= d
 	}
 	child, parent := i, j

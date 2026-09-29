@@ -121,7 +121,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 		case 1:
 			if gid, ok := singleSubstAt(sub, buf[at].GID); ok {
 				buf[at].GID = gid
-				buf[at].XAdvance = sh.f.advanceGID(gid)
+				buf[at].setNominalXAdvance(sh.f.advanceGID(gid))
 				buf[at].substituted = true
 				return 1, buf
 			}
@@ -190,7 +190,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 		case 3:
 			if gid, ok := alternateSubstAt(sub, buf[at].GID); ok {
 				buf[at].GID = gid
-				buf[at].XAdvance = sh.f.advanceGID(gid)
+				buf[at].setNominalXAdvance(sh.f.advanceGID(gid))
 				buf[at].substituted = true
 				return 1, buf
 			}

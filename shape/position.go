@@ -107,7 +107,8 @@ func (sh shaper) cancelMarkWidths(buf []Glyph, adjustOffsets bool) {
 			buf[i].XOffset -= buf[i].XAdvance
 			buf[i].YOffset -= buf[i].YAdvance
 		}
-		buf[i].XAdvance, buf[i].YAdvance = 0, 0
+		buf[i].setXAdvance(0)
+		buf[i].setYAdvance(0)
 	}
 }
 

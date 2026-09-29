@@ -199,9 +199,9 @@ func (f *Face) setStandInSpaces(buf []Glyph, vertical bool) {
 		switch {
 		case k == notSpace:
 		case vertical:
-			buf[i].YAdvance = f.standInYAdvance(k, buf[i].YAdvance)
+			buf[i].setYAdvance(f.standInYAdvance(k, buf[i].YAdvance))
 		default:
-			buf[i].XAdvance = f.standInAdvance(k, buf[i].XAdvance)
+			buf[i].setXAdvance(f.standInAdvance(k, buf[i].XAdvance))
 		}
 	}
 }
