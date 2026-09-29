@@ -470,6 +470,8 @@ func checkClusters(t *testing.T, f *Face) {
 // that walks the variation tables.
 func useFace(face *Face) {
 	_ = face.Name()
+	_ = face.Family()
+	_ = face.Subfamily()
 	_ = face.Axes()
 	_ = face.IsVariable()
 	_ = face.IsSimple()
