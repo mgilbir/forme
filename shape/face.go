@@ -156,6 +156,12 @@ type Face struct {
 	// from one reported. Each says which glyphs were written empty, and why.
 	cff2       *cff2Default
 	cff2Limits []string
+	// glyfOut is the glyf outlines of a TrueType face, read the way COLR's are
+	// (colrink.go) whether or not the face has that table, for GlyphOutline:
+	// nil for a face with CFF outlines. outlines is what GlyphOutline keeps,
+	// and is nil only for a face with no font program. See outline.go.
+	glyfOut  *colrInk
+	outlines *outlineCache
 	// colr measures the ink of a colour glyph by painting it, which is asked
 	// before the outline is: nil for a face with no COLR table. See
 	// colrink.go.
@@ -465,6 +471,10 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	if len(tables["COLR"]) > 0 {
 		f.colr = newCOLRInk(f, tables, prog.NumGlyphs)
 	}
+	if hasGlyf {
+		f.glyfOut = newCOLRInk(f, tables, prog.NumGlyphs)
+	}
+	f.outlines = newOutlineCache(len(data), tables)
 	f.bitmap = newCBDTInk(tables, f.unitsPerEm)
 	f.sbix = newSbixInk(tables, prog.NumGlyphs, f.unitsPerEm)
 	f.varc = newVARCFace(f, tables, prog.NumGlyphs)
