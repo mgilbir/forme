@@ -2,6 +2,7 @@ package shape
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -170,5 +171,57 @@ func TestGlyphVerticalMetricsOfNoGlyph(t *testing.T) {
 		if a, x, y := std.GlyphVerticalMetrics(gid); a != 0 || x != 0 || y != 0 {
 			t.Errorf("a standard face's glyph %d advances %v hung (%v, %v)", gid, a, x, y)
 		}
+	}
+}
+
+// TestCentredVerticalOriginsIsHarfBuzzsSynthesis holds CentredVerticalOrigins
+// to HarfBuzz's own origins over every face the oracles measure. Where it says
+// the face's glyphs are centred, each glyph HarfBuzz hangs has its ink centred
+// in the line it names, up to the half unit HarfBuzz's floor moves it up — an
+// empty glyph's box too, which is its baseline — or, where its ink cannot be
+// read, is hung from the ascender, the line's top; and a face it calls centred
+// that states no vertical advances advances by the line. Where it says they are not, the
+// face states its own origins: VORG, or vmtx over TrueType outlines.
+func TestCentredVerticalOriginsIsHarfBuzzsSynthesis(t *testing.T) {
+	centredFaces, hungFaces := 0, 0
+	for _, c := range verticalMetricsFaces(t) {
+		t.Run(c.name, func(t *testing.T) {
+			f := c.load(t)
+			line, centred := f.CentredVerticalOrigins()
+			v := &f.vert
+			if states := v.vorg != nil || v.longMetrics > 0 && v.glyf != nil; states == centred {
+				t.Fatalf("centred is %v for a face whose VORG is %v and vmtx records %d over glyf %v",
+					centred, v.vorg != nil, v.longMetrics, v.glyf != nil)
+			}
+			if !centred {
+				hungFaces++
+				return
+			}
+			centredFaces++
+			ascender, _ := f.fontExtentsUnits()
+			lineUnits := line * float64(f.unitsPerEm) / 1000
+			for gid, m := range c.metrics {
+				if !f.StatesVerticalMetrics() && math.Abs(float64(m[0])-lineUnits) > 1e-9 {
+					t.Errorf("glyph %d advances %d, and the line is %g", gid, m[0], lineUnits)
+				}
+				e, ok := f.glyphExtents(gid)
+				if !ok {
+					if m[2] != ascender {
+						t.Errorf("glyph %d's ink cannot be read and it is hung %d down, want the ascender, %d",
+							gid, m[2], ascender)
+					}
+					continue
+				}
+				// Measured from the pen, y up: the ink's middle, and the line's.
+				ink := float64(e.yBearing) + float64(e.height)/2 - float64(m[2])
+				if d := ink + lineUnits/2; d < 0 || d > 0.5 {
+					t.Errorf("glyph %d's ink is centred %g from the line's middle, want within half a unit above",
+						gid, d)
+				}
+			}
+		})
+	}
+	if centredFaces == 0 || hungFaces == 0 {
+		t.Errorf("%d faces centred and %d hung their own: both kinds must be compared", centredFaces, hungFaces)
 	}
 }

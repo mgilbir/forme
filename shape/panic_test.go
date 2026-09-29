@@ -492,6 +492,7 @@ func useFace(face *Face) {
 	_ = face.Program()
 	_ = face.GlyphAdvances()
 	_ = face.StatesVerticalMetrics()
+	_, _ = face.CentredVerticalOrigins()
 	// Every instance's name is looked at: a match that accepts nothing walks
 	// the whole of fvar and the name table.
 	_, _ = face.NamedInstance(func(string) bool { return false })

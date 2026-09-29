@@ -489,6 +489,36 @@ func (f *Face) StatesVerticalMetrics() bool {
 	return f != nil && f.std == nil && f.vert.longMetrics > 0
 }
 
+// CentredVerticalOrigins reports whether shaping hangs this face's upright
+// glyphs by centring them in its line, and the line's height, in thousandths
+// of an em.
+//
+// It is HarfBuzz's synthesis for a face that states no vertical origins —
+// no VORG, and no vmtx over TrueType outlines whose phantom points would
+// place them: each glyph's ink is centred between the ascender and the
+// descender — an empty glyph's box is its baseline, and that is centred — and
+// a glyph whose ink cannot be read is hung from the ascender, the line's top.
+// A standard face is hung the same way from its AFM's metrics. Either way the
+// line starts at the pen, and its middle is half its height down from it.
+//
+// A caller that advances such a glyph by other than the line's height — CSS
+// Writing Modes §4.4's em box, where the face states no vertical advances
+// either (StatesVerticalMetrics) — moves each origin up by half the
+// difference to keep the ink centred in what the glyph advances. Where the
+// face states its origins it has hung each glyph itself, and centred is
+// false.
+func (f *Face) CentredVerticalOrigins() (line float64, centred bool) {
+	if f == nil {
+		return 0, false
+	}
+	v := &f.vert
+	if f.std == nil && (v.vorg != nil || v.longMetrics > 0 && v.glyf != nil) {
+		return 0, false
+	}
+	ascender, descender := f.fontExtentsUnits()
+	return f.scale(ascender - descender), true
+}
+
 // GlyphVerticalMetrics is a glyph's own vertical metrics, in thousandths of an
 // em as GlyphAdvance's advance is: how far the pen moves along a line set
 // upright after the glyph, and where the glyph is hung from, measured from its

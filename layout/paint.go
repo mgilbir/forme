@@ -140,8 +140,11 @@ type DrawText struct {
 	//
 	// ShapedGlyphs gives a backend both: an upright run comes back shaped with
 	// Features.Vertical, and with the em as its advances where the face states
-	// no vertical metrics. A backend that draws its glyphs and steps its pen
-	// down by -YAdvance draws them where layout placed them.
+	// no vertical metrics — and then with each glyph hung so that its ink is
+	// centred in that em, where shaping would have centred it in the line. A
+	// backend that draws its glyphs, hangs each from its VOriginX and
+	// VOriginY and steps its pen down by -YAdvance draws them where layout
+	// placed them.
 	Upright bool
 	Face    *shape.Face
 	Size    style.Unit
@@ -2938,7 +2941,13 @@ func ShapedText(v DrawText) string {
 // synthesize rather than shaping's own synthesis: each character that takes
 // an advance upright (paragraph.UprightUnits) gives one em to the first of its
 // glyphs, and every other glyph advances nothing. Either way the advances sum
-// to the extent layout gave the run. It shaped an upright run as a horizontal
+// to the extent layout gave the run. The origins go with the advances: where
+// shaping synthesized them too, centring each glyph in the height of the
+// face's line, VOriginY is moved so that each is centred in the em instead
+// (see hangInEm), and it then differs from the origin
+// shape.Face.GlyphVerticalMetrics states for the glyph by the same amount for
+// every glyph of the face. Where the face states its origins (VORG) they are
+// the font's. It shaped an upright run as a horizontal
 // one before, so a backend that followed it drew the run at the face's
 // horizontal advances, down a column layout had measured by the vertical ones.
 func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
@@ -2974,8 +2983,37 @@ func shapedUpright(v DrawText) ([]shape.Glyph, int) {
 	glyphs, missing := v.Face.ShapeGlyphsInContext(v.Text, v.PreContext, v.PostContext, off)
 	if !v.Face.StatesVerticalMetrics() {
 		emPerUnit(glyphs, v.Text)
+		if line, centred := v.Face.CentredVerticalOrigins(); centred {
+			hangInEm(glyphs, line)
+		}
 	}
 	return glyphs, missing
+}
+
+// hangInEm moves the origins of an upright run's glyphs from the synthesis
+// that goes with shaping's advance to the one that goes with the em emPerUnit
+// gave them, in a face whose origins shaping synthesized by centring each
+// glyph in its line (shape.Face.CentredVerticalOrigins).
+//
+// The two syntheses have to be one. Shaping hangs a glyph so that its ink is
+// centred in the height of the face's line, which is the advance it gives the
+// glyph; emPerUnit then advances the glyph by an em. Left there, every glyph's
+// ink was centred half a line down a cell an em long — (1362 − 1000) / 2 = 181
+// thousandths below its middle in Noto Sans — and a descender reached into the
+// next character's cell (issue #858). Moving every origin up by half the
+// difference centres each glyph's ink in the em from its pen, as HarfBuzz
+// centres it in the line from its pen; a face whose line is shorter than an
+// em moves them down.
+//
+// The move is the same for every glyph, since the line is the face's and not
+// the glyph's: a mark or a second glyph of a cluster, which advances nothing,
+// keeps its place against the glyph it is drawn on, and what the font's
+// positioning moved a glyph by (its offsets) is kept.
+func hangInEm(glyphs []shape.Glyph, line float64) {
+	d := (line - 1000) / 2
+	for i := range glyphs {
+		glyphs[i].VOriginY -= d
+	}
 }
 
 // emPerUnit sets the advances of an upright run in a face with no vertical
