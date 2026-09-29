@@ -146,7 +146,7 @@ func (f *Face) applyStch(buf []Glyph, rtl bool) []Glyph {
 			if g.stch == stchRepeating {
 				repeat += copies
 			}
-			g.XAdvance = 0
+			g.setXAdvance(0)
 			for n := int64(0); n < repeat; n++ {
 				if rtl {
 					x -= w

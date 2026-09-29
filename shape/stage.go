@@ -148,7 +148,7 @@ func (sh shaper) applyReverse(buf []Glyph, idx, from, to int) int {
 				continue
 			}
 			buf[at].GID = gid
-			buf[at].XAdvance = sh.f.advanceGID(gid)
+			buf[at].setNominalXAdvance(sh.f.advanceGID(gid))
 			buf[at].substituted = true
 			first = at
 			break

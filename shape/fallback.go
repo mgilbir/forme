@@ -307,7 +307,8 @@ func (sh shaper) fallbackAroundBase(buf []Glyph, base, end int, adjust bool) {
 					buf[i].XOffset -= buf[i].XAdvance
 					buf[i].YOffset -= buf[i].YAdvance
 				}
-				buf[i].XAdvance, buf[i].YAdvance = 0, 0
+				buf[i].setXAdvance(0)
+				buf[i].setYAdvance(0)
 			}
 		}
 		return
@@ -377,7 +378,8 @@ func (sh shaper) fallbackAroundBase(buf []Glyph, base, end int, adjust bool) {
 			lastClass = class
 			cluster = component
 		}
-		buf[i].XAdvance, buf[i].YAdvance = 0, 0
+		buf[i].setXAdvance(0)
+		buf[i].setYAdvance(0)
 		if x, y, ok := sh.fallbackPlace(buf[i].GID, &cluster, class); ok {
 			buf[i].XOffset = f.scale(x) + xOff
 			buf[i].YOffset = f.scale(y) + yOff

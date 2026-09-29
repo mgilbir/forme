@@ -652,8 +652,10 @@ func (f *Face) verticalRune(r rune) (advance, originX, originY int) {
 func (f *Face) setVertical(buf []Glyph) {
 	for i := range buf {
 		advance, x, y := f.verticalUnits(buf[i].GID)
-		buf[i].XAdvance = 0
-		buf[i].YAdvance = -f.scale(advance)
+		// The advances a run set upright starts from, which are its nominal
+		// ones: nothing has adjusted them yet, whatever a substitution left.
+		buf[i].XAdvance, buf[i].XAdjust = 0, 0
+		buf[i].YAdvance, buf[i].YAdjust = -f.scale(advance), 0
 		buf[i].VOriginX, buf[i].VOriginY = f.scale(x), f.scale(y)
 		buf[i].XOffset, buf[i].YOffset = -buf[i].VOriginX, -buf[i].VOriginY
 	}

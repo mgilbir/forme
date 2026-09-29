@@ -136,7 +136,12 @@ type Face struct {
 	underlinePos, underlineThick int
 	strikeoutPos, strikeoutSize  int
 	weight                       int
-	declared                     Metric
+	widthClass                   int
+	styleItalic, styleOblique    bool
+	// family and subfamily are the name table's typographic family and
+	// style, or the legacy ones: see Family and Subfamily.
+	family, subfamily string
+	declared          Metric
 	// axes are the variation axes fvar declares, which is how a caller learns
 	// that a face is variable and where on each axis the outlines it was handed
 	// actually sit. A face from LoadInstance has none: it was cut at one point
@@ -460,6 +465,9 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		}
 	}
 	f.readOS2(tables["OS/2"])
+	f.readStyle(tables["OS/2"], head)
+	f.family = nameWithFallback(tables["name"], 16, 1)
+	f.subfamily = nameWithFallback(tables["name"], 17, 2)
 	f.readPost(tables["post"])
 	switch {
 	case cff2 != nil:

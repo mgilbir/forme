@@ -88,6 +88,22 @@ type Descriptor struct {
 	// face at, so it says that for an instance too.
 	Weight int
 
+	// WidthClass is OS/2 usWidthClass, 1 (Ultra-condensed) through 9
+	// (Ultra-expanded) with 5 for normal, and is what CSS font-stretch matches
+	// against. Like Weight it is rewritten by LoadInstance from the wdth
+	// location it cut the face at. Zero where the font states none.
+	WidthClass int
+
+	// Italic and Oblique are the style bits the font sets: OS/2 fsSelection
+	// bits 0 and 9, or, for a font with no OS/2 table, head macStyle's italic
+	// bit (which has no oblique twin, so Oblique is false there). They are the
+	// font's claim about its own style and not a measurement of the outlines:
+	// ItalicAngle, from post, is the lean, and a face can lean without either
+	// bit and carry a bit without leaning. A face from LoadInstance keeps the
+	// bits it was cut from, since the ital and slnt axes are continuous and
+	// two bits cannot say a point along them.
+	Italic, Oblique bool
+
 	// Declared is the set of the above the font actually states.
 	//
 	// Zero and unknown are different answers and a consumer has to tell them
@@ -111,6 +127,9 @@ const (
 	MetricItalicAngle
 	MetricStrikeout
 	MetricWeight
+	// MetricWidth is WidthClass and MetricStyle is Italic and Oblique.
+	MetricWidth
+	MetricStyle
 )
 
 // Has reports whether the font stated a metric, as against leaving it zero.
@@ -138,6 +157,9 @@ func (f *Face) Descriptor() Descriptor {
 		StrikeoutPosition:  f.strikeoutPos,
 		StrikeoutSize:      f.strikeoutSize,
 		Weight:             f.weight,
+		WidthClass:         f.widthClass,
+		Italic:             f.styleItalic,
+		Oblique:            f.styleOblique,
 		Declared:           f.declared,
 	}
 }

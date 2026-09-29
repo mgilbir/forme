@@ -115,7 +115,7 @@ func (sh shaper) kernAcross(buf, before, after []Glyph) {
 					if k, ok := kl.pair(before[p].GID, buf[i].GID); ok {
 						buf[i].XOffset += sh.f.scale(int(k.secondX))
 						buf[i].YOffset += sh.f.scale(int(k.secondY))
-						buf[i].XAdvance += sh.f.scale(int(k.secondAdvance))
+						buf[i].addXAdvance(sh.f.scale(int(k.secondAdvance)))
 					}
 				}
 			}
@@ -126,7 +126,7 @@ func (sh shaper) kernAcross(buf, before, after []Glyph) {
 					if k, ok := kl.pair(buf[i].GID, after[n].GID); ok {
 						buf[i].XOffset += sh.f.scale(int(k.firstX))
 						buf[i].YOffset += sh.f.scale(int(k.firstY))
-						buf[i].XAdvance += sh.f.scale(int(k.firstAdvance))
+						buf[i].addXAdvance(sh.f.scale(int(k.firstAdvance)))
 					}
 				}
 			}

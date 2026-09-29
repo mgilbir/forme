@@ -68,6 +68,48 @@ type Glyph struct {
 	// given the origin and the offsets separately.
 	VOriginX, VOriginY float64
 
+	// XAdjust and YAdjust are the part of XAdvance and YAdvance that shaping
+	// changed, so that the two are always the font's own advance plus this:
+	//
+	//	XAdvance == nominal x advance + XAdjust
+	//	YAdvance == nominal y advance + YAdjust
+	//
+	// The nominal advance is the one HarfBuzz starts a glyph's position from
+	// before any lookup runs. In a run set across the page it is the glyph's
+	// horizontal advance, hmtx's, with HVAR's variation where the face is
+	// varied (an instance's hmtx already carries it, and Face.GlyphAdvance is
+	// it), and the nominal y advance is zero. In a run set upright (see
+	// Features.Vertical) it is the other way about: the nominal x advance is
+	// zero and the nominal y advance is the vertical one, vmtx's with VVAR's
+	// variation, or the height of the line where the face has none (see
+	// Face.GlyphVerticalMetrics, which states it the same way YAdvance does).
+	//
+	// Everything after that is the adjustment, whichever mechanism made it: a
+	// GPOS single, pair or cursive adjustment, the legacy kern table, kerning
+	// across the edge of a run (ShapeGlyphsInContext), the width a face with no
+	// glyph for a space separator gives the stand-in it uses, and the advance a
+	// mark loses when it is made to move the pen not at all, which is the
+	// mark's own advance negated: XAdjust is minus the nominal advance for a
+	// glyph shaping cancelled the width of. A glyph a substitution made is
+	// nominal again, whatever its predecessor had been adjusted by.
+	//
+	// It exists for a caller that must convert the two to a pixel grid by
+	// different rules: an engine that has to reproduce the widths of a
+	// HarfBuzz port rounds the nominal advance and truncates the adjustment,
+	// and the sum cannot be rounded to the same result. Such a caller has
+	// XAdvance and XAdjust, and the nominal advance is their difference, or is
+	// Face.GlyphAdvance(GID) in a run set across the page.
+	//
+	// The identity is exact where the face's font units convert exactly to
+	// these ones, which they do for a units-per-em of a thousand or any power
+	// of two, and to within floating-point rounding for any other. It is a
+	// statement about what shaping returned: a caller that changes XAdvance
+	// afterwards, to add letter-spacing or to cancel a width, owns XAdjust
+	// from then on. A Glyph that shaping did not make, as layout's math
+	// stretch makes them, has zero here and no nominal advance to be measured
+	// against.
+	XAdjust, YAdjust float64
+
 	// lig records this glyph's part in a ligature, and is unexported because it
 	// is bookkeeping between the substitution pass and the positioning one
 	// rather than anything a caller can use.
@@ -124,6 +166,33 @@ type Glyph struct {
 	stch uint8
 	word bool
 }
+
+// The advance is only ever changed through these, so that XAdjust and YAdjust
+// cannot fall behind it: each moves the adjustment by exactly what it moves the
+// advance by, and a glyph that is nominal again says so with setNominal.
+
+// addAdvance changes the advance by dx and dy: an adjustment.
+func (g *Glyph) addAdvance(dx, dy float64) {
+	g.XAdvance += dx
+	g.XAdjust += dx
+	g.YAdvance += dy
+	g.YAdjust += dy
+}
+
+// addXAdvance and addYAdvance are addAdvance along one axis.
+func (g *Glyph) addXAdvance(dx float64) { g.XAdvance += dx; g.XAdjust += dx }
+func (g *Glyph) addYAdvance(dy float64) { g.YAdvance += dy; g.YAdjust += dy }
+
+// setXAdvance and setYAdvance state the advance outright, as cursive
+// attachment and mark cancellation do: the difference from what it was is the
+// adjustment's.
+func (g *Glyph) setXAdvance(x float64) { g.XAdjust += x - g.XAdvance; g.XAdvance = x }
+func (g *Glyph) setYAdvance(y float64) { g.YAdjust += y - g.YAdvance; g.YAdvance = y }
+
+// setNominalXAdvance gives a glyph the horizontal advance its font states for
+// it, as a substitution does: whatever positioning had done to the glyph it
+// replaced does not carry to this one.
+func (g *Glyph) setNominalXAdvance(x float64) { g.XAdvance, g.XAdjust = x, 0 }
 
 // ligatureRef says what a glyph has to do with a ligature.
 //

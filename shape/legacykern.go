@@ -229,12 +229,12 @@ func (sh shaper) applyLegacyKern(buf []Glyph, pairs bool) {
 					buf[j].XOffset = sh.f.scale(v)
 					crossed = true
 				case !vertical:
-					buf[i].XAdvance += sh.f.scale(first)
-					buf[j].XAdvance += sh.f.scale(second)
+					buf[i].addXAdvance(sh.f.scale(first))
+					buf[j].addXAdvance(sh.f.scale(second))
 					buf[j].XOffset += sh.f.scale(second)
 				default:
-					buf[i].YAdvance += sh.f.scale(first)
-					buf[j].YAdvance += sh.f.scale(second)
+					buf[i].addYAdvance(sh.f.scale(first))
+					buf[j].addYAdvance(sh.f.scale(second))
 					buf[j].YOffset += sh.f.scale(second)
 				}
 			}
