@@ -447,7 +447,41 @@ func PaintReporting(root *Fragment, rec *Recorder) []Op {
 	for _, b := range p.order {
 		p.groups[b].report(rec)
 	}
-	return gatherLinks(p.ops)
+	ops := gatherLinks(p.ops)
+	useDrawnGlyphs(ops)
+	return ops
+}
+
+// useDrawnGlyphs records the glyphs every DrawGlyphs in a display list draws
+// on its face, so that the face's record of use — what its subset keeps, and
+// what a /CIDSet lists — covers everything the list draws.
+//
+// Text needs nothing of the kind: shaping records every glyph it returns, and a
+// backend gets a run's glyphs by shaping it (ShapedGlyphs). DrawGlyphs is the
+// one operation whose glyphs no shaping returned — a formula's size variants
+// and assemblies, read out of the MATH table by index — so nothing recorded
+// them, and a subset made from the record drew nothing where a radical's
+// pieces were.
+//
+// It is done here, on the finished list, rather than where each is emitted:
+// the list is what a backend draws, after every clip that removed an operation
+// and every budget that stopped one, so the record is of what is drawn.
+func useDrawnGlyphs(ops []Op) {
+	for _, op := range ops {
+		switch o := op.(type) {
+		case DrawGlyphs:
+			if o.Face == nil {
+				continue
+			}
+			for _, g := range o.Glyphs {
+				o.Face.Use(g.GID)
+			}
+		case FilterGroup:
+			useDrawnGlyphs(o.Ops)
+		case ClipPath:
+			useDrawnGlyphs(o.Ops)
+		}
+	}
 }
 
 // dimming works out, before anything is painted, how much of each fragment's

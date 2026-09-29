@@ -604,6 +604,11 @@ func useFace(face *Face) {
 
 	_, _ = face.Subset()
 	_, _, _ = face.SubsetGlyphs()
+	// Glyphs drawn by index, as a formula's size variants are, which no
+	// character reached: the last the face has and two it does not, on a
+	// record of their own, so the subset is asked for a glyph only Use named.
+	clone.Use(-1, face.NumGlyphs()-1, face.NumGlyphs())
+	_, _, _ = clone.SubsetGlyphs()
 	// Last, so that it reads every layout the shaping above caused to be read.
 	_ = face.LayoutLimits()
 }
@@ -724,7 +729,8 @@ func TestTheFuzzTargetReachesEveryEntryPoint(t *testing.T) {
 				}
 				continue
 			}
-			if !strings.Contains(string(body), entry+"(") {
+			// A whole word: "FuzzLoadAndUse(" is not a call of Use.
+			if !regexp.MustCompile(`\b` + entry + `\(`).Match(body) {
 				t.Errorf("%s (%s) is exported and the fuzz target never calls it; "+
 					"drive it in useFace, or say in notAboutFontBytes why bytes a "+
 					"caller supplied cannot reach it", entry, name)
