@@ -77,6 +77,10 @@ type Descriptor struct {
 	StrikeoutPosition, StrikeoutSize      int
 
 	// Weight is OS/2 usWeightClass: 100 for Thin, 400 for Regular, 700 for Bold.
+	// A font whose OS/2 table is missing, or too short to hold usWeightClass,
+	// states only whether it is bold, in the bit beside its italic one
+	// (fsSelection's, or head's macStyle where there is no OS/2), and that is
+	// read as 700 or 400.
 	//
 	// It is worth more than it looks on a variable font. Load hands back the
 	// outlines as they are stored, which is the face's default instance, and a

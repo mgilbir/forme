@@ -203,13 +203,50 @@ func TestWeightAndWidthClassAreOS2(t *testing.T) {
 		t.Errorf("Weight %d WidthClass %d (declared %v %v), want 900 and 3", d.Weight, d.WidthClass,
 			d.Has(MetricWeight), d.Has(MetricWidth))
 	}
-	// Without an OS/2 table there is nothing to state, and the zero is not a
-	// width class: Declared says so.
+	// Without an OS/2 table there is no width class to state, and the zero is
+	// not one: Declared says so. (The weight falls back to a style bit; see
+	// TestWeightFallsBackToTheBoldBit.)
 	for _, os2 := range [][]byte{nil, os2Style(40, 900, 3, 0), os2Style(77, 900, 3, 0)} {
 		d := styledFont(t, nil, os2, 0).Descriptor()
-		if d.WidthClass != 0 || d.Has(MetricWidth) || d.Weight != 0 || d.Has(MetricWeight) {
+		if d.WidthClass != 0 || d.Has(MetricWidth) || d.Weight == 900 {
 			t.Errorf("a short OS/2 (%d bytes) stated Weight %d WidthClass %d", len(os2), d.Weight, d.WidthClass)
 		}
+	}
+}
+
+// TestWeightFallsBackToTheBoldBit is issue #871: a face whose OS/2 cannot say
+// usWeightClass still says whether it is bold, in the same field its italic
+// bit is read from, and that is its weight.
+func TestWeightFallsBackToTheBoldBit(t *testing.T) {
+	const bold, italic = 1 << 5, 1 << 0
+	for _, c := range []struct {
+		name     string
+		os2      []byte // nil: no OS/2 table
+		macStyle uint16
+		weight   int
+	}{
+		// usWeightClass is the statement wherever OS/2 reaches it, and the
+		// bold bit does not move it.
+		{"os2 weight, bold bit", os2Style(96, 300, 5, bold), 1, 300},
+		{"os2 weight, no bold bit", os2Style(96, 800, 5, 0), 0, 800},
+		// No OS/2: macStyle bit 0.
+		{"no os2, macStyle bold", nil, 1, 700},
+		{"no os2, macStyle bold italic", nil, 3, 700},
+		{"no os2, macStyle italic", nil, 2, 400},
+		{"no os2, macStyle none", nil, 0, 400},
+		// An OS/2 too short for usWeightClass's read but holding fsSelection:
+		// its bold bit, and macStyle is not consulted, as for italic.
+		{"os2 through fsSelection, bold", os2Style(64, 900, 5, bold), 0, 700},
+		{"os2 through fsSelection, not bold", os2Style(77, 900, 5, italic), 1, 400},
+		// Too short even for fsSelection: macStyle again.
+		{"os2 before fsSelection, macStyle bold", os2Style(40, 900, 5, 0), 1, 700},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := styledFont(t, nil, c.os2, c.macStyle).Descriptor()
+			if d.Weight != c.weight || !d.Has(MetricWeight) {
+				t.Errorf("Weight %d (declared %v), want %d", d.Weight, d.Has(MetricWeight), c.weight)
+			}
+		})
 	}
 }
 
