@@ -1387,7 +1387,7 @@ NOTICE_SOURCES := \
 	unicode-license.txt|https://www.unicode.org/license.txt|e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96 \
 	whatwg-html-LICENSE|https://raw.githubusercontent.com/whatwg/html/cd8ac6f1bbf86dd0bd09ef75d27dacaebe7b4c1d/LICENSE|85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864 \
 	csswg-drafts-LICENSE.md|https://raw.githubusercontent.com/w3c/csswg-drafts/$(CSSWG_COMMIT)/LICENSE.md|232da9c6c2b9f7e19e5d85cc7cf43760d80b7c4174406ac6404fa2c1b51d531b \
-	w3c-software-license-2023.html|https://www.w3.org/copyright/software-license-2023/|80523a19fe9db062417727b99d447c44e0f12698fb0d733d018f577f454f1d27
+	w3c-software-license-2023.html|https://www.w3.org/copyright/software-license-2023/|fd5a4ac6381278e3c62ba92fa3998738f9aefa6760da4953e214ba5ab7341a4e
 
 notice-field = $(word $(2),$(subst |, ,$(1)))
 NOTICE_FILES := $(foreach n,$(NOTICE_SOURCES),$(NOTICE_DIR)/$(call notice-field,$(n),1))
