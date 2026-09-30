@@ -2,10 +2,13 @@ package shape
 
 import (
 	"encoding/binary"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/internal/costtest"
 )
@@ -419,6 +422,139 @@ func TestTheFeatureListIsWalkedOncePerRead(t *testing.T) {
 		}
 	}
 	growth(t, "loading n features with distinct tags, at 4n against n", load, 900, 3600, 8)
+}
+
+// sharedFeatureGPOS is a GPOS whose FeatureList has n records, each a tag of
+// its own, all pointing at one feature naming lookups 0..n-1: a table of 8n
+// bytes whose features name n² lookups between them. Nothing else is in it.
+// It is the shape one spliced block made of a real font's FeatureList (issue
+// #872): thousands of records landing on lists that overlap.
+func sharedFeatureGPOS(n int) []byte {
+	const header = 10
+	featureAt := 2 + 6*n
+	table := u16(nil, 1, 0, 0, header, 0) // version 1.0, no scripts or lookups
+	table = u16(table, n)
+	for i := 0; i < n; i++ {
+		table = append(table, 'z', byte('a'+i/676%26), byte('a'+i/26%26), byte('a'+i%26))
+		table = u16(table, featureAt)
+	}
+	table = u16(table, 0, n)
+	for i := 0; i < n; i++ {
+		table = u16(table, i)
+	}
+	return table
+}
+
+// TestFeaturesNamingOneListAreReadWithinTheTablesSize is issue #872. A feature
+// record's lookup list is read wherever its offset points, and n records
+// pointing at one list of n cost n² reads: one spliced block in a 400 KB font
+// made 165 million, and Load took seconds. What the features may name between
+// them is now bounded by the table's size, so the work is linear in it.
+//
+// Counted by the bytes allocated, which every read of a list allocates for:
+// four times the records and four times the list is sixteen times the reads
+// unbounded, and about four bounded.
+func TestFeaturesNamingOneListAreReadWithinTheTablesSize(t *testing.T) {
+	load := func(n int) func() {
+		data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Cost", Glyphs: costGlyphs,
+			Extra: map[string][]byte{"GPOS": sharedFeatureGPOS(n)}})
+		return func() {
+			if _, err := Load(data); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	const what = "loading n features all naming one list of n lookups, at 4n against n"
+	if r := costtest.Allocated(t, what, load(2000), load(8000)); r > 8 {
+		t.Errorf("%s: a factor of %.1f where 8 is the most the input allows", what, r)
+	}
+}
+
+// TestAFeatureListPastItsAllowanceIsReadInOrderAndSaysSo pins what the bound
+// keeps and that it is reported: the features the allowance covers are read
+// whole and in list order, the one it runs out in is cut there, the rest name
+// nothing, and Face.LayoutLimits says the table was not read whole.
+func TestAFeatureListPastItsAllowanceIsReadInOrderAndSaysSo(t *testing.T) {
+	const n = 8000
+	table := sharedFeatureGPOS(n)
+	x := indexFeatures(table, tableFeatures{})
+	got := x.lookupIndices()
+	budget := featureReadBudget(table)
+	whole := budget / n
+	for i, tag := range x.tags {
+		want := 0
+		switch {
+		case i < whole:
+			want = n
+		case i == whole:
+			want = budget % n
+		}
+		if len(got[tag]) != want {
+			t.Fatalf("feature %d (%s) kept %d lookups, want %d of the allowance's %d",
+				i, tag, len(got[tag]), want, budget)
+		}
+	}
+	if !x.readsSpent || x.readsLimit("GPOS") == "" {
+		t.Error("the allowance ran out and nothing says so")
+	}
+
+	f := costFace(t, map[string][]byte{"GPOS": table})
+	said := false
+	for _, m := range f.LayoutLimits() {
+		said = said || strings.Contains(m, "GPOS features name more lookups")
+	}
+	if !said {
+		t.Errorf("LayoutLimits does not report the unread lookups: %q", f.LayoutLimits())
+	}
+}
+
+// TestNoRealFontReachesTheFeatureAllowance is the other half of #872's bound:
+// it is there for a table whose lists overlap, and a font whose lists do not
+// must be read whole. Every GSUB and GPOS in the tree, and in the corpora
+// where they are fetched, is read the way the engine reads one at Load — its
+// features' lookups asked for tag by tag and then all at once, on the one
+// allowance — and none may run out. Across them the most any table asks is
+// 0.07 lookups a byte, against the half a byte the allowance gives.
+func TestNoRealFontReachesTheFeatureAllowance(t *testing.T) {
+	var files []string
+	for _, dir := range []string{"../testdata/harfbuzz/fonts", os.Getenv("NOTO_FONTS"),
+		os.Getenv("NOTO_CJK"), os.Getenv("CFF_FONTS")} {
+		if dir == "" {
+			continue
+		}
+		for _, ext := range []string{"*.ttf", "*.otf"} {
+			m, _ := filepath.Glob(filepath.Join(dir, ext))
+			files = append(files, m...)
+		}
+	}
+	tables := 0
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for tag, table := range font.SFNTTables(data) {
+			if (tag != "GSUB" && tag != "GPOS") || len(table) < 10 {
+				continue
+			}
+			tables++
+			x := indexFeatures(table, tableFeatures{})
+			for _, ft := range x.tags {
+				x.lookupsFor(ft)
+			}
+			x.lookupIndices()
+			if x.readsSpent {
+				t.Errorf("%s %s: its features were not read whole: %s",
+					filepath.Base(path), tag, x.readsLimit(tag))
+			}
+		}
+	}
+	// The tree's own fonts hold nineteen; fewer means the glob stopped finding
+	// them, and a test that reads nothing passes whatever the bound.
+	if tables < 15 {
+		t.Fatalf("only %d tables were read, which proves little", tables)
+	}
+	t.Logf("%d GSUB and GPOS tables read whole", tables)
 }
 
 // TestALongLookupOrderIsNotInsertionSorted is the same shape in the readers

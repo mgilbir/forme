@@ -364,8 +364,15 @@ func featureTableSubstitution(fv []byte, off int) featureSubst {
 // featureLookupList is the lookup indices one FeatureList entry names — its own,
 // unless a FeatureVariations record put another list in its place.
 func featureLookupList(list []byte, index int, varied featureSubst) []int {
+	return featureLookupListUpTo(list, index, varied, maxDeclaredList)
+}
+
+// featureLookupListUpTo is featureLookupList reading no more than limit
+// indices, so that a caller with an allowance does not pay for what it cannot
+// keep.
+func featureLookupListUpTo(list []byte, index int, varied featureSubst, limit int) []int {
 	if lookups, ok := varied[index]; ok {
-		return lookups
+		return lookups[:min(len(lookups), max(limit, 0))]
 	}
 	rec := 2 + 6*index
 	if rec+6 > len(list) {
@@ -376,10 +383,7 @@ func featureLookupList(list []byte, index int, varied featureSubst) []int {
 		return nil
 	}
 	feature := list[off:]
-	n := font.Be16(feature, 2)
-	if n > maxDeclaredList {
-		n = maxDeclaredList
-	}
+	n := min(font.Be16(feature, 2), maxDeclaredList, max(limit, 0))
 	out := make([]int, 0, min(n, max(0, (len(feature)-4)/2)))
 	for j := 0; j < n; j++ {
 		if 4+2*j+2 > len(feature) {
@@ -721,6 +725,9 @@ func readPositioning(tables map[string][]byte, sel featureSet, required int, coo
 		l.gpos = gposLookups(gpos)
 		l.gposGates = make([]gposGate, len(l.gpos))
 		l.gposFeatures = idx.lookupIndices()
+		if m := idx.readsLimit("GPOS"); m != "" {
+			l.limits = append(l.limits, m)
+		}
 		// A feature the language system declares with no lookups is still
 		// declared, and whether the font offers 'kern' at all is a question a
 		// plan asks — see plan.gposKern.
@@ -799,6 +806,9 @@ func readLayout(tables map[string][]byte, gsubSel featureSet, pos *layout, coord
 		l.readSingleSubstitutions(gsub, idx)
 		l.gsub = gsubLookups(gsub)
 		l.featureLookups = idx.lookupIndices()
+		if m := idx.readsLimit("GSUB"); m != "" {
+			l.limits = append(l.limits, m)
+		}
 		// A feature declared with no lookups is declared all the same, as it
 		// is for GPOS above: whether the font states a joining form at all is
 		// what decides HarfBuzz's Arabic fallback (see arabicfallback.go).
@@ -900,12 +910,58 @@ type featureIndex struct {
 	// the FeatureList indices each of them is declared at.
 	tags  []string
 	byTag map[string][]int
+	// reads is how many more lookup indices the features may name between
+	// them, and readsSpent whether one was left unread for want of it. See
+	// featureReadBudget.
+	reads      int
+	readsSpent bool
+	table      []byte
+}
+
+// featureReadBudget is how many lookup indices the features of a table may
+// name between them before the rest are left unread (issue #872).
+//
+// A feature's lookup list is read wherever its record's offset points, and
+// nothing stops a thousand records from pointing at one list, or at lists that
+// overlap: each is bytes the table has, so no check on a single list refuses
+// them. One spliced block in a 400 KB font made twelve thousand records name
+// a hundred and sixty-five million indices, which took seconds to merge. Each
+// index a well-formed table states is two bytes of it, so what a table can
+// honestly name is bounded by its size; across the corpora the most any table
+// asks is 0.07 indices a byte, against the half an index a byte allowed here.
+// The constant is so that a small table may still name the format's largest
+// list once.
+func featureReadBudget(table []byte) int { return len(table)/2 + maxDeclaredList }
+
+// featureLookups is the lookup list of the feature at a FeatureList index,
+// as featureLookupList reads it, charged against the table's allowance. What
+// the allowance cannot cover is not read.
+func (x *featureIndex) featureLookups(i int) []int {
+	// One more than the allowance is read, so that a list it cannot cover is
+	// told from one it covers exactly.
+	lookups := featureLookupListUpTo(x.list, i, x.varied, x.reads+1)
+	if len(lookups) > x.reads {
+		lookups = lookups[:x.reads]
+		x.readsSpent = true
+	}
+	x.reads -= len(lookups)
+	return lookups
+}
+
+// readsLimit is what a caller is told when the allowance ran out, or "".
+func (x *featureIndex) readsLimit(table string) string {
+	if !x.readsSpent {
+		return ""
+	}
+	return fmt.Sprintf("the font's %s features name more lookups between them than "+
+		"the table's size can state; the lookups past the first %d were not read",
+		table, featureReadBudget(x.table))
 }
 
 // indexFeatures reads a table's FeatureList and LookupList, keeping the
 // features the selection admits.
 func indexFeatures(t []byte, feats tableFeatures) *featureIndex {
-	x := &featureIndex{varied: feats.varied, byTag: map[string][]int{}}
+	x := &featureIndex{varied: feats.varied, byTag: map[string][]int{}, reads: featureReadBudget(t), table: t}
 	if off := font.Be16(t, 6); off > 0 && off+2 <= len(t) {
 		x.list = t[off:]
 		n := min(font.Be16(x.list, 0), maxDeclaredList)
@@ -972,7 +1028,7 @@ func (x *featureIndex) lookupsFor(tag string) ([][]byte, []int) {
 	var out [][]byte
 	var indices []int
 	for _, i := range x.byTag[tag] {
-		for _, idx := range featureLookupList(x.list, i, x.varied) {
+		for _, idx := range x.featureLookups(i) {
 			if idx >= 0 && idx < len(x.lookups) && x.lookups[idx] != nil {
 				out = append(out, x.lookups[idx])
 				indices = append(indices, idx)
@@ -997,7 +1053,7 @@ func (x *featureIndex) lookupIndices() map[string][]int {
 		// reading one that the fuzzer produced.
 		kept := map[int]bool{}
 		for _, i := range x.byTag[tag] {
-			for _, idx := range featureLookupList(x.list, i, x.varied) {
+			for _, idx := range x.featureLookups(i) {
 				if kept[idx] {
 					continue
 				}
