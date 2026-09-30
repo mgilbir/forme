@@ -159,18 +159,36 @@ func cleanName(s string) string {
 // font with no OS/2 table has to say, so it is read only then: where OS/2
 // exists it is the newer statement and the one that wins, even when it says
 // no. usWidthClass (offset 6) is read on the same terms as usWeightClass.
+//
+// Both statements also have a bold bit — 5 in fsSelection, 0 in macStyle —
+// and the one the style came from gives the weight where OS/2 did not state
+// usWeightClass: 700 for bold, 400 for anything else, which is what the two
+// bits distinguish and all they do (issue #871). Without it a bold face with
+// no OS/2 table read as having no weight at all, while its italic bit came
+// through from the same field.
 func (f *Face) readStyle(os2, head []byte) {
 	if len(os2) >= 78 {
 		f.widthClass = font.Be16(os2, 6)
 		f.declared |= MetricWidth
 	}
+	var bold, stated bool
 	switch {
 	case len(os2) >= 64:
 		sel := font.Be16(os2, 62)
 		f.styleItalic, f.styleOblique = sel&(1<<0) != 0, sel&(1<<9) != 0
+		bold, stated = sel&(1<<5) != 0, true
 		f.declared |= MetricStyle
 	case len(head) >= 46:
-		f.styleItalic = font.Be16(head, 44)&(1<<1) != 0
+		mac := font.Be16(head, 44)
+		f.styleItalic = mac&(1<<1) != 0
+		bold, stated = mac&(1<<0) != 0, true
 		f.declared |= MetricStyle
+	}
+	if stated && f.declared&MetricWeight == 0 {
+		f.weight = 400
+		if bold {
+			f.weight = 700
+		}
+		f.declared |= MetricWeight
 	}
 }
