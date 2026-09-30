@@ -1702,7 +1702,7 @@ Quoted whole from ${NOTICE_DIR}/csswg-drafts-LICENSE.md:
 
 The licence it names:
 
-Quoted from ${NOTICE_DIR}/w3c-software-license-2023.html:
+Quoted from testdata/w3c-licence/software-license-2023.html:
 
     License
 

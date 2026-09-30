@@ -1376,8 +1376,11 @@ hblanguages: $(HB_LANGTAGS)
 # LICENSE, the AFM readme, the glyph list, the word lists, the hyphenation
 # patterns, HarfBuzz's COPYING — are checked against their own copies.
 #
-# Unicode's licence and W3C's have no versioned URL. A change to either is a
-# fetch that fails on its digest, which is the moment to read the new text.
+# Unicode's licence has no versioned URL. A change to it is a fetch that fails
+# on its digest, which is the moment to read the new text. W3C's has none
+# either, and its page changes with W3C's site chrome — a survey banner, the
+# version of a stylesheet — while the licence stays the same; each change
+# failed every CI job. So that page is committed, in testdata/w3c-licence/.
 #
 #	<file>|<url>|<sha256>
 NOTICE_DIR := testdata/notices
@@ -1386,8 +1389,7 @@ NOTICE_SOURCES := \
 	icu-LICENSE|https://raw.githubusercontent.com/unicode-org/icu/$(ICU_COMMIT)/LICENSE|e55522d81edc687a341a4411e0776e54ca654e90147f354a90458aaced4116af \
 	unicode-license.txt|https://www.unicode.org/license.txt|e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96 \
 	whatwg-html-LICENSE|https://raw.githubusercontent.com/whatwg/html/cd8ac6f1bbf86dd0bd09ef75d27dacaebe7b4c1d/LICENSE|85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864 \
-	csswg-drafts-LICENSE.md|https://raw.githubusercontent.com/w3c/csswg-drafts/$(CSSWG_COMMIT)/LICENSE.md|232da9c6c2b9f7e19e5d85cc7cf43760d80b7c4174406ac6404fa2c1b51d531b \
-	w3c-software-license-2023.html|https://www.w3.org/copyright/software-license-2023/|fd5a4ac6381278e3c62ba92fa3998738f9aefa6760da4953e214ba5ab7341a4e
+	csswg-drafts-LICENSE.md|https://raw.githubusercontent.com/w3c/csswg-drafts/$(CSSWG_COMMIT)/LICENSE.md|232da9c6c2b9f7e19e5d85cc7cf43760d80b7c4174406ac6404fa2c1b51d531b
 
 notice-field = $(word $(2),$(subst |, ,$(1)))
 NOTICE_FILES := $(foreach n,$(NOTICE_SOURCES),$(NOTICE_DIR)/$(call notice-field,$(n),1))
