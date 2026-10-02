@@ -412,6 +412,7 @@ func (f *Face) ShapeGlyphsWith(s string, features ...string) ([]Glyph, int) {
 }
 
 func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Glyph, int) {
+	f.runWork.checkInput(f, s, extra, ctx)
 	f.runWork.spend(int64(len(s)) + 1)
 	if ctx.features.Vertical {
 		// An upright run is not cut by direction: CSS Writing Modes §5.1 has
@@ -500,6 +501,7 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 // cut, and the pairs kerned do not. The pieces come back in the order they are
 // drawn, which in a right-to-left run is the last piece first.
 func (f *Face) shapeDirection(s string, behind, ahead uint16, rtl bool, extra []string, ctx shapeContext) ([]Glyph, int) {
+	f.runWork.checkInput(f, s, extra, ctx)
 	if !f.composite() {
 		// A face set by character code has no rules to read per script, and
 		// nothing to merge a neighbour's glyphs into.
@@ -554,6 +556,7 @@ func (f *Face) shapeDirection(s string, behind, ahead uint16, rtl bool, extra []
 // guessed again from less. The same holds for direction, which is a property of
 // the whole paragraph and cannot be read off one run of it.
 func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, ctx shapeContext) ([]Glyph, int) {
+	f.runWork.checkInput(f, s, extra, ctx)
 	f.runWork.spend(int64(len(s)) + 1)
 	if !f.composite() {
 		return f.shapeByCode(s, rtl, ctx.features.Vertical)

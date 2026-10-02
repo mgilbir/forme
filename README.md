@@ -250,3 +250,10 @@ invalid. `RunResult.Work` lets a caller deduct actual charged work from a larger
 document budget. Font parsing and Unicode preprocessing have their own bounds
 and are not interrupted inside an individual phase. This API does not change
 the legacy shaping entry points or make their mutable usage records concurrent.
+
+`Face.WithShapingLimits` shares a budget across synchronous measurement/shaping
+calls through a private face, for integrations such as paragraph breaking. The
+callback must bound its own other work, use the supplied face on one goroutine
+without cloning it, check cancellation between phases, and retain no face for
+later shaping. Each shaped run is checked against the input limit. Font parser
+and preprocessing bounds remain independent of charged lookup work.
