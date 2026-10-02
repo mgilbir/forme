@@ -3,6 +3,7 @@ package shape
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -114,5 +115,51 @@ func TestBoundedRunChecksCancellationDuringExpansion(t *testing.T) {
 	result, e := f.ShapeGlyphsContext(ctx, RunInput{Text: strings.Repeat("office", 40)}, RunLimits{})
 	if !errors.Is(e, context.Canceled) || result.Glyphs != nil || result.Missing != 0 {
 		t.Fatalf("cancellation during work: %v %d %v", result.Glyphs, result.Missing, e)
+	}
+}
+
+// A bound one glyph ran into, measured before and for some other run, is the
+// face's history and not this run's: a run that draws none of it is accepted.
+func TestBoundedRunIgnoresAnotherRunsInkBound(t *testing.T) {
+	spin := []byte{139, 139, 21}
+	line := []byte{139, 139, 21, 239, 239, 5, 14}
+	cff := fonttest.CFF(fonttest.CFFOptions{Glyphs: 3, Charstrings: [][]byte{{14}, spin, line}})
+	f, err := Load(fonttest.OTTO(cff, fonttest.SFNTOptions{Glyphs: []fonttest.Glyph{
+		{Rune: 'a', Advance: 500, HasShape: true}, {Rune: 'Z', Advance: 500, HasShape: true}}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.glyphExtents(1)
+	if len(f.LayoutLimits()) == 0 {
+		t.Fatal("the spinning glyph reports no bound: the test does not reach what it is about")
+	}
+	result, err := f.ShapeGlyphsContext(context.Background(), RunInput{Text: "Z"}, RunLimits{})
+	if err != nil || len(result.Glyphs) != 1 {
+		t.Fatalf("a run drawing none of the capped glyph: %v, %v", result.Glyphs, err)
+	}
+}
+
+// A bound reading the layout a run is shaped with is the run's own, and refuses
+// it.
+func TestBoundedRunRefusesItsOwnLayoutsBound(t *testing.T) {
+	data, err := os.ReadFile("../fonts/notosans/NotoSans-Variable.ttf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := f.Clone()
+	probe.runWork = &runWork{ctx: context.Background(), glyphs: 1 << 20, left: 1 << 40}
+	probe.ShapeGlyphs("office")
+	if len(probe.runWork.layouts) == 0 {
+		t.Fatal("shaping records no layout it was shaped with")
+	}
+	for _, l := range probe.runWork.layouts {
+		l.limits = append(l.limits, "a planted limit")
+	}
+	if _, err := f.ShapeGlyphsContext(context.Background(), RunInput{Text: "office"}, RunLimits{}); !errors.Is(err, ErrRunLimit) {
+		t.Fatalf("a run shaped with a layout that ran into a limit: %v", err)
 	}
 }

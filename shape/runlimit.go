@@ -39,13 +39,29 @@ type runWork struct {
 	ctx    context.Context
 	glyphs int
 	left   int64
+	// layouts are the ones this call shaped through, whose limits are the
+	// call's own. See layoutLimits.
+	layouts []*layout
 }
 type runAbort struct{ err error }
 
+// spend charges n units of work, and size checks a run about to hold n glyphs.
+// Both are called in the innermost loops of every shaping pass, bounded or not,
+// so each is only the nil check, small enough to be inlined: the unbounded
+// entry points pay a comparison, not a call.
 func (w *runWork) spend(n int64) {
-	if w == nil {
-		return
+	if w != nil {
+		w.charge(n)
 	}
+}
+
+func (w *runWork) size(n int) {
+	if w != nil {
+		w.hold(n)
+	}
+}
+
+func (w *runWork) charge(n int64) {
 	if err := w.ctx.Err(); err != nil {
 		panic(runAbort{err})
 	}
@@ -54,11 +70,52 @@ func (w *runWork) spend(n int64) {
 	}
 	w.left -= n
 }
-func (w *runWork) size(n int) {
-	if w == nil {
+
+// work is the budget the shaper's face is shaping under, nil for an unbounded
+// one or a shaper built without a face.
+func (sh shaper) work() *runWork {
+	if sh.f == nil {
+		return nil
+	}
+	return sh.f.runWork
+}
+
+// shapedThrough records a layout a run was shaped with.
+func (w *runWork) shapedThrough(l *layout) {
+	if w == nil || l == nil {
 		return
 	}
-	w.spend(0)
+	for _, seen := range w.layouts {
+		if seen == l {
+			return
+		}
+	}
+	w.layouts = append(w.layouts, l)
+}
+
+// layoutLimits are the bounds reading the layouts this call shaped through ran
+// into, and those of the face's own layout.
+//
+// They are not the whole of LayoutLimits. That answer is the face's history,
+// shared by every clone: the layouts of scripts other calls have set, and the
+// ink of glyphs other calls have measured. Rejecting on it would refuse a run
+// for a glyph it never draws, and accept or refuse the same run depending on
+// what had been shaped before it.
+func (w *runWork) layoutLimits(f *Face) []string {
+	var out []string
+	if f.layout != nil {
+		out = append(out, f.layout.limits...)
+	}
+	for _, l := range w.layouts {
+		if l != f.layout {
+			out = append(out, l.limits...)
+		}
+	}
+	return out
+}
+
+func (w *runWork) hold(n int) {
+	w.charge(0)
 	if n < 0 || n > w.glyphs {
 		panic(runAbort{fmt.Errorf("%w: glyph count", ErrRunLimit)})
 	}
@@ -66,8 +123,9 @@ func (w *runWork) size(n int) {
 
 // ShapeGlyphsContext shapes a bounded run without changing the receiver's used
 // glyph record. It returns no glyphs on cancellation, work exhaustion, glyph
-// expansion, recursion exhaustion or reported font-layout truncation. A private
-// clone shares the receiver's locked font caches. Font programs must remain
+// expansion, recursion exhaustion, or a limit reading the layout tables the run
+// was shaped with ran into; bounds other runs met on the face do not count. A
+// private clone shares the receiver's locked font caches. Font programs must remain
 // immutable during calls. Cancellation is checked between shaping phases and
 // lookup steps; font parsing and Unicode preprocessing use their own bounds.
 func (f *Face) ShapeGlyphsContext(ctx context.Context, in RunInput, limits RunLimits) (result RunResult, err error) {
@@ -112,7 +170,7 @@ func (f *Face) ShapeGlyphsContext(ctx context.Context, in RunInput, limits RunLi
 	}()
 	result.Glyphs, result.Missing = clone.ShapeGlyphsMerged(in.Text, in.Before, in.After, in.MergeBefore, in.MergeAfter, in.Kerns, in.Features)
 	clone.runWork.size(len(result.Glyphs))
-	if findings := clone.LayoutLimits(); len(findings) != 0 {
+	if findings := clone.runWork.layoutLimits(clone); len(findings) != 0 {
 		return RunResult{}, fmt.Errorf("%w: font layout: %v", ErrRunLimit, findings)
 	}
 	result.Work = limits.MaxWork - clone.runWork.left
