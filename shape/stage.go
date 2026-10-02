@@ -66,7 +66,9 @@ func (sh shaper) applyLookups(buf []Glyph, lookups []planLookup, from, to, floor
 	}
 	sh.joinerAt = h.joiner
 	sh.floor = floor
+	work := sh.work()
 	for _, lk := range lookups {
+		work.spend(1)
 		if lk.index < 0 || lk.index >= len(sh.l.gsub) || from >= to {
 			continue
 		}
@@ -86,6 +88,7 @@ func (sh shaper) applyLookups(buf []Glyph, lookups []planLookup, from, to, floor
 		rb := newRunBuf(buf, from)
 		sh.run = rb
 		for rb.w < to && len(rb.pending()) > 0 {
+			work.spend(1)
 			step = 0
 			// The far edge, as it stands now. It moves: a lookup that takes a
 			// glyph apart makes the window longer, and the next position has to
@@ -138,11 +141,14 @@ func (sh shaper) applyReverse(buf []Glyph, idx, from, to int) int {
 		to = len(buf)
 	}
 	first := -1
+	work := sh.work()
 	for at := to - 1; at >= from; at-- {
+		work.spend(1)
 		if !sh.maskAllows(buf[at]) || sh.ignores(lk.flags, buf[at]) {
 			continue
 		}
 		for _, sub := range lk.subs {
+			work.spend(int64(len(sub)) + int64(len(buf)) + 1)
 			gid, ok := sh.reverseChainAt(sub, buf, at, lk.flags)
 			if !ok {
 				continue

@@ -412,6 +412,7 @@ func (f *Face) ShapeGlyphsWith(s string, features ...string) ([]Glyph, int) {
 }
 
 func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Glyph, int) {
+	f.runWork.spend(int64(len(s)) + 1)
 	if ctx.features.Vertical {
 		// An upright run is not cut by direction: CSS Writing Modes §5.1 has
 		// every character of it treated as strong left-to-right, and HarfBuzz
@@ -482,6 +483,7 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 		for i := range glyphs {
 			glyphs[i].Cluster += r.Start
 		}
+		f.runWork.size(len(out) + len(glyphs))
 		out = append(out, glyphs...)
 	}
 	return out, missing
@@ -535,6 +537,7 @@ func (f *Face) shapeDirection(s string, behind, ahead uint16, rtl bool, extra []
 		for i := range glyphs {
 			glyphs[i].Cluster += p.start
 		}
+		f.runWork.size(len(out) + len(glyphs))
 		out = append(out, glyphs...)
 	}
 	return out, missing
@@ -551,6 +554,7 @@ func (f *Face) shapeDirection(s string, behind, ahead uint16, rtl bool, extra []
 // guessed again from less. The same holds for direction, which is a property of
 // the whole paragraph and cannot be read off one run of it.
 func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, ctx shapeContext) ([]Glyph, int) {
+	f.runWork.spend(int64(len(s)) + 1)
 	if !f.composite() {
 		return f.shapeByCode(s, rtl, ctx.features.Vertical)
 	}
@@ -621,6 +625,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// What each character nothing is drawn for is to the font's rules. They are
 	// all kept, as HarfBuzz keeps them, until the substitutions have run: a
 	// rule may name one, and some are not stepped over. See ignorable.go.
+	f.runWork.size(len(runes))
 	ignorables := ignorableKinds(runes)
 	if len(runes) == 0 {
 		return nil, 0
@@ -677,6 +682,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		if ignorables != nil {
 			g.ignorable = ignorables[i]
 		}
+		f.runWork.size(len(buf) + 1)
 		buf = append(buf, g)
 	}
 	if len(buf) == 0 {
@@ -739,6 +745,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	if model == modelHebrew {
 		sh.gposScript = f.chosenPositioningTag(script, lang)
 	}
+	f.runWork.size(len(buf))
 	sh.position(buf, p, model)
 	// The pair that spans the boundary to the next run, which the pass above
 	// cannot see because the glyph on the far side of it is not in this buffer.
@@ -910,6 +917,7 @@ func (f *Face) shapeByCode(s string, rtl, vertical bool) ([]Glyph, int) {
 			for _, p := range parts {
 				code, _ := f.GlyphID(p)
 				width, _ := f.Advance(p)
+				f.runWork.size(len(buf) + 1)
 				buf = append(buf, f.byCode(code, offsets[i], width, p, vertical))
 				drew(p, code)
 			}
@@ -918,6 +926,7 @@ func (f *Face) shapeByCode(s string, rtl, vertical bool) ([]Glyph, int) {
 		// The same substitution Measure and Encode make: see missingByCode.
 		missing++
 		code, width := f.missingByCode()
+		f.runWork.size(len(buf) + 1)
 		buf = append(buf, f.byCode(code, offsets[i], width, ' ', vertical))
 		drew(' ', code)
 	}

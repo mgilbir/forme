@@ -883,6 +883,7 @@ func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan, 
 		for i := range record {
 			record[i].syllable = serial
 		}
+		sh.f.runWork.size(len(out) + len(syllable))
 		out = append(out, syllable...)
 		outInfo = append(outInfo, record...)
 	}

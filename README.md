@@ -240,3 +240,13 @@ metrics and glyph list, Brotli, the HTML and CSS standards, HarfBuzz.
 `THIRD_PARTY_NOTICES` lists every generated table and kept file that is somebody
 else's work, where and at which pin it was taken, its licence, and the notice
 the licence asks a copy to carry, each quoted from its source.
+
+For callers rendering untrusted runs, `shape.Face.ShapeGlyphsContext` accepts
+`shape.RunInput` and `shape.RunLimits`. It shapes through a private face clone,
+checks cancellation between phases and lookup steps, bounds input bytes, live
+glyphs and charged lookup work, and returns a zero result on failure. Defaults
+are 4096 input bytes, 32768 glyphs and 64 million work units; negative limits are
+invalid. `RunResult.Work` lets a caller deduct actual charged work from a larger
+document budget. Font parsing and Unicode preprocessing have their own bounds
+and are not interrupted inside an individual phase. This API does not change
+the legacy shaping entry points or make their mutable usage records concurrent.

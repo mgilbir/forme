@@ -1,6 +1,9 @@
 package shape
 
-import "github.com/mgilbir/forme/font"
+import (
+	"fmt"
+	"github.com/mgilbir/forme/font"
+)
 
 // Contextual substitution: rules that fire only where a glyph has particular
 // neighbours.
@@ -87,6 +90,9 @@ func lookupBudget(glyphs int) *int {
 // treated as one that has already spent everything.
 func (sh shaper) recurse() bool {
 	if sh.ops == nil || *sh.ops <= 0 {
+		if sh.work() != nil {
+			panic(runAbort{fmt.Errorf("%w: nested lookup budget", ErrRunLimit)})
+		}
 		return false
 	}
 	*sh.ops--
@@ -104,6 +110,9 @@ func (sh shaper) recurse() bool {
 // stated, and a guard at the one door costs nothing beside an index out of range
 // in the middle of Compose, which is what the missing lower bound once was.
 func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph) {
+	if depth > maxLookupRecursion && sh.work() != nil {
+		panic(runAbort{fmt.Errorf("%w: lookup recursion", ErrRunLimit)})
+	}
 	if depth > maxLookupRecursion || idx < 0 || idx >= len(sh.l.gsub) || at < 0 || at >= len(buf) {
 		return 0, buf
 	}
@@ -116,7 +125,9 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 	if sh.ignores(lk.flags, buf[at]) {
 		return 0, buf
 	}
+	work := sh.work()
 	for _, sub := range lk.subs {
+		work.spend(int64(len(sub)) + int64(len(buf)) + 1)
 		switch lk.kind {
 		case 1:
 			if gid, ok := singleSubstAt(sub, buf[at].GID); ok {
