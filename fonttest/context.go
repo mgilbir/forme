@@ -377,14 +377,14 @@ func intKeys[V any](m map[int]V) []int {
 // The stubs are found after the fact rather than placed: each carries its index
 // in the offset field, which is patched once the table's own length is known.
 func GPOSExtensionLookups(subs [][]byte, feature string) []byte {
-	const sentinel = 0xF0000000
+	const sentinel uint32 = 0xF0000000
 
 	lookups := make([]Lookup, len(subs))
 	for i := range subs {
 		stub := make([]byte, 8)
 		binary.BigEndian.PutUint16(stub[0:], 1) // extensionFormat
 		binary.BigEndian.PutUint16(stub[2:], 2) // the real type: PairPos
-		binary.BigEndian.PutUint32(stub[4:], uint32(sentinel|i))
+		binary.BigEndian.PutUint32(stub[4:], sentinel|uint32(i))
 		lookups[i] = Lookup{Type: 9, Subtables: [][]byte{stub}}
 	}
 	idx := make([]int, len(subs))
@@ -396,7 +396,7 @@ func GPOSExtensionLookups(subs [][]byte, feature string) []byte {
 	// Each stub's offset is from the stub's own start, so the patch needs both
 	// where the stub landed and where its subtable will.
 	for i, sub := range subs {
-		want := uint32(sentinel | i)
+		want := sentinel | uint32(i)
 		at := -1
 		for p := 0; p+8 <= len(out); p += 2 {
 			if binary.BigEndian.Uint32(out[p+4:]) == want &&
