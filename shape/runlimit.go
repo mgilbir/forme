@@ -39,10 +39,12 @@ type runWork struct {
 	ctx    context.Context
 	glyphs int
 	left   int64
+	// input bounds the bytes of each run shaped in a WithShapingLimits scope,
+	// zero where the caller checked the one run itself.
+	input int
 	// layouts are the ones this call shaped through, whose limits are the
 	// call's own. See layoutLimits.
 	layouts []*layout
-	input   int
 }
 type runAbort struct{ err error }
 
@@ -122,6 +124,24 @@ func (w *runWork) hold(n int) {
 	}
 }
 
+// withDefaults is the limits with each zero field at its default, or an error
+// for a negative one.
+func (limits RunLimits) withDefaults() (RunLimits, error) {
+	if limits.MaxInputBytes < 0 || limits.MaxGlyphs < 0 || limits.MaxWork < 0 {
+		return RunLimits{}, errors.New("shape: negative run limit")
+	}
+	if limits.MaxInputBytes == 0 {
+		limits.MaxInputBytes = 4096
+	}
+	if limits.MaxGlyphs == 0 {
+		limits.MaxGlyphs = 32768
+	}
+	if limits.MaxWork == 0 {
+		limits.MaxWork = 64 << 20
+	}
+	return limits, nil
+}
+
 // ShapeGlyphsContext shapes a bounded run without changing the receiver's used
 // glyph record. It returns no glyphs on cancellation, work exhaustion, glyph
 // expansion, recursion exhaustion, or a limit reading the layout tables the run
@@ -133,17 +153,9 @@ func (f *Face) ShapeGlyphsContext(ctx context.Context, in RunInput, limits RunLi
 	if ctx == nil || f == nil {
 		return RunResult{}, errors.New("shape: nil context or face")
 	}
-	if limits.MaxInputBytes < 0 || limits.MaxGlyphs < 0 || limits.MaxWork < 0 {
-		return RunResult{}, errors.New("shape: negative run limit")
-	}
-	if limits.MaxInputBytes == 0 {
-		limits.MaxInputBytes = 4096
-	}
-	if limits.MaxGlyphs == 0 {
-		limits.MaxGlyphs = 32768
-	}
-	if limits.MaxWork == 0 {
-		limits.MaxWork = 64 << 20
+	limits, err = limits.withDefaults()
+	if err != nil {
+		return RunResult{}, err
 	}
 	left := limits.MaxInputBytes
 	for _, s := range []string{in.Text, in.Before, in.After, in.MergeBefore, in.MergeAfter, in.Features.Tags, in.Features.TagsOff, in.Features.Language, f.settingsOn, f.settingsOff} {
@@ -184,23 +196,17 @@ func (f *Face) ShapeGlyphsContext(ctx context.Context, in RunInput, limits RunLi
 // Input limits apply to each measured/shaped run, including its context/settings.
 // The callback must use the supplied face on one goroutine, must not clone it,
 // and must bound its own non-shaping work and check cancellation between phases.
-// It must not retain the face for later shaping. Returned work is zero on error.
+// It must not retain the face for later shaping; one that is kept shapes
+// unbounded once the call returns. Returned work is zero on error. A scope is
+// refused for limits reading the layouts it shaped through ran into, as
+// ShapeGlyphsContext is.
 // Individual font reads and Unicode preprocessing retain their own bounds.
 func (f *Face) WithShapingLimits(ctx context.Context, limits RunLimits, fn func(*Face) error) (work int64, err error) {
 	if f == nil || ctx == nil || fn == nil {
 		return 0, errors.New("shape: nil shaping scope input")
 	}
-	if limits.MaxInputBytes < 0 || limits.MaxGlyphs < 0 || limits.MaxWork < 0 {
-		return 0, errors.New("shape: negative run limit")
-	}
-	if limits.MaxInputBytes == 0 {
-		limits.MaxInputBytes = 4096
-	}
-	if limits.MaxGlyphs == 0 {
-		limits.MaxGlyphs = 32768
-	}
-	if limits.MaxWork == 0 {
-		limits.MaxWork = 64 << 20
+	if limits, err = limits.withDefaults(); err != nil {
+		return 0, err
 	}
 	if err = ctx.Err(); err != nil {
 		return 0, err
@@ -208,6 +214,10 @@ func (f *Face) WithShapingLimits(ctx context.Context, limits RunLimits, fn func(
 	clone := f.Clone()
 	clone.runWork = &runWork{ctx: ctx, glyphs: limits.MaxGlyphs, left: limits.MaxWork, input: limits.MaxInputBytes}
 	defer func() {
+		// A face kept past the scope, against its contract, shapes as an
+		// unbounded clone does, rather than panicking where nothing recovers
+		// once the scope's context is done.
+		clone.runWork = nil
 		if p := recover(); p != nil {
 			if stop, ok := p.(runAbort); ok {
 				work = 0
@@ -221,7 +231,7 @@ func (f *Face) WithShapingLimits(ctx context.Context, limits RunLimits, fn func(
 		return 0, err
 	}
 	clone.runWork.spend(0)
-	if findings := clone.LayoutLimits(); len(findings) != 0 {
+	if findings := clone.runWork.layoutLimits(clone); len(findings) != 0 {
 		return 0, fmt.Errorf("%w: font layout: %v", ErrRunLimit, findings)
 	}
 	return limits.MaxWork - clone.runWork.left, nil

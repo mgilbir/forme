@@ -137,6 +137,12 @@ func TestBoundedRunIgnoresAnotherRunsInkBound(t *testing.T) {
 	if err != nil || len(result.Glyphs) != 1 {
 		t.Fatalf("a run drawing none of the capped glyph: %v, %v", result.Glyphs, err)
 	}
+	if _, err := f.WithShapingLimits(context.Background(), RunLimits{}, func(f *Face) error {
+		f.ShapeGlyphs("Z")
+		return nil
+	}); err != nil {
+		t.Fatalf("a scope drawing none of the capped glyph: %v", err)
+	}
 }
 
 // A bound reading the layout a run is shaped with is the run's own, and refuses
@@ -190,5 +196,23 @@ func TestBoundedShapingScopeMeasurementsAndOwnership(t *testing.T) {
 	work, e = f.WithShapingLimits(context.Background(), RunLimits{}, func(*Face) error { return custom })
 	if work != 0 || !errors.Is(e, custom) {
 		t.Fatalf("callback error: %d %v", work, e)
+	}
+}
+
+// A face kept past its scope, whose context is then done, shapes rather than
+// panicking where nothing recovers.
+func TestAFaceKeptPastItsScopeIsUnbounded(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var kept *Face
+	if _, err := f.WithShapingLimits(ctx, RunLimits{}, func(f *Face) error { kept = f; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if glyphs, _ := kept.ShapeGlyphs("office"); len(glyphs) == 0 {
+		t.Fatal("the kept face shaped nothing")
 	}
 }

@@ -1062,7 +1062,6 @@ func (f *Face) shapeMerged(s string, rtl bool, extra []string,
 // before and after are the context the group itself does not hold. See
 // GroupContext, and GroupSpan for cutting one run out of the result.
 func (f *Face) ShapeGroup(whole, before, after string, kerns bool, off Features) []Glyph {
-	f.runWork.checkInput(f, whole, nil, shapeContext{before: before, after: after, kerns: kerns, features: off})
 	glyphs, _ := f.shapeGlyphsWith(whole, nil,
 		shapeContext{before: before, after: after, kerns: kerns, features: off})
 	return glyphs
