@@ -231,6 +231,7 @@ func (sh shaper) shapeMyanmar(buf []Glyph, runes []rune, p *plan) []Glyph {
 		if syl.kind == myanmarNonMyanmar {
 			continue
 		}
+		sh.f.runWork.size(len(out) + syl.start - prev)
 		out = append(out, buf[prev:syl.start]...)
 		outInfo = append(outInfo, info[prev:syl.start]...)
 		prev = syl.end
@@ -242,9 +243,11 @@ func (sh shaper) shapeMyanmar(buf []Glyph, runes []rune, p *plan) []Glyph {
 				indicInfo{cat: catDottedCircle, pos: posBaseC})
 		}
 		syllable = sh.shapeMyanmarSyllable(syllable, &record, p)
+		sh.f.runWork.size(len(out) + len(syllable))
 		out = append(out, syllable...)
 		outInfo = append(outInfo, record...)
 	}
+	sh.f.runWork.size(len(out) + len(buf) - prev)
 	buf = append(out, buf[prev:]...)
 	info = append(outInfo, info[prev:]...)
 

@@ -851,6 +851,9 @@ func (sh shaper) glyphAt(buf []Glyph, at int) Glyph {
 // product is an empty slice with room for n glyphs, for a substitution to build
 // its replacement in before replace writes it.
 func (sh shaper) product(n int) []Glyph {
+	if sh.f != nil {
+		sh.f.runWork.size(n)
+	}
 	if sh.run == nil {
 		return make([]Glyph, 0, n)
 	}
@@ -863,6 +866,13 @@ func (sh shaper) product(n int) []Glyph {
 // It is the one place a substitution changes how many glyphs there are. See
 // runBuf for why that is not a new slice built out of the three parts.
 func (sh shaper) replace(buf []Glyph, at, span int, product []Glyph) []Glyph {
+	n := len(buf)
+	if sh.run != nil {
+		n = sh.run.w + len(sh.run.a) - sh.run.r
+	}
+	if sh.f != nil {
+		sh.f.runWork.size(n - span + len(product))
+	}
 	if sh.run == nil {
 		// No pass is editing, so there is no array to edit in place and no
 		// promise about whose it is. A copy is what this used to do everywhere.

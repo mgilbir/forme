@@ -707,6 +707,7 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune,
 		// through untouched — but for what a cluster forgets at the same point:
 		// see clearSubstituted.
 		clearSubstituted(buf[prev:cl.start])
+		sh.f.runWork.size(len(out) + cl.start - prev)
 		out = append(out, buf[prev:cl.start]...)
 		outInfo = append(outInfo, info[prev:cl.start]...)
 		prev = cl.end
@@ -714,10 +715,12 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune,
 		cluster := append([]Glyph(nil), buf[cl.start:cl.end]...)
 		record := append([]useInfo(nil), info[cl.start:cl.end]...)
 		cluster = sh.shapeUseCluster(cluster, &record, p, cl.kind, dotted, hasDotted)
+		sh.f.runWork.size(len(out) + len(cluster))
 		out = append(out, cluster...)
 		outInfo = append(outInfo, record...)
 	}
 	clearSubstituted(buf[prev:])
+	sh.f.runWork.size(len(out) + len(buf) - prev)
 	buf = append(out, buf[prev:]...)
 	info = append(outInfo, info[prev:]...)
 
@@ -912,6 +915,7 @@ func (sh shaper) insertUseGlyph(buf []Glyph, info []useInfo, at, gid int, what u
 	}
 	g := Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid), class: classUnclassified}
 
+	sh.f.runWork.size(len(buf) + 1)
 	buf = append(buf, Glyph{})
 	copy(buf[at+1:], buf[at:])
 	buf[at] = g

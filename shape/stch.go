@@ -93,6 +93,7 @@ func (f *Face) applyStch(buf []Glyph, rtl bool) []Glyph {
 	var out []Glyph
 	for i := len(buf); i > 0; i-- {
 		if buf[i-1].stch == stchNone {
+			f.runWork.size(len(out) + 1)
 			out = append(out, buf[i-1])
 			continue
 		}
@@ -155,6 +156,7 @@ func (f *Face) applyStch(buf []Glyph, rtl bool) []Glyph {
 					}
 				}
 				g.XOffset = f.scale(int(x))
+				f.runWork.size(len(out) + 1)
 				out = append(out, g)
 				if !rtl {
 					x += w

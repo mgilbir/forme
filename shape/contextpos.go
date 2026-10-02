@@ -1,6 +1,9 @@
 package shape
 
-import "github.com/mgilbir/forme/font"
+import (
+	"fmt"
+	"github.com/mgilbir/forme/font"
+)
 
 // Positioning lookups at a glyph: what each GPOS lookup type does where it
 // applies, whether the positioning pass reached the glyph walking the run or a
@@ -32,6 +35,9 @@ import "github.com/mgilbir/forme/font"
 // A position outside the buffer, on either side, applies nothing, for the
 // reason applyGSUBAt gives.
 func (sh shaper) applyGPOSAt(idx int, buf []Glyph, at, depth int) int {
+	if depth > maxLookupRecursion && sh.f != nil && sh.f.runWork != nil {
+		panic(runAbort{fmt.Errorf("%w: lookup recursion", ErrRunLimit)})
+	}
 	if depth > maxLookupRecursion || idx < 0 || idx >= len(sh.l.gpos) || at < 0 || at >= len(buf) {
 		return 0
 	}
@@ -41,6 +47,9 @@ func (sh shaper) applyGPOSAt(idx int, buf []Glyph, at, depth int) int {
 		return 0
 	}
 	for _, sub := range lk.subs {
+		if sh.f != nil {
+			sh.f.runWork.spend(int64(len(sub)) + int64(len(buf)) + 1)
+		}
 		var n int
 		switch lk.kind {
 		case 1:

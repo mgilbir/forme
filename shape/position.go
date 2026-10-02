@@ -241,6 +241,9 @@ type gposPass struct {
 // kern table, or the model's fallback, as positioningFor decides; then every
 // attachment is resolved against where its target finally is.
 func (sh shaper) position(buf []Glyph, p *plan, model shaperModel) {
+	if sh.f != nil {
+		sh.f.runWork.spend(int64(len(buf)) + 1)
+	}
 	how := sh.positioningFor(p, model)
 	vertical := sh.features.Vertical
 	// A run set upright advances down the page and hangs each glyph from its
@@ -291,6 +294,9 @@ func (sh shaper) applyPositioningLookup(pl planLookup, buf []Glyph) {
 	sh.gp.lastBase, sh.gp.lastBaseUntil = -1, 0
 	gate := sh.l.gateFor(pl.index)
 	for i := 0; i < len(buf); {
+		if sh.f != nil {
+			sh.f.runWork.spend(1)
+		}
 		// A glyph no subtable of the lookup can start at is stepped over
 		// without asking; see gposGate.
 		if !gate.startsAt(buf[i].GID) {

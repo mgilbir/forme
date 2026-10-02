@@ -1,6 +1,7 @@
 package shape
 
 import (
+	"context"
 	"encoding/binary"
 	"maps"
 	"os"
@@ -472,6 +473,8 @@ func checkClusters(t *testing.T, f *Face) {
 // which is the reader most exposed to a crafted file, since it is the only one
 // that walks the variation tables.
 func useFace(face *Face) {
+	_, _ = face.ShapeGlyphsContext(context.Background(), RunInput{Text: "abc"}, RunLimits{})
+
 	_ = face.Name()
 	_ = face.Family()
 	_ = face.Subfamily()

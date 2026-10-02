@@ -136,6 +136,7 @@ func (sh shaper) insertGlyphAt(buf []Glyph, info []indicInfo, at, gid int, what 
 	}
 	g := Glyph{GID: gid, Cluster: cluster, XAdvance: sh.f.advanceGID(gid), class: classUnclassified}
 
+	sh.f.runWork.size(len(buf) + 1)
 	buf = append(buf, Glyph{})
 	copy(buf[at+1:], buf[at:])
 	buf[at] = g
