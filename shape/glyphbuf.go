@@ -634,7 +634,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		return nil, 0
 	}
 	var (
-		buf     []Glyph
+		buf     = make([]Glyph, 0, len(runes))
 		missing int
 	)
 	for i, r := range runes {
@@ -894,7 +894,7 @@ func (f *Face) shapeByCode(s string, rtl, vertical bool) ([]Glyph, int) {
 	// page as a space.
 	runes, offsets = dropHiddenBeforeDrawing(runes, offsets)
 	var (
-		buf     []Glyph
+		buf     = make([]Glyph, 0, len(runes))
 		missing int
 	)
 	var parts []rune
