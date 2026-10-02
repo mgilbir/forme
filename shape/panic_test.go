@@ -473,6 +473,7 @@ func checkClusters(t *testing.T, f *Face) {
 // which is the reader most exposed to a crafted file, since it is the only one
 // that walks the variation tables.
 func useFace(face *Face) {
+	_, _ = face.WithShapingLimits(context.Background(), RunLimits{}, func(f *Face) error { f.ShapeGlyphs("abc"); return nil })
 	_, _ = face.ShapeGlyphsContext(context.Background(), RunInput{Text: "abc"}, RunLimits{})
 
 	_ = face.Name()

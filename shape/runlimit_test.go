@@ -163,3 +163,32 @@ func TestBoundedRunRefusesItsOwnLayoutsBound(t *testing.T) {
 		t.Fatalf("a run shaped with a layout that ran into a limit: %v", err)
 	}
 }
+
+func TestBoundedShapingScopeMeasurementsAndOwnership(t *testing.T) {
+	f, e := NotoSans()
+	if e != nil {
+		t.Fatal(e)
+	}
+	want := f.Clone().MeasureShaped("office", 12)
+	work, e := f.WithShapingLimits(context.Background(), RunLimits{}, func(clone *Face) error {
+		if got := clone.MeasureShaped("office", 12); got != want {
+			t.Fatalf("measurement %v want %v", got, want)
+		}
+		clone.ShapeGlyphs("אבג")
+		return nil
+	})
+	if e != nil || work <= 0 || len(f.Used()) != 0 {
+		t.Fatalf("scope work/ownership: %d %v %v", work, e, f.Used())
+	}
+	for _, limits := range []RunLimits{{MaxWork: 1}, {MaxInputBytes: 1}, {MaxGlyphs: 1}} {
+		work, e = f.WithShapingLimits(context.Background(), limits, func(clone *Face) error { clone.MeasureShaped("office", 12); return nil })
+		if work != 0 || !errors.Is(e, ErrRunLimit) {
+			t.Fatalf("scope failure: %d %v", work, e)
+		}
+	}
+	custom := errors.New("callback")
+	work, e = f.WithShapingLimits(context.Background(), RunLimits{}, func(*Face) error { return custom })
+	if work != 0 || !errors.Is(e, custom) {
+		t.Fatalf("callback error: %d %v", work, e)
+	}
+}
