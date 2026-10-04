@@ -2957,17 +2957,28 @@ func ShapedGlyphs(v DrawText) ([]shape.Glyph, int) {
 	if v.Upright {
 		return shapedUpright(v)
 	}
-	if !v.ContextKerns {
-		// The neighbour is set in another face, so its characters decide this
-		// run's joined shapes and its glyphs decide nothing. See
-		// shape.ShapeGlyphsAcrossFaces.
-		return v.Face.ShapeGlyphsMerged(ShapedText(v), v.PreContext, v.PostContext,
-			v.MergePre, v.MergePost, false,
-			v.Features)
+	// The neighbour is set in another face where the context does not kern, so
+	// its characters decide this run's joined shapes and its glyphs decide
+	// nothing. See shape.ShapeGlyphsAcrossFaces.
+	text := ShapedText(v)
+	glyphs, missing := v.Face.ShapeGlyphsMerged(text, v.PreContext, v.PostContext,
+		v.MergePre, v.MergePost, v.ContextKerns, v.Features)
+	// The override ShapedText puts in front of a right-to-left run is layout's
+	// and not the document's, and it owns no glyph. The shaper takes it out as
+	// it takes out any character nothing is drawn for, and merges its cluster
+	// into the glyph after it, as HarfBuzz merges one: that glyph would say it
+	// came from the override, and a backend mapping glyphs back to characters —
+	// for a document's text, or for which of them a glyph draws — would read
+	// the run's first letter as a control. Its cluster is put back where the
+	// run's own text starts, which is what it is without the override.
+	if prefix := len(text) - len(v.Text); prefix > 0 {
+		for i := range glyphs {
+			if glyphs[i].Cluster < prefix {
+				glyphs[i].Cluster = prefix
+			}
+		}
 	}
-	return v.Face.ShapeGlyphsMerged(ShapedText(v), v.PreContext, v.PostContext,
-		v.MergePre, v.MergePost, true,
-		v.Features)
+	return glyphs, missing
 }
 
 // shapedUpright is ShapedGlyphs for an upright run.

@@ -1194,13 +1194,17 @@ func (f *Face) shapeMerged(s string, rtl bool, extra []string,
 	}
 	glyphs, _ := f.shapeDirection(pre+s+post, scriptBehind(outer.before), scriptAhead(outer.after),
 		rtl, extra, outer)
+	// Each glyph is the run's whose character it is charged to (see
+	// clusterOwners), and its cluster within the run is where that cluster
+	// starts, or the run's start for one that began in the side before it.
 	lo, hi := len(pre), len(pre)+len(s)
+	owners := clusterOwners(glyphs, pre+s+post)
 	out := glyphs[:0:0]
-	for _, g := range glyphs {
-		if g.Cluster < lo || g.Cluster >= hi {
+	for i, g := range glyphs {
+		if owners[i] < lo || owners[i] >= hi {
 			continue
 		}
-		g.Cluster -= lo
+		g.Cluster = max(g.Cluster, lo) - lo
 		out = append(out, g)
 	}
 	// The count of characters no glyph was found for is the whole string's, and

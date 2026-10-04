@@ -510,7 +510,7 @@ func checkClusters(t *testing.T, f *Face) {
 		// orders — one per glyph, one per cluster and then prefixed — and
 		// floating-point addition is not associative. The tolerance is far below
 		// a layout unit at any size a document uses.
-		cum := GroupAdvances(glyphs, len(text))
+		cum := GroupAdvances(glyphs, text)
 		_, through := GroupSpan(cum, 0, len(text), 1000)
 		direct := MeasureGlyphs(glyphs, 1000)
 		if d := through - direct; d > 1e-6 || d < -1e-6 {
@@ -679,7 +679,7 @@ func useFace(face *Face) {
 
 	whole := face.ShapeGroup(text, before, after, true, off)
 	_, _ = GroupContext(before, after, before, after)
-	cum := GroupAdvances(whole, len(text))
+	cum := GroupAdvances(whole, text)
 	_, _ = GroupSpan(cum, 0, len(cum), 10)
 	for _, r := range text {
 		_ = stack.Covers(r)
