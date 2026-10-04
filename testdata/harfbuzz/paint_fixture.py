@@ -23,10 +23,22 @@
 #   - and a glyph with no colour at all, which is painted as its outline in the
 #     foreground.
 #
-# It is built with fontTools and its timestamps fixed, so that building it
-# again produces the same bytes and the checksum the expectations record stays
-# true.
+# SVGPaint.ttf is BitmapInk.ttf (colrink_fixture.py, built by hbcolrink first)
+# with an SVG table and a COLRv0 glyph added: SVG documents, which are painted
+# after COLR and before the bitmaps — a gzipped one, one drawing two glyphs,
+# one whose stated length runs past the end of the table, and one that starts
+# past it. Glyph 1 has a document and a bitmap, and is painted from the
+# document; glyph 2 has a document and a COLR glyph, and is painted from COLR;
+# glyph 4 has no document, and is painted from its bitmap; glyph 8's document
+# starts past the end of the table, so it has none, and is painted as its
+# outline.
+#
+# They are built with fontTools and their timestamps fixed, so that building
+# them again produces the same bytes and the checksum the expectations record
+# stays true.
+import gzip
 import os
+import struct
 import sys
 
 from oracle import fonttools
@@ -35,6 +47,8 @@ fonttools()
 from fontTools.colorLib.builder import buildCOLR, buildCPAL  # noqa: E402
 from fontTools.fontBuilder import FontBuilder  # noqa: E402
 from fontTools.pens.ttGlyphPen import TTGlyphPen  # noqa: E402
+from fontTools.ttLib import TTFont  # noqa: E402
+from fontTools.ttLib.tables.DefaultTable import DefaultTable  # noqa: E402
 from fontTools.ttLib.tables import otTables as ot  # noqa: E402
 from fontTools.varLib.builder import buildDeltaSetIndexMap  # noqa: E402
 from fontTools.varLib.varStore import OnlineVarStoreBuilder  # noqa: E402
@@ -214,5 +228,52 @@ def build(path):
     fb.save(path)
 
 
+def svg_doc(*glyphs):
+    shapes = "".join(
+        f'<g id="glyph{g}"><rect x="{50 * g}" y="-900" width="400" height="{100 * g}" fill="#{g}{g}0000"/></g>'
+        for g in glyphs)
+    return ('<svg xmlns="http://www.w3.org/2000/svg" version="1.1">' + shapes + "</svg>").encode()
+
+
+def svg_table():
+    """An SVG table written byte by byte, so that a document can state a
+    length or an offset past the end of the table: each index entry is a
+    glyph range, an offset from the start of the index, and a length."""
+    docs = [
+        (1, 1, svg_doc(1)),
+        # gzip with its timestamp fixed, so that the bytes do not move.
+        (2, 3, gzip.compress(svg_doc(2, 3), mtime=0)),
+        (5, 6, svg_doc(5, 6)),
+        (7, 7, svg_doc(7)),
+    ]
+    index_size = 2 + 12 * (len(docs) + 1)
+    entries, blobs, at = [], b"", index_size
+    for first, last, data in docs:
+        entries.append((first, last, at, len(data)))
+        blobs += data
+        at += len(data)
+    # Glyph 7's document states a length past the end of the table, which
+    # HarfBuzz cuts at the end; glyph 8's starts past it, which is none.
+    first, last, off, n = entries[-1]
+    entries[-1] = (first, last, off, n + 1000)
+    entries.append((8, 8, at + 5000, 10))
+    index = struct.pack(">H", len(entries)) + b"".join(struct.pack(">HHII", *e) for e in entries)
+    return struct.pack(">HII", 0, 10, 0) + index + blobs
+
+
+def build_svg(directory):
+    font = TTFont(os.path.join(directory, "BitmapInk.ttf"))
+    svg = DefaultTable("SVG ")
+    svg.data = svg_table()
+    font["SVG "] = svg
+    font["COLR"] = buildCOLR({"bm2": [("bm1", 0)]})
+    font["CPAL"] = buildCPAL([[(0.0, 0.5, 0.0, 1.0)]])
+    font["name"].setName("SVGPaint", 1, 3, 1, 0x409)
+    font["head"].created = font["head"].modified = 3660681600
+    font.recalcTimestamp = False
+    font.save(os.path.join(directory, "SVGPaint.ttf"))
+
+
 if __name__ == "__main__":
     build(os.path.join(sys.argv[1], "ColourPaint.ttf"))
+    build_svg(sys.argv[1])

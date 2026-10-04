@@ -273,6 +273,7 @@ func FuzzLoadAndUse(f *testing.F) {
 		"KerxPairs.ttf",         // AAT kerx: the pair formats, tuples, across the line
 		"KerxMachines.ttf",      // AAT kerx: the state machines, ankr
 		"TrakCases.ttf",         // AAT trak: tracks, sizes, graphemes
+		"SVGPaint.ttf",          // SVG documents, gzipped and cut at the table's end
 	} {
 		if data, err := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", name)); err == nil {
 			f.Add(data)
@@ -567,7 +568,8 @@ func useFace(face *Face) {
 		// And painted, in another palette and at a size between strikes,
 		// through a painter that panics on a pop with nothing pushed.
 		_ = face.GlyphColour(gid, 20)
-		paintBalanced(face, gid, PaintOptions{Palette: 1, PPEM: 20})
+		paintBalanced(face, gid, PaintOptions{Palette: 1, PPEM: 20,
+			PaletteOverrides: map[int]Color{0: {R: 255, A: 128}, 0xFFFF: {G: 255, A: 255}}})
 	}
 	_, _, _ = face.ScriptOffsets()
 	// The MATH table, where the font has one: every question, for glyphs in

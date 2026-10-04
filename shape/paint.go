@@ -31,9 +31,10 @@ import (
 // each outline a fill is clipped to; painting here is in font units, where
 // both are the identity, and they are left out.
 //
-// Which table a glyph is painted from is HarfBuzz's order too: COLR, then CBDT,
-// then sbix, and a glyph none of them paints is painted as its outline, filled
-// with the foreground colour. GlyphColour says which, ahead of painting.
+// Which table a glyph is painted from is HarfBuzz's order too: COLR, then SVG,
+// then CBDT, then sbix, and a glyph none of them paints is painted as its
+// outline, filled with the foreground colour. GlyphColour says which, ahead of
+// painting.
 //
 // # What it costs, and what is refused
 //
@@ -167,12 +168,23 @@ type ImageFormat uint8
 // HarfBuzz paints them.
 const (
 	ImagePNG ImageFormat = iota + 1
+	// ImageSVG is an SVG glyph's document. See Image.
+	ImageSVG
 )
 
-// Image is a bitmap glyph's image, for its strike: the image file, its width
-// and height in pixels, and Box, where it is drawn, in font units — the image
-// is scaled to fill it. Data is the font's own bytes, and is not to be
+// Image is a glyph's image. Data is the font's own bytes, and is not to be
 // changed.
+//
+// A bitmap glyph's is the image file for its strike, its width and height in
+// pixels, and Box, where it is drawn, in font units — the image is scaled to
+// fill it.
+//
+// An SVG glyph's is the SVG document the glyph is in, as the font holds it,
+// and nothing else: Width, Height and Box are zero, as HarfBuzz hands it over.
+// The document may draw several glyphs, each the element whose id is "glyph"
+// and the glyph's index ("glyph42"), which is the one to draw; it places
+// itself, in font units with y running down from the baseline; and it may be
+// gzip-compressed, which its first two bytes, 0x1F and 0x8B, say.
 type Image struct {
 	Format        ImageFormat
 	Data          []byte
@@ -223,12 +235,23 @@ type PaintOptions struct {
 	// a CBDT or sbix glyph's strike: the smallest at least that large, or
 	// failing any the largest. Zero picks the largest.
 	PPEM int
+	// PaletteOverrides replaces entries of the palette, by index, as CSS
+	// font-palette's override-colors does: a COLR paint, a colour stop or a
+	// COLRv0 layer naming an index here takes its colour from here rather than
+	// from the font, its alpha multiplied by the paint's as a palette entry's
+	// is. An index past the end of the palette may be given, and is used. The
+	// foreground's index, 0xFFFF, is not a palette entry and is not
+	// overridden: Foreground is what colours it. It is HarfBuzz's
+	// custom_palette_color.
+	PaletteOverrides map[int]Color
 }
 
 // GlyphColour is which of its representations PaintGlyph paints a glyph from.
 type GlyphColour uint8
 
-// The representations, in the order PaintGlyph asks for them.
+// The representations. PaintGlyph asks for them in the order COLR (ColourPaint
+// and ColourLayers), ColourSVG, ColourBitmap; ColourSVG comes last here only
+// so that the others keep their values.
 const (
 	// ColourNone is a glyph with no colour: it is painted as its outline,
 	// filled with the foreground, or, in a face with no outlines
@@ -241,6 +264,8 @@ const (
 	ColourLayers
 	// ColourBitmap is a CBDT or sbix glyph, an image.
 	ColourBitmap
+	// ColourSVG is a glyph of the SVG table, an SVG document. See Image.
+	ColourSVG
 )
 
 // GlyphColour says which representation PaintGlyph paints a glyph from, at a
@@ -261,14 +286,18 @@ func (f *Face) GlyphColour(gid, ppem int) GlyphColour {
 			return ColourLayers
 		}
 	}
+	if _, ok := f.svg.document(gid); ok {
+		return ColourSVG
+	}
 	if _, ok := f.bitmapImage(gid, ppem); ok {
 		return ColourBitmap
 	}
 	return ColourNone
 }
 
-// PaintGlyph paints a glyph through p: its COLR paints, or its CBDT or sbix
-// image, or, for a glyph with none, its outline in the foreground; see
+// PaintGlyph paints a glyph through p: its COLR paints, or its SVG document,
+// or its CBDT or sbix image, or, for a glyph with none, its outline in the
+// foreground; see
 // GlyphColour. A face whose glyphs are only bitmaps (BitmapOnly) paints nothing
 // for a glyph with no image. Coordinates are in font units, y increasing
 // upwards.
@@ -284,14 +313,18 @@ func (f *Face) PaintGlyph(gid int, opts PaintOptions, p Painter) error {
 	if gid < 0 || gid >= f.prog.NumGlyphs {
 		return fmt.Errorf("shape: glyph %d is not one of the face's %d glyphs", gid, f.prog.NumGlyphs)
 	}
-	fg := opts.Foreground
-	if fg == (Color{}) {
-		fg = Color{A: 255}
+	if opts.Foreground == (Color{}) {
+		opts.Foreground = Color{A: 255}
 	}
+	fg := opts.Foreground
 	if t := f.colrTable(); t != nil {
-		if painted, err := f.paintCOLR(t, gid, opts.Palette, fg, p, paintWork); painted || err != nil {
+		if painted, err := f.paintCOLR(t, gid, opts, p, paintWork); painted || err != nil {
 			return err
 		}
+	}
+	if doc, ok := f.svg.document(gid); ok {
+		p.Image(Image{Format: ImageSVG, Data: doc})
+		return nil
 	}
 	if img, ok := f.bitmapImage(gid, opts.PPEM); ok {
 		p.Image(img)
@@ -326,7 +359,7 @@ const paintWork = maxFontWork
 // paintCOLR paints a COLR glyph within a budget of work, and reports whether
 // the table has it. It is walked twice: once counting, which is where a glyph
 // that runs past its bounds is refused, and once painting, which then cannot.
-func (f *Face) paintCOLR(t *colrTable, gid, palette int, fg Color, p Painter, work int) (bool, error) {
+func (f *Face) paintCOLR(t *colrTable, gid int, opts PaintOptions, p Painter, work int) (bool, error) {
 	c := f.colr
 	counter := &paintCounter{t: t, budget: font.NewBudget(work)}
 	painted, refused := c.paintGlyphWith(gid, counter, true, counter.budget)
@@ -336,7 +369,7 @@ func (f *Face) paintCOLR(t *colrTable, gid, palette int, fg Color, p Painter, wo
 	if refused || counter.budget.Err() != nil {
 		return true, fmt.Errorf("%w: glyph %d", ErrPaintLimit, gid)
 	}
-	a := &paintAdapter{t: t, p: p, palette: c.palette(palette), fg: fg}
+	a := &paintAdapter{t: t, p: p, palette: c.palette(opts.Palette), fg: opts.Foreground, overrides: opts.PaletteOverrides}
 	c.paintGlyphWith(gid, a, true, font.NewBudget(work))
 	return true, nil
 }
@@ -378,6 +411,9 @@ type paintAdapter struct {
 	p       Painter
 	palette cpalPalette
 	fg      Color
+	// overrides are the caller's colours for palette entries, which win over
+	// the palette's. See PaintOptions.PaletteOverrides.
+	overrides map[int]Color
 	// pushed records, for each transform pushed and not yet popped, whether
 	// it was handed on.
 	pushed []bool
@@ -491,13 +527,17 @@ func (a *paintAdapter) line(at int) ColorLine {
 	return line
 }
 
-// colour is hb_paint_context_t::get_color: a palette entry, or the foreground
-// for 0xFFFF, its alpha multiplied by the paint's, which is held between zero
-// and one.
+// colour is hb_paint_context_t::get_color: the caller's override of a palette
+// entry, or the entry, or the foreground for 0xFFFF, its alpha multiplied by
+// the paint's, which is held between zero and one.
 func (a *paintAdapter) colour(index int, alpha float32) (Color, bool) {
 	c, fg := a.fg, true
 	if index != foregroundIndex {
-		c, fg = a.palette.colour(index), false
+		var overridden bool
+		if c, overridden = a.overrides[index]; !overridden {
+			c = a.palette.colour(index)
+		}
+		fg = false
 	}
 	alpha = min(max(alpha, 0), 1)
 	c.A = uint8(math.Round(float64(float32(float32(c.A) * alpha))))

@@ -317,10 +317,14 @@ hbcolrink:
 # Colour glyphs painted by HarfBuzz, every callback hb_font_paint_glyph makes,
 # for what Face.PaintGlyph hands a Painter. ColourPaint.ttf (paint_fixture.py)
 # is the fills: palettes, the foreground, every gradient and extend, and the
-# variable ones, at its default and at two weights. ColourInk.ttf is every paint
+# variable ones, at its default and at two weights, and with palette entries
+# overridden, one past the palette's end and the foreground's index among them
+# (which nothing overrides). ColourInk.ttf is every paint
 # format and every thing painting does to a box (colrink_fixture.py, built by
 # hbcolrink). The bitmap faces are asked at sizes on, between and past their
-# strikes, which is how the strike is chosen. Noto Color Emoji's COLRv1 build,
+# strikes, which is how the strike is chosen. SVGPaint.ttf (paint_fixture.py, from
+# BitmapInk.ttf) is SVG documents painted after COLR and before the bitmaps,
+# at two sizes. Noto Color Emoji's COLRv1 build,
 # from `make emoji-fonts`, is painted for a few glyphs: three flags with coats of
 # arms of thousands of paints each, and two ordinary emoji; and its CBDT build,
 # which has no outlines at all, for a few glyphs and at a size below its strike.
@@ -334,6 +338,8 @@ hbpaint:
 		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf:palette=5 \
 		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf@wght=900 \
 		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf@wght=250:palette=1 \
+		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf:overrides=1/00ff0080+7/12345678+65535/ffffffff \
+		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf:palette=1:overrides=0/abcdef00+2/0000ffff \
 		ColourInk.ttf=$(HBFONTS)/ColourInk.ttf \
 		ColourInk.ttf=$(HBFONTS)/ColourInk.ttf@wght=650 \
 		ColourInkStatic.ttf=$(HBFONTS)/ColourInkStatic.ttf \
@@ -351,6 +357,8 @@ hbpaint:
 		SbixInk.ttf=$(HBFONTS)/SbixInk.ttf:bitmap=1:ppem=100 \
 		SbixInkLarge.ttf=$(HBFONTS)/SbixInkLarge.ttf:bitmap=1 \
 		SbixInkRejected.ttf=$(HBFONTS)/SbixInkRejected.ttf:bitmap=1 \
+		SVGPaint.ttf=$(HBFONTS)/SVGPaint.ttf:bitmap=1 \
+		SVGPaint.ttf=$(HBFONTS)/SVGPaint.ttf:bitmap=1:ppem=20 \
 		Noto-COLRv1.ttf=$(EMOJI_DIR)/Noto-COLRv1.ttf:glyphs=3827,3830,3979,100,1500 \
 		NotoColorEmoji.ttf=$(EMOJI_DIR)/NotoColorEmoji.ttf:bitmap=1:glyphs=0,1,5,1494,1714,1978,2032,2325,4045 \
 		NotoColorEmoji.ttf=$(EMOJI_DIR)/NotoColorEmoji.ttf:bitmap=1:ppem=20:glyphs=5,1714,2032
