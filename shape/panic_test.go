@@ -290,6 +290,11 @@ func FuzzLoadAndUse(f *testing.F) {
 			}
 		}
 	}
+	// The WOFF 2 collections google/woff2's encoder made, which reach the
+	// collection's directory through the decoder.
+	for _, pair := range encodedWOFF2Collections(f) {
+		f.Add(pair[0])
+	}
 	// A collection, its two fonts sharing the tables they have in common: a
 	// header and directories, each a count and offsets the file states.
 	f.Add(buildCollection(

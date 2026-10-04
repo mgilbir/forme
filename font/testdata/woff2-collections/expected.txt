@@ -1,0 +1,8 @@
+# What each WOFF 2 collection beside this decodes to, according to
+# google/woff2's woff2_decompress at the commit make.py names, run on
+# these bytes. Written by make.py. DO NOT EDIT.
+#
+# <file> <collection length in bytes> <sha256 of it, first 16 hex digits>
+shared.woff2 1704 52446f1217d7af6c
+distinct.woff2 6640 c0fe60637c1db358
+mixed.woff2 12944 c9f9abe59bfd0892

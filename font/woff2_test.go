@@ -603,6 +603,13 @@ func FuzzDecodeWOFF2(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
+	// And the collections google/woff2's encoder made: a collection
+	// directory, shared tables and a CFF face beside TrueType ones.
+	collections, err := filepath.Glob(filepath.Join("testdata", "woff2-collections", "*.woff2"))
+	if err != nil {
+		f.Fatal(err)
+	}
+	files = append(files, collections...)
 	for _, name := range files {
 		b, err := os.ReadFile(name)
 		if err != nil {
