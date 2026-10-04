@@ -18,8 +18,11 @@
 #                     of values (1) along the line and across it, the value
 #                     that resets an attachment, the flag that clears the
 #                     stack; and attachment by a point of each glyph (4), by
-#                     anchors of the ankr table, by coordinates, and by the
-#                     outline points HarfBuzz does not read
+#                     anchors of the ankr table, by coordinates, and by
+#                     outline points
+#   KerxPoints.ttf    attachment by outline points of composite glyphs — a
+#                     component moved, and one scaled by half — and by a
+#                     point a glyph does not have, which attaches nothing
 #   KerxPlan*.ttf     what decides whether kerx positions the run at all: a
 #                     face with GSUB and GPOS (GPOS does), with GPOS and no
 #                     GSUB (kerx does), with GSUB and a GPOS offering no 'kern'
@@ -47,13 +50,14 @@ from fontTools.pens.ttGlyphPen import TTGlyphPen  # noqa: E402
 from fontTools.ttLib import newTable  # noqa: E402
 from fontTools.ttLib.tables._k_e_r_n import KernTable_format_0  # noqa: E402
 from fontTools.ttLib.tables.DefaultTable import DefaultTable  # noqa: E402
+from fontTools.ttLib.tables._g_l_y_f import Glyph, GlyphComponent  # noqa: E402
 
 GLYPHS = [".notdef", "A", "V", "T", "o", "B", "C", "D", "acutecomb", "smile", "heart", "zwj",
-          "ri_j", "ri_p"]
+          "ri_j", "ri_p", "Bcomp", "Ccomp"]
 GID = {name: i for i, name in enumerate(GLYPHS)}
 CMAP = {ord("A"): "A", ord("V"): "V", ord("T"): "T", ord("o"): "o", ord("B"): "B", ord("C"): "C",
         ord("D"): "D", 0x0301: "acutecomb", 0x1F600: "smile", 0x2764: "heart", 0x200D: "zwj",
-        0x1F1EF: "ri_j", 0x1F1F5: "ri_p"}
+        0x1F1EF: "ri_j", 0x1F1F5: "ri_p", 0xE000: "Bcomp", 0xE001: "Ccomp"}
 FFFF = 0xFFFF
 
 
@@ -65,6 +69,34 @@ def box(width):
     pen.lineTo((max(width, 120) - 50, 0))
     pen.closePath()
     return pen.glyph()
+
+
+def composite(parts):
+    """A composite glyph of (name, dx, dy, scale) components."""
+    g = Glyph()
+    g.numberOfContours = -1
+    g.components = []
+    for name, dx, dy, scale in parts:
+        c = GlyphComponent()
+        c.glyphName, c.x, c.y, c.flags = name, dx, dy, 0
+        if scale != 1:
+            c.transform = [[scale, 0], [0, scale]]
+        g.components.append(c)
+    return g
+
+
+COMPOSITES = {
+    # B moved, then the acute above it: its points after B's four.
+    "Bcomp": [("B", 30, 40, 1), ("acutecomb", 100, 500, 1)],
+    # C at half its size, moved.
+    "Ccomp": [("C", 20, 0, 0.5)],
+}
+
+
+def outlines():
+    out = {n: box(advance(n)) for n in GLYPHS if n not in COMPOSITES}
+    out.update({n: composite(parts) for n, parts in COMPOSITES.items()})
+    return out
 
 
 def advance(name):
@@ -231,12 +263,28 @@ def machines_kerx():
     rows = [[0, 0, 0, 0, 0, 2, 1, 0], [0, 0, 0, 0, 0, 2, 1, 0]]
     coords = machine_subtable(4, 0, classes, rows, entries, lambda off: (2 << 30) | off,
                               struct.pack(">4h", 120, 650, 40, -10))
-    # Format 4 by outline points, which HarfBuzz's font functions do not
-    # read: C marked, and the acute after it neither attached nor marking.
+    # Format 4 by outline points: C marked, and the acute after it attached
+    # by C's point 1 and its own point 2, and marking itself.
     entries = [(0, 0, FFFF), (0, MARK, FFFF), (0, MARK, 0)]
     rows = [[0, 0, 0, 0, 0, 2, 0, 1], [0, 0, 0, 0, 0, 2, 0, 1]]
     points = machine_subtable(4, 0, classes, rows, entries, lambda off: off, struct.pack(">2H", 1, 2))
     return kerx([along, across, anchors, coords, points])
+
+
+def points_kerx():
+    # Format 4 by outline points: Bcomp, Ccomp or D marked, each into a state
+    # of its own, from which the acute is attached by the action that state
+    # names: Bcomp's point 5 (the acute component's second) to the acute's
+    # point 0; Ccomp's point 2 to the acute's point 1; and D's point 40, which
+    # D does not have, which attaches nothing and marks nothing.
+    classes = {GID["Bcomp"]: 4, GID["Ccomp"]: 5, GID["acutecomb"]: 6, GID["D"]: 7}
+    entries = [(0, 0, FFFF), (1, MARK, FFFF), (2, MARK, FFFF), (3, MARK, FFFF),
+               (0, MARK, 0), (0, MARK, 1), (0, MARK, 2)]
+    marks = [1, 2, 0, 3]
+    rows = [[0, 0, 0, 0] + marks[:2] + [act] + marks[3:] for act in (0, 4, 5, 6)]
+    points = machine_subtable(4, 0, classes, rows, entries, lambda off: off,
+                              struct.pack(">6H", 5, 0, 2, 1, 40, 0))
+    return kerx([points])
 
 
 def ankr():
@@ -277,7 +325,7 @@ def base(name, extra=None, fea=None, kern_table=None, stat=False):
     fb = FontBuilder(1000, isTTF=True)
     fb.setupGlyphOrder(GLYPHS)
     fb.setupCharacterMap(CMAP)
-    fb.setupGlyf({n: box(advance(n)) for n in GLYPHS})
+    fb.setupGlyf(outlines())
     fb.setupHorizontalMetrics({n: (advance(n), 50) for n in GLYPHS})
     fb.setupHorizontalHeader(ascent=800, descent=-200)
     fb.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
@@ -325,6 +373,7 @@ def build(directory):
 
     save(base("KerxPairs", {"kerx": pairs_kerx()}), "KerxPairs.ttf")
     save(base("KerxMachines", {"kerx": machines_kerx(), "ankr": ankr()}), "KerxMachines.ttf")
+    save(base("KerxPoints", {"kerx": points_kerx()}), "KerxPoints.ttf")
     save(base("KerxPlanGSUBGPOS", {"kerx": PLAN_KERX}, fea=LS + GSUB + GPOS_KERN), "KerxPlanGSUBGPOS.ttf")
     save(base("KerxPlanGPOS", {"kerx": PLAN_KERX}, fea=LS + GPOS_KERN), "KerxPlanGPOS.ttf")
     save(base("KerxPlanNoKern", {"kerx": PLAN_KERX}, fea=LS + GSUB + GPOS_MARK_ONLY), "KerxPlanNoKern.ttf")

@@ -2193,6 +2193,7 @@ Fonts built for the AAT positioning oracle
 
 Files:   testdata/harfbuzz/fonts/KerxPairs.ttf
          testdata/harfbuzz/fonts/KerxMachines.ttf
+         testdata/harfbuzz/fonts/KerxPoints.ttf
          testdata/harfbuzz/fonts/KerxPlanGSUBGPOS.ttf
          testdata/harfbuzz/fonts/KerxPlanGPOS.ttf
          testdata/harfbuzz/fonts/KerxPlanNoKern.ttf
@@ -2217,6 +2218,7 @@ Files:   testdata/harfbuzz/fonts/MorxCases.ttf
          testdata/harfbuzz/fonts/MorxFeaturesDeprecated.ttf
          testdata/harfbuzz/fonts/MorxFeaturesNoFeat.ttf
          testdata/harfbuzz/fonts/MortCases.ttf
+         testdata/harfbuzz/fonts/MorxLanguage.ttf
 Source:  testdata/harfbuzz/morx_fixture.py, in this repository, which builds
          them with fontTools
 Licence: the licence in LICENSE; they are not anyone else's work

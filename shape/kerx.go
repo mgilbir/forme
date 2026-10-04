@@ -1,6 +1,10 @@
 package shape
 
-import "github.com/mgilbir/forme/font"
+import (
+	"math"
+
+	"github.com/mgilbir/forme/font"
+)
 
 // Apple's extended kerning table, kerx: the positioning of an AAT font, which
 // Apple's fonts state there and not in GPOS, beside their substitutions in
@@ -29,9 +33,13 @@ import "github.com/mgilbir/forme/font"
 //     and offset together;
 //   - format 4 is a state machine attaching the current glyph to a marked one
 //     by a point on each, as a mark is attached in GPOS: by an anchor of the
-//     ankr table, or by coordinates the subtable states. Its third kind,
-//     points of the glyphs' outlines, HarfBuzz's own font functions cannot
-//     read, and neither attaches nor moves on to a new mark;
+//     ankr table, by coordinates the subtable states, or by points of the
+//     glyphs' outlines (contourPoint). The last is where this parts from
+//     HarfBuzz's own font functions, which read no outline points, so that
+//     HarfBuzz with them attaches nothing; CoreText reads the points, and so
+//     does HarfBuzz over FreeType, and this does as they do. A point a glyph
+//     does not have attaches nothing and moves on to no new mark, as in
+//     HarfBuzz;
 //   - a subtable kerning across the line ties the whole run into a chain as a
 //     cursive joint would, the first time one is applied, so that a glyph
 //     raised carries every glyph after it.
@@ -42,7 +50,7 @@ import "github.com/mgilbir/forme/font"
 // subtable not at all where it is off.
 //
 // Not here: the variation tuples beyond the first value, which HarfBuzz reads
-// as the first value; and the outline points of format 4, as said above.
+// as the first value.
 
 // kerxTable is a face's kerx, read into its subtables.
 type kerxTable struct {
@@ -633,9 +641,22 @@ func (k *kerxFormat4) transition(b *aatBuf, flags, data int) {
 		set := true
 		switch k.action {
 		case 0:
-			// Points of the outlines, which HarfBuzz's own font functions do
-			// not read: no attachment, and no new mark either.
-			return
+			// Points of the outlines: get_glyph_contour_point_for_origin of
+			// each, and no attachment, and no new mark, where either glyph
+			// has no such point.
+			p := k.data + 4*index
+			if p < 0 || len(t)-p < 4 {
+				return
+			}
+			mx, my, ok := k.sh.f.contourPoint(b.info[k.mark].GID, font.Be16(t, p))
+			if !ok {
+				return
+			}
+			cx, cy, ok := k.sh.f.contourPoint(b.info[b.idx].GID, font.Be16(t, p+2))
+			if !ok {
+				return
+			}
+			dx, dy = mx-cx, my-cy
 		case 1:
 			p := k.data + 4*index
 			if p < 0 || len(t)-p < 4 {
@@ -671,4 +692,30 @@ func (k *kerxFormat4) transition(b *aatBuf, flags, data int) {
 		k.markSet = true
 		k.mark = b.idx
 	}
+}
+
+// contourPoint is a point of a glyph's outline as FreeType loads it, which is
+// what HarfBuzz over FreeType hands kerx (hb_ft_get_glyph_contour_point): the
+// i-th of the glyph's points, a composite's components resolved in order, in
+// font units, with the outline moved so that its left phantom point is the
+// origin, as FreeType's TrueType loader moves it; and false for a point the
+// glyph does not have. A CFF or CFF2 face has no points of this kind to number
+// — a charstring states curves, not the points of TrueType's instructions —
+// and answers false for every one.
+func (f *Face) contourPoint(gid, i int) (x, y int, ok bool) {
+	g := f.glyfOut
+	if g == nil || gid < 0 || gid >= g.glyfNumGlyphs() || i < 0 {
+		return 0, 0, false
+	}
+	w := &glyfWalk{dec: decycler{tortoise: -1}}
+	if !g.glyfPoints(gid, 0, w) || len(w.points) < 4 {
+		return 0, 0, false
+	}
+	n := len(w.points) - 4
+	if i >= n {
+		return 0, 0, false
+	}
+	shift := w.points[n].x
+	p := w.points[i]
+	return int(math.Round(float64(p.x - shift))), int(math.Round(float64(p.y))), true
 }
