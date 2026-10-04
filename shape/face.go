@@ -239,6 +239,10 @@ type Face struct {
 
 	used    map[int]bool // glyph indices this face has encoded
 	runWork *runWork     // opt-in per-call budget, never shared by Clone
+	// spareWork is the budget ShapeGlyphsBounded reuses from call to call on
+	// this face, so that bounding a run costs no allocation. Not shared by
+	// Clone, for the reason used is not.
+	spareWork *runWork
 }
 
 // layoutTableNames are the tables readLayout reads, and so the ones a face
@@ -1185,6 +1189,7 @@ func (f *Face) Clone() *Face {
 	out := *f
 	out.used = map[int]bool{}
 	out.runWork = nil
+	out.spareWork = nil
 	// The cache is deliberately *kept*, not reset: it holds readings of the
 	// font's own tables, which no document can change. A layout is written only
 	// by its readers, so what is shared is a value; the mutex is there because
