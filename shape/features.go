@@ -194,6 +194,13 @@ type Features struct {
 	// backend that draws the run — which shapes it again — on the same value.
 	Vertical bool
 
+	// PointSize is the size the run is set at, in points to the em, which a
+	// face with an AAT tracking table tracks it by: Apple's fonts set their
+	// text tighter as it grows (trak.go). Zero is 12, CoreText's default and
+	// HarfBuzz's for a font given no size. Nothing else in shaping depends on
+	// the size, which is why it is the one length here.
+	PointSize float64
+
 	// faceOn and faceOff are the face's own settings, CSS Fonts 4 §7.2's
 	// second step: what an @font-face rule's font-feature-settings asked of
 	// the face. They are not the caller's to set. Every way into shaping

@@ -112,6 +112,13 @@ func (sh shaper) cancelMarkWidths(buf []Glyph, adjustOffsets bool) {
 	}
 }
 
+// hasSubstitution reports whether the face has a GSUB table at all:
+// HarfBuzz's hb_ot_layout_has_substitution.
+func (f *Face) hasSubstitution() bool {
+	t := f.layoutTables["GSUB"]
+	return len(t) >= 4 && (t[0]|t[1]|t[2]|t[3]) != 0
+}
+
 // hasPositioning reports whether the face has a GPOS table at all, whatever it
 // selects for the run: HarfBuzz's hb_ot_layout_has_positioning.
 func (f *Face) hasPositioning() bool {
@@ -126,6 +133,9 @@ func (f *Face) hasPositioning() bool {
 type positioning struct {
 	// gpos says the plan's positioning lookups are applied at all.
 	gpos bool
+	// kerx says the face's AAT kerx is (kerx.go), in GPOS's place; and trak
+	// that its tracking is added after (trak.go).
+	kerx, trak bool
 	// kern says the legacy kern table is, and kernPairs that its pairs are:
 	// a table applied with its kerning feature off still ties the run
 	// together where it kerns across the line (legacykern.go), as HarfBuzz's
@@ -178,17 +188,32 @@ type positioning struct {
 // case above: nothing of the font's own positions them.
 func (sh shaper) positioningFor(p *plan, model shaperModel) positioning {
 	var out positioning
-	out.gpos = sh.f.hasPositioning() && !(model == modelHebrew && sh.gposScript != "hebr")
+	hasGPOS := sh.f.hasPositioning() && !(model == modelHebrew && sh.gposScript != "hebr")
+	// AAT's kerx, where the face has one: in GPOS's place unless the face has
+	// GSUB and GPOS both (HarfBuzz's issue 3008), GSUB not counting where the
+	// run's substitutions were a morx; and where GPOS positions the run but
+	// offers no 'kern', beside it, though GPOS, applied, is applied instead.
+	// Either way the plan says kerx, which is what decides marks below, and a
+	// face with a kerx is never kerned by its legacy kern table.
+	hasKerx := sh.f.kerx != nil
+	hasGSUB := !sh.morx && sh.f.hasSubstitution()
+	kerx := hasKerx && !(hasGSUB && hasGPOS)
+	out.gpos = hasGPOS && !kerx
+	if !kerx && (!p.gposKern || !out.gpos) && hasKerx {
+		kerx = true
+	}
+	out.kerx = kerx && !out.gpos
+	out.trak = sh.f.trak != nil
 	// Whether the kern table is the run's positioning is one question, and
 	// whether its pairs are then applied another: the first decides how marks
 	// are cancelled and whether the run is tied together, and it is asked
 	// whatever the kerning feature is set to, as HarfBuzz's apply_kern is; the
 	// second is the feature's requested_kerning.
 	lk := &sh.l.legacyKern
-	out.kern = lk.present() && !(p.gposKern && out.gpos) && model.fallbackPosition()
+	out.kern = !hasKerx && lk.present() && !(p.gposKern && out.gpos) && model.fallbackPosition()
 	out.kernPairs = p.kernRequested
-	out.zero = sh.zeroMarks != zeroMarksNone && (!out.kern || !lk.stateMachine)
-	out.adjust = !out.gpos && (!out.kern || !lk.crossStream)
+	out.zero = sh.zeroMarks != zeroMarksNone && !kerx && (!out.kern || !lk.stateMachine)
+	out.adjust = !out.gpos && !kerx && (!out.kern || !lk.crossStream)
 	out.fallback = out.adjust && model.fallbackPosition()
 	if sh.rtl {
 		out.adjust = false
@@ -269,9 +294,21 @@ func (sh shaper) position(buf []Glyph, p *plan, model shaperModel) {
 			sh.applyPositioningLookup(lk, buf)
 		}
 	}
+	// The kerx, in GPOS's place. Where nothing it did attached anything,
+	// the chain a subtable kerning across the line ties the run into is not
+	// followed, as HarfBuzz follows none without an attachment.
+	if how.kerx && !sh.applyKerx(buf, how.kernPairs) {
+		for i := range buf {
+			pass.chain[i], pass.kind[i] = 0, 0
+		}
+	}
 	// The kern table, each subtable of the run's direction.
 	if how.kern {
 		sh.applyLegacyKern(buf, how.kernPairs)
+	}
+	// The tracking, after every adjustment.
+	if how.trak {
+		sh.applyTrak(buf)
 	}
 	if how.zero && sh.zeroMarks == zeroMarksLate {
 		sh.cancelMarkWidths(buf, how.adjust)

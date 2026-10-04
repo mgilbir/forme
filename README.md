@@ -128,7 +128,8 @@ UTR #53. OpenType layout: GSUB 1–6 and GPOS 1–8, mark attachment, cursive
 attachment, contextual and chained-contextual rules, mark filtering sets. AAT's
 `morx`, or the older `mort`, where a font has one, as HarfBuzz and CoreText
 apply it, with the features a document asks for mapped to the AAT features the
-font's `feat` offers: Apple Color Emoji's sequences are its ligatures.
+font's `feat` offers: Apple Color Emoji's sequences are its ligatures; and its
+`kerx` and `trak`, its kerning and its tracking by size.
 
 **Fonts.** sfnt and CFF, Type 1, the WOFF and WOFF 2 wrappers a web font
 arrives in, a face of a TrueType or OpenType collection (`LoadCollection`), and

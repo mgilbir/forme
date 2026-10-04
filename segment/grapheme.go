@@ -118,6 +118,11 @@ func BreakOf(r rune) Break {
 	return Other
 }
 
+// ExtendedPictographic reports whether a character is Extended_Pictographic,
+// the property emoji sequences are built from: an emoji joined to another by a
+// zero width joiner is one grapheme.
+func ExtendedPictographic(r rune) bool { return pictographic(r) }
+
 // pictographic reports Extended_Pictographic, which rule GB11 tests.
 func pictographic(r rune) bool {
 	if r < 0xA9 { // the lowest character in the property

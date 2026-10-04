@@ -191,7 +191,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 						lig: lig, class: buf[at].class, mask: buf[at].mask,
 						substituted: true, multiplied: len(reps) > 1 || buf[at].multiplied,
 						umark: buf[at].umark, space: buf[at].space,
-						stch: buf[at].stch, word: buf[at].word,
+						stch: buf[at].stch, word: buf[at].word, cont: buf[at].cont,
 					})
 				}
 				out := sh.replace(buf, at, 1, product)
@@ -470,7 +470,7 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 		// What its first part was, as HarfBuzz keeps the first part's record
 		// for the ligature — all but its standing in for a space, which a
 		// ligature does not (see spacefallback.go).
-		stch: buf[at].stch, word: buf[at].word,
+		stch: buf[at].stch, word: buf[at].word, cont: buf[at].cont,
 	})
 
 	// Walking the components in order, so that each kept glyph is given the

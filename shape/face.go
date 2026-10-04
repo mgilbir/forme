@@ -242,6 +242,10 @@ type Face struct {
 	// feat is the AAT feature types the face offers a caller's requests to
 	// its morx under. See aatfeatures.go.
 	feat aatFeat
+	// kerx is the face's AAT positioning, and trak its tracking where
+	// HarfBuzz applies it. See kerx.go and trak.go.
+	kerx *kerxTable
+	trak []byte
 
 	// bitmapOnly is a face whose glyphs are only bitmaps, with no outlines at
 	// all. See BitmapOnly.
@@ -546,6 +550,8 @@ func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face,
 	f.outlines = newOutlineCache(programSize(data, tables), tables)
 	f.morx = readMorx(tables, prog.NumGlyphs)
 	f.feat = readFeat(tables["feat"])
+	f.kerx = readKerx(tables, prog.NumGlyphs)
+	f.trak = readTrak(tables)
 	f.bitmap = newCBDTInk(tables, f.unitsPerEm)
 	f.sbix = newSbixInk(tables, prog.NumGlyphs, f.unitsPerEm)
 	f.varc = newVARCFace(f, tables, prog.NumGlyphs)

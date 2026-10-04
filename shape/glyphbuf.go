@@ -139,6 +139,11 @@ type Glyph struct {
 	// dropUnsubstituted.
 	substituted bool
 
+	// cont says the glyph continues the grapheme before it, as the
+	// character it came from does: HarfBuzz's continuation bit, which
+	// tracking reads (trak.go).
+	cont bool
+
 	// aatDeleted says a morx subtable deleted the glyph: it is taken out of
 	// the run, its cluster merged, once the morx has run. See morx.go.
 	aatDeleted bool
@@ -642,6 +647,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// rule may name one, and some are not stepped over. See ignorable.go.
 	f.runWork.size(len(runes))
 	ignorables := ignorableKinds(runes)
+	continues := graphemeContinues(runes)
 	if len(runes) == 0 {
 		return nil, 0
 	}
@@ -692,7 +698,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		g := Glyph{
 			GID: gid, Cluster: offsets[i], XAdvance: f.advanceGID(gid),
 			class: classOfRune(runes[i]), umark: unicodeMarkOf(runes[i]),
-			space: space, word: isStchWord(runes[i]),
+			space: space, word: isStchWord(runes[i]), cont: continues[i],
 		}
 		if ignorables != nil {
 			g.ignorable = ignorables[i]
