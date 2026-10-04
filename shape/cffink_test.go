@@ -130,11 +130,11 @@ func readInkGolden(t *testing.T, name, target string, nfaces int) []*hbInk {
 		case "H", "V":
 			var run []hbPosition
 			for _, field := range fields {
-				n := ints(line, strings.Split(field, ","))
-				if len(n) != 5 {
-					t.Fatalf("%s:%d: %q has %d parts, want 5", path, line, field, len(n))
+				p, err := parseHBPosition(field)
+				if err != nil {
+					t.Fatalf("%s:%d: %v", path, line, err)
 				}
-				run = append(run, hbPosition{n[0], n[1], n[2], n[3], n[4]})
+				run = append(run, p)
 			}
 			if kind == "H" {
 				cur.across = append(cur.across, run)
@@ -224,10 +224,10 @@ func TestCFFInkPlacesTheFixturesMarksAsHarfBuzzDoes(t *testing.T) {
 		for k, g := range glyphs {
 			w := want.across[i][k]
 			if g.GID != w.gid || f.units(g.XAdvance) != w.xAdvance ||
-				f.units(g.XOffset) != w.dx || f.units(g.YOffset) != w.dy {
-				t.Errorf("%s: glyph %d is %d advancing %d at (%d, %d), want %d advancing %d at (%d, %d)",
+				f.units(g.XOffset) != w.dx || f.units(g.YOffset) != w.dy || g.Cluster != w.cluster {
+				t.Errorf("%s: glyph %d is %d advancing %d at (%d, %d) in cluster %d, want %d advancing %d at (%d, %d) in %d",
 					describeRunes(s), k, g.GID, f.units(g.XAdvance), f.units(g.XOffset),
-					f.units(g.YOffset), w.gid, w.xAdvance, w.dx, w.dy)
+					f.units(g.YOffset), g.Cluster, w.gid, w.xAdvance, w.dx, w.dy, w.cluster)
 			}
 		}
 		down, _ := f.ShapeGlyphsInContext(s, "", "", Features{Vertical: true})

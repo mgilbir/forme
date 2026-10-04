@@ -57,7 +57,7 @@ func TestALongUniversalClusterIsNotReorderedQuadratically(t *testing.T) {
 		buf := make([]Glyph, len(runes))
 		return func() {
 			for _, c := range useClusters(info) {
-				reorderUseCluster(buf, info, c.start, c.end)
+				reorderUseCluster(nil, buf, info, c.start, c.end)
 			}
 		}
 	}

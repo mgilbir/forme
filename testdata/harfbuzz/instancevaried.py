@@ -55,13 +55,14 @@ STRINGS = {
 
 def glyphs(buf):
     return " ".join(
-        f"{i.codepoint},{p.x_advance},{p.y_advance},{p.x_offset},{p.y_offset}"
+        f"{i.codepoint},{p.x_advance},{p.y_advance},{p.x_offset},{p.y_offset}@{i.cluster}"
         for i, p in zip(buf.glyph_infos, buf.glyph_positions))
 
 
 def shape(font, s):
     buf = hb.Buffer()
-    buf.add_str(s)
+    # As UTF-8, so that a cluster is a byte offset, as a Glyph's is.
+    buf.add_utf8(s.encode("utf-8"))
     buf.guess_segment_properties()
     buf.flags = hb.BufferFlags.REMOVE_DEFAULT_IGNORABLES
     hb.shape(font, buf, {})

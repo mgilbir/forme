@@ -357,7 +357,7 @@ func (sh shaper) stepsOver(g Glyph, at int, context bool) bool {
 // to no glyph at all, and a pass that deleted every glyph with that index would
 // delete the spaces of the text along with the joiners.
 func dropGlyphs(buf []Glyph, drop func(i int) bool) []Glyph {
-	return dropGlyphsIf(buf, drop)
+	return dropGlyphsIf(buf, drop, false, false)
 }
 
 // dropUnsubstituted is what a syllabic shaper does with the characters nothing
@@ -370,18 +370,53 @@ func dropGlyphs(buf []Glyph, drop func(i int) bool) []Glyph {
 // lookup replaced, and hides only the ones left as the character's own
 // (_hb_glyph_info_is_default_ignorable, which is false once substituted).
 // Taking them all out closed the gap.
-func dropUnsubstituted(buf []Glyph, hidden func(i int) bool) []Glyph {
-	return dropGlyphsIf(buf, func(i int) bool { return hidden(i) && !buf[i].substituted })
+//
+// The shaper says which way the run is drawn and what is drawn before it on
+// the page, which decide whose cluster a glyph taken out leaves behind: see
+// dropGlyphsIf.
+func (sh shaper) dropUnsubstituted(buf []Glyph, hidden func(i int) bool) []Glyph {
+	return dropGlyphsIf(buf, func(i int) bool { return hidden(i) && !buf[i].substituted }, sh.keptAhead, sh.rtl)
 }
 
-func dropGlyphsIf(buf []Glyph, drop func(i int) bool) []Glyph {
+// dropGlyphsIf takes out the glyphs drop names, as HarfBuzz's
+// delete_glyphs_inplace does: each one's cluster merged into a neighbour's
+// where no other glyph is left standing for it. See cluster.go.
+//
+// HarfBuzz does it once the run is in the order it is drawn, so a run drawn
+// right to left (rtl) is walked last glyph first: a joiner taken out of a
+// right-to-left run gives its cluster to the glyph drawn before it, which is
+// the one written after it. keptAhead says something of the same buffer is
+// drawn before the run, so that a glyph taken out at its drawn start has its
+// cluster kept by that rather than merged into the glyph after it.
+func dropGlyphsIf(buf []Glyph, drop func(i int) bool, keptAhead, rtl bool) []Glyph {
+	flags := make([]bool, len(buf))
+	any := false
+	for i := range buf {
+		flags[i] = drop(i)
+		any = any || flags[i]
+	}
+	if !any {
+		return buf
+	}
+	if rtl {
+		reverseGlyphs(buf)
+		for i, j := 0, len(flags)-1; i < j; i, j = i+1, j-1 {
+			flags[i], flags[j] = flags[j], flags[i]
+		}
+	}
 	n := 0
 	for i := range buf {
-		if drop(i) {
+		if flags[i] {
+			if n > 0 || !keptAhead {
+				deleteClusterInPlace(buf, i, n)
+			}
 			continue
 		}
 		buf[n] = buf[i]
 		n++
+	}
+	if rtl {
+		reverseGlyphs(buf[:n])
 	}
 	return buf[:n]
 }
@@ -391,6 +426,6 @@ func dropGlyphsIf(buf []Glyph, drop func(i int) bool) []Glyph {
 // path's end of the story above. Nothing positions a glyph that is about to
 // go, so it goes before positioning; HarfBuzz takes them out after, and its
 // positioning steps over them.
-func dropIgnorables(buf []Glyph) []Glyph {
-	return dropUnsubstituted(buf, func(i int) bool { return buf[i].ignorable != notIgnorable })
+func (sh shaper) dropIgnorables(buf []Glyph) []Glyph {
+	return sh.dropUnsubstituted(buf, func(i int) bool { return buf[i].ignorable != notIgnorable })
 }

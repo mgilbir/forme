@@ -137,15 +137,11 @@ func readVerticalInstanceGolden(t *testing.T) []*hbInstanceFace {
 				s.tags = ""
 			}
 			for _, f := range fields[1:] {
-				parts := strings.Split(f, ",")
-				if len(parts) != 5 {
-					t.Fatalf("%s:%d: %q has %d parts, want 5", path, line, f, len(parts))
+				p, err := parseHBPosition(f)
+				if err != nil {
+					t.Fatalf("%s:%d: %v", path, line, err)
 				}
-				var n [5]int
-				for i, p := range parts {
-					n[i] = atoi(line, p)
-				}
-				s.glyphs = append(s.glyphs, hbPosition{n[0], n[1], n[2], n[3], n[4]})
+				s.glyphs = append(s.glyphs, p)
 			}
 			loc.shaped = append(loc.shaped, s)
 		default:
@@ -210,10 +206,10 @@ func checkLocationShaped(t *testing.T, f *Face, loc *hbLocation, strs []string) 
 		}
 		for k, g := range got {
 			w := want.glyphs[k]
-			if g.GID != w.gid || f.units(g.XAdvance) != w.xAdvance || f.units(g.XOffset) != w.dx || f.units(g.YOffset) != w.dy {
-				t.Errorf("%s across: glyph %d is %d advancing %d at (%d, %d), want %d advancing %d at (%d, %d)",
-					describeRunes(s), k, g.GID, f.units(g.XAdvance), f.units(g.XOffset), f.units(g.YOffset),
-					w.gid, w.xAdvance, w.dx, w.dy)
+			if g.GID != w.gid || f.units(g.XAdvance) != w.xAdvance || f.units(g.XOffset) != w.dx || f.units(g.YOffset) != w.dy || g.Cluster != w.cluster {
+				t.Errorf("%s across: glyph %d is %d advancing %d at (%d, %d) in cluster %d, want %d advancing %d at (%d, %d) in %d",
+					describeRunes(s), k, g.GID, f.units(g.XAdvance), f.units(g.XOffset), f.units(g.YOffset), g.Cluster,
+					w.gid, w.xAdvance, w.dx, w.dy, w.cluster)
 			}
 		}
 	}

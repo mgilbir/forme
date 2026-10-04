@@ -714,6 +714,9 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune,
 
 		cluster := append([]Glyph(nil), buf[cl.start:cl.end]...)
 		record := append([]useInfo(nil), info[cl.start:cl.end]...)
+		// The clusters either side, which a merge of clusters reaches into.
+		sh := sh
+		sh.edges = &clusterEdges{before: out, after: buf[cl.end:]}
 		cluster = sh.shapeUseCluster(cluster, &record, p, cl.kind, dotted, hasDotted)
 		sh.f.runWork.size(len(out) + len(cluster))
 		out = append(out, cluster...)
@@ -740,7 +743,7 @@ func (sh shaper) shapeUniversal(buf []Glyph, runes []rune, before, after []rune,
 	}
 	// What is left of a character nothing is drawn for. It has said everything
 	// it had to say — which cluster it broke — and must not reach the page.
-	return dropUnsubstituted(buf, func(i int) bool {
+	return sh.dropUnsubstituted(buf, func(i int) bool {
 		return i < len(info) && info[i].ignorable
 	})
 }
@@ -895,7 +898,7 @@ func (sh shaper) shapeUseCluster(buf []Glyph, info *[]useInfo, p *plan,
 		buf, *info = sh.insertUseGlyph(buf, *info, at, dotted, useInfo{cat: useB})
 	}
 	if kind.reorders() {
-		reorderUseCluster(buf, *info, 0, len(buf))
+		reorderUseCluster(sh.edges, buf, *info, 0, len(buf))
 	}
 	return buf
 }
@@ -1002,7 +1005,7 @@ func respliceUseInfo(info []useInfo, at, delta int) []useInfo {
 // Only the first glyph of a decomposition moves. A vowel sign the font took
 // apart has its pieces on different sides of the letter, and moving the lot
 // would take the piece that belongs after the letter round to the front.
-func reorderUseCluster(buf []Glyph, info []useInfo, start, end int) {
+func reorderUseCluster(e *clusterEdges, buf []Glyph, info []useInfo, start, end int) {
 	if start < 0 || end > len(buf) || end > len(info) || end-start < 2 {
 		return
 	}
@@ -1025,7 +1028,7 @@ func reorderUseCluster(buf []Glyph, info []useInfo, start, end int) {
 				i--
 			}
 			if i > start {
-				rotateUse(buf, info, start, start+1, i+1)
+				rotateUse(e, buf, info, start, start+1, i+1)
 			}
 			break
 		}
@@ -1045,7 +1048,7 @@ func reorderUseCluster(buf []Glyph, info []useInfo, start, end int) {
 			// the two — which is what the model says and what looked like an
 			// error worth "fixing" until HarfBuzz was asked: for a Balinese
 			// letter carrying two of them it gives the same reversal.
-			rotateUse(buf, info, at, i, i+1)
+			rotateUse(e, buf, info, at, i, i+1)
 		}
 	}
 }
@@ -1078,20 +1081,20 @@ func isUseHalant(t useInfo) bool {
 // rotateUse moves buf[mid:end] to the front of buf[start:end], keeping the order
 // within each part and carrying the per-glyph record with it.
 //
-// Everything it moves becomes one cluster: the glyphs are no longer in the order
-// their characters were written, so the smallest piece of text that can honestly
-// be pointed at is the whole of what was rearranged.
-func rotateUse(buf []Glyph, info []useInfo, start, mid, end int) {
+// Everything it moves becomes one cluster, as HarfBuzz merges it, with the
+// glyphs either side that shared a cluster with its ends; e is the clusters
+// either side of the one being shaped. See cluster.go.
+func rotateUse(e *clusterEdges, buf []Glyph, info []useInfo, start, mid, end int) {
 	if start < 0 || start >= mid || mid >= end || end > len(buf) || end > len(info) {
 		return
 	}
+	mergeClusters(e, buf, start, end)
 	movedBuf := append([]Glyph(nil), buf[mid:end]...)
 	movedInfo := append([]useInfo(nil), info[mid:end]...)
 	copy(buf[start+len(movedBuf):end], buf[start:mid])
 	copy(info[start+len(movedInfo):end], info[start:mid])
 	copy(buf[start:], movedBuf)
 	copy(info[start:], movedInfo)
-	oneCluster(buf, start, end)
 }
 
 // universalScripts are the OpenType script tags the engine is used for.

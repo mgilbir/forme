@@ -77,10 +77,12 @@ import (
 //
 // # Clusters
 //
-// A syllable's glyphs all take the cluster of its first character. They have to:
-// once the glyphs are in drawing order they no longer correspond one-for-one to
-// the characters, and a syllable is the smallest piece of these scripts that can
-// honestly be mapped back to a position in the text.
+// A glyph the reorderings move is merged into one cluster with the glyphs it
+// moves past, and no further, as HarfBuzz merges them: a pre-base matra with
+// what lies between it and the base, a reph with what it moves after, the
+// glyphs after the base that the sort shuffled among themselves. A conjunct
+// whose half form and base were not reordered keeps two clusters, which is
+// where a caret may stand between them. See cluster.go.
 
 // indicCat is what a character is within a syllable — the shaping category,
 // which is Unicode's Indic_Syllabic_Category collapsed onto the distinctions
@@ -870,6 +872,9 @@ func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan, 
 	for _, syl := range indicSyllables(cats) {
 		syllable := append([]Glyph(nil), buf[syl.start:syl.end]...)
 		record := append([]indicInfo(nil), info[syl.start:syl.end]...)
+		// The syllables either side, which a merge of clusters reaches into.
+		sh := sh
+		sh.edges = &clusterEdges{before: out, after: buf[syl.end:]}
 		if syl.kind == sylNonIndic || syl.kind == sylSymbol {
 			syllable = sh.shapeIndicUnordered(syllable, &record, p)
 		} else {
@@ -901,7 +906,7 @@ func (sh shaper) shapeIndic(buf []Glyph, runes, before []rune, plan *indicPlan, 
 	// The joiners have now done everything they are for: the forms they forced
 	// or forbade are made, and nothing below is written about them. What is left
 	// is a character with no shape, which must not reach the page.
-	return dropUnsubstituted(buf, func(i int) bool {
+	return sh.dropUnsubstituted(buf, func(i int) bool {
 		return i < len(info) && (indicIsJoiner(info[i].cat) || info[i].ignorable)
 	})
 }
@@ -1169,11 +1174,6 @@ func (sh shaper) shapeIndicSyllable(buf []Glyph, info *[]indicInfo, plan *indicP
 	if len(buf) > 0 && (*info)[0].pos == posPreM && wordStart {
 		buf[0].mask |= maskInit
 	}
-
-	// One cluster for the syllable: its glyphs are no longer in the order its
-	// characters are, so the syllable is the smallest piece that can be mapped
-	// back to the text at all.
-	oneCluster(buf, 0, len(buf))
 	return buf
 }
 
@@ -1411,6 +1411,7 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 	if plan.cfg.swapsRaHalantJoiner && start+3 <= end &&
 		info[start].cat == catRa && info[start+1].cat == catHalant &&
 		info[start+2].cat == catZWJ {
+		mergeClusters(sh.edges, buf, start+1, start+3)
 		buf[start+1], buf[start+2] = buf[start+2], buf[start+1]
 		info[start+1], info[start+2] = info[start+2], info[start+1]
 	}
@@ -1590,6 +1591,13 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 		}
 	}
 
+	// Where each glyph stood before the sort, in its syllable field for the
+	// while, as HarfBuzz keeps it: the clusters of what the sort moved past the
+	// base are merged by it below.
+	syllable := info[start].syllable
+	for i := start; i < end; i++ {
+		info[i].syllable = int32(i - start)
+	}
 	sortIndicByPosition(buf, info, start, end)
 
 	// Find the base again, and turn round a run of more than one pre-base matra
@@ -1628,6 +1636,33 @@ func (sh shaper) indicInitialReorder(buf []Glyph, info []indicInfo, plan *indicP
 				at = j + 1
 			}
 		}
+	}
+
+	// The clusters of what the sort moved around after the base, merged from
+	// the base on: each cycle of the permutation the sort made is one
+	// cluster. What it moved before the base is the final reordering's to
+	// merge, up to the base, so that the two interlock. An old-spec syllable,
+	// whose viramas move, and a long one are merged from the base whole.
+	if plan.oldSpec || end-start > 127 {
+		mergeClusters(sh.edges, buf, base, end)
+	} else {
+		const done = -1
+		for i := base; i < end; i++ {
+			if info[i].syllable == done {
+				continue
+			}
+			lo, hi := i, i
+			for j := start + int(info[i].syllable); j != i; {
+				lo, hi = min(lo, j), max(hi, j)
+				next := start + int(info[j].syllable)
+				info[j].syllable = done
+				j = next
+			}
+			mergeClusters(sh.edges, buf, max(base, lo), hi+1)
+		}
+	}
+	for i := start; i < end; i++ {
+		info[i].syllable = syllable
 	}
 
 	// Which feature is for which glyph. The reph is made from the front of the
@@ -1832,7 +1867,17 @@ func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, plan *indicPla
 					base--
 				}
 				rotateIndicLeft(buf, info, old, newPos)
+				// Merged after the move, as HarfBuzz merges it: from the
+				// sign's new place up to the base.
+				mergeClusters(sh.edges, buf, newPos, min(end, base+1))
 				newPos--
+			}
+		} else {
+			for i := start; i < base; i++ {
+				if info[i].pos == posPreM {
+					mergeClusters(sh.edges, buf, i, min(end, base+1))
+					break
+				}
 			}
 		}
 	}
@@ -1854,6 +1899,7 @@ func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, plan *indicPla
 	if start+1 < end && info[start].pos == posRaToBecomeReph &&
 		(info[start].cat == catRepha) != info[start].ligated {
 		if newPos := indicRephPosition(info, plan, start, end, base); newPos > start {
+			mergeClusters(sh.edges, buf, start, newPos+1)
 			if start < base && base <= newPos {
 				base--
 			}
@@ -1893,6 +1939,7 @@ func (sh shaper) indicFinalReorder(buf []Glyph, info []indicInfo, plan *indicPla
 					newPos++
 				}
 				if newPos < i {
+					mergeClusters(sh.edges, buf, newPos, i+1)
 					rotateIndicRight(buf, info, newPos, i)
 					if newPos <= base && base < i {
 						base++
@@ -2028,6 +2075,26 @@ func sortIndicByPosition(buf []Glyph, info []indicInfo, start, end int) {
 			buf[j], info[j] = buf[j-1], info[j-1]
 			j--
 		}
+		buf[j], info[j] = g, f
+	}
+}
+
+// sortMergingClusters is sortIndicByPosition as HarfBuzz's buffer sort makes
+// it: the same insertion sort, each glyph moved back merged into one cluster
+// with the glyphs it moves past. See cluster.go.
+func sortMergingClusters(e *clusterEdges, buf []Glyph, info []indicInfo, start, end int) {
+	for i := start + 1; i < end; i++ {
+		j := i
+		for j > start && info[j-1].pos > info[i].pos {
+			j--
+		}
+		if j == i {
+			continue
+		}
+		mergeClusters(e, buf, j, i+1)
+		g, f := buf[i], info[i]
+		copy(buf[j+1:i+1], buf[j:i])
+		copy(info[j+1:i+1], info[j:i])
 		buf[j], info[j] = g, f
 	}
 }

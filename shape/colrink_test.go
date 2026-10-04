@@ -169,10 +169,10 @@ func TestColourInkPlacesMarksAsHarfBuzzDoes(t *testing.T) {
 		for k, g := range glyphs {
 			w := want.across[i][k]
 			if g.GID != w.gid || f.units(g.XAdvance) != w.xAdvance ||
-				f.units(g.XOffset) != w.dx || f.units(g.YOffset) != w.dy {
-				t.Errorf("%s: glyph %d is %d advancing %d at (%d, %d), want %d advancing %d at (%d, %d)",
+				f.units(g.XOffset) != w.dx || f.units(g.YOffset) != w.dy || g.Cluster != w.cluster {
+				t.Errorf("%s: glyph %d is %d advancing %d at (%d, %d) in cluster %d, want %d advancing %d at (%d, %d) in %d",
 					describeRunes(s), k, g.GID, f.units(g.XAdvance), f.units(g.XOffset),
-					f.units(g.YOffset), w.gid, w.xAdvance, w.dx, w.dy)
+					f.units(g.YOffset), g.Cluster, w.gid, w.xAdvance, w.dx, w.dy, w.cluster)
 			}
 		}
 		down, _ := f.ShapeGlyphsInContext(s, "", "", Features{Vertical: true})

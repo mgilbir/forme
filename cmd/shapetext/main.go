@@ -8,10 +8,10 @@
 // The output is the format testdata/harfbuzz/shape.py writes, so the two can be
 // compared line for line:
 //
-//	<glyph>,<advance>[,<dx>,<dy>] <glyph>,<advance> ...
+//	<glyph>,<advance>[,<dx>,<dy>]@<cluster> <glyph>,<advance>@<cluster> ...
 //
-// with the offsets left off where they are zero. Advances and offsets are in
-// font units, which is what HarfBuzz reports; this package works in thousandths
+// with the offsets left off where they are zero, and the cluster a byte offset
+// into the line. Advances and offsets are in font units, which is what HarfBuzz reports; this package works in thousandths
 // of an em, so the conversion happens here rather than in the comparison.
 //
 //	go run ./cmd/shapetext <font.ttf> [language] < lines.txt
@@ -66,10 +66,10 @@ func main() {
 			adv := units(g.XAdvance, upm)
 			dx, dy := units(g.XOffset, upm), units(g.YOffset, upm)
 			if dx != 0 || dy != 0 {
-				parts = append(parts, fmt.Sprintf("%d,%d,%d,%d", g.GID, adv, dx, dy))
+				parts = append(parts, fmt.Sprintf("%d,%d,%d,%d@%d", g.GID, adv, dx, dy, g.Cluster))
 				continue
 			}
-			parts = append(parts, fmt.Sprintf("%d,%d", g.GID, adv))
+			parts = append(parts, fmt.Sprintf("%d,%d@%d", g.GID, adv, g.Cluster))
 		}
 		fmt.Fprintln(out, strings.Join(parts, " "))
 	}

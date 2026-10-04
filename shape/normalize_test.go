@@ -219,12 +219,13 @@ func TestNormalizeKeepsClusters(t *testing.T) {
 			text: "ae\u0323\u0301b", want: []int{0, 1, 1, 6}, count: 4,
 		},
 		{
-			why:  "a mark that moves past another takes the span down with it",
+			why:  "a letter's marks are its cluster, however they are reordered",
 			face: []rune{'e', acute, cedilla},
 			// The acute is written first at offset 1 and drawn second; the
-			// cedilla is written second at offset 3 and drawn first. Both end up
-			// at 1, the earliest character of the span they now cover.
-			text: "e\u0301\u0327", want: []int{0, 1, 1}, count: 3,
+			// cedilla is written second at offset 3 and drawn first. All three
+			// are one grapheme, and so one cluster, the letter's, from before
+			// anything is reordered, as HarfBuzz forms them.
+			text: "e\u0301\u0327", want: []int{0, 0, 0}, count: 3,
 		},
 	} {
 		// Every fixture above ends in a letter the face must also have.

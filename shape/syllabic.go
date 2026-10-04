@@ -148,27 +148,6 @@ func (sh shaper) insertGlyphAt(buf []Glyph, info []indicInfo, at, gid int, what 
 	return buf, info
 }
 
-// oneCluster gives every glyph of a syllable the cluster of its first
-// character.
-//
-// It has to: once the glyphs are in drawing order they no longer correspond
-// one-for-one to the characters, and a syllable is the smallest piece of these
-// scripts that can honestly be mapped back to a position in the text.
-func oneCluster(buf []Glyph, start, end int) {
-	if start >= end {
-		return
-	}
-	cluster := buf[start].Cluster
-	for i := start; i < end; i++ {
-		if buf[i].Cluster < cluster {
-			cluster = buf[i].Cluster
-		}
-	}
-	for i := start; i < end; i++ {
-		buf[i].Cluster = cluster
-	}
-}
-
 // moveGlyphToFront moves the glyph at from to at, shifting what lies between
 // forward by one. It is the mirror of rotateIndicLeft, and is what the Khmer
 // reordering is made of: a pre-base vowel sign and a subscript Ro are both

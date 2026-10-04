@@ -1,6 +1,7 @@
 package shape
 
 import (
+	"sort"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/bidi"
@@ -28,10 +29,17 @@ type Glyph struct {
 	GID int
 
 	// Cluster is the byte offset, in the input string, of the first character
-	// this glyph came from. Several glyphs may share a cluster — a letter and
-	// its accent — and one glyph may stand for several characters, as a
-	// ligature does. It is what maps a position in the text to a position on
-	// the page, for selection, search and hit-testing.
+	// of the cluster this glyph belongs to, and is HarfBuzz's cluster at its
+	// default level. A cluster is at least a grapheme: a letter and its
+	// accents, an emoji and its skin tone, a sequence joined by zero width
+	// joiners, a pair of regional indicators. It grows wherever shaping joins
+	// or moves glyphs: a ligature takes the clusters of what it joined, a
+	// syllable of a script whose vowel signs are drawn before their consonant
+	// is one cluster, and a character nothing is drawn for joins the cluster
+	// beside it. Several glyphs may share a cluster and one glyph may stand for
+	// several characters; the clusters of a run never go back in the text, in
+	// logical order. It is what maps a position in the text to a position on
+	// the page, for selection, search and hit-testing. See cluster.go.
 	Cluster int
 
 	// XAdvance is how far the pen moves after this glyph is drawn. It starts as
@@ -346,6 +354,127 @@ type shapeContext struct {
 	// cut by script (shapeDirection) moves at.
 	missed *[]int
 	at     int
+	// keptBefore, keptAfter, dropped and justDropped say what the text
+	// either side of this piece is, where the piece is part of a string cut
+	// by direction or by script, as HarfBuzz, which shapes the string as one
+	// buffer, sees it when it takes out a character nothing is drawn for
+	// (delete_glyphs_inplace): whether any of the text before and after is
+	// drawn; where none before is, how many bytes of it there are; and how
+	// many bytes of characters nothing is drawn for stand immediately before
+	// the piece. See clustersAfterCut.
+	keptBefore, keptAfter bool
+	dropped, justDropped  int
+	// within is, where the cut fell inside a grapheme — a mark after a
+	// character of the piece before, say — how many bytes back that grapheme
+	// starts, so that the piece's first glyphs are of its cluster as
+	// HarfBuzz's would be.
+	within int
+}
+
+// keptAhead is whether anything of the piece's buffer is drawn before it on
+// the page: the text before it, or for a run drawn right to left the text
+// after it.
+func (ctx shapeContext) keptAhead(rtl bool) bool {
+	if rtl {
+		return ctx.keptAfter
+	}
+	return ctx.keptBefore
+}
+
+// cutScan is what the pieces a string is cut into are told of the text
+// either side of each, worked out once for the string: where its first and
+// last characters that are drawn are, where the grapheme each character is
+// in starts, and where each stretch of characters nothing is drawn for
+// starts.
+type cutScan struct {
+	firstKept, lastKept int
+	offsets             []int
+	starts              []int
+	dropFrom            []int
+}
+
+func newCutScan(s string) *cutScan {
+	c := &cutScan{firstKept: len(s), lastKept: -1}
+	var runes []rune
+	for i, r := range s {
+		runes, c.offsets = append(runes, r), append(c.offsets, i)
+		if ignorableKindOf(r) == notIgnorable {
+			if c.firstKept == len(s) {
+				c.firstKept = i
+			}
+			c.lastKept = i
+		}
+	}
+	cont := graphemeContinues(runes)
+	c.starts = make([]int, len(runes))
+	c.dropFrom = make([]int, len(runes))
+	for k, r := range runes {
+		c.starts[k] = c.offsets[k]
+		if k > 0 && cont[k] {
+			c.starts[k] = c.starts[k-1]
+		}
+		// A character nothing is drawn for that continues a grapheme shares
+		// its cluster, which survives it, so it starts no stretch.
+		c.dropFrom[k] = -1
+		if ignorableKindOf(r) != notIgnorable && !cont[k] {
+			c.dropFrom[k] = c.offsets[k]
+			if k > 0 && c.dropFrom[k-1] >= 0 {
+				c.dropFrom[k] = c.dropFrom[k-1]
+			}
+		}
+	}
+	return c
+}
+
+// context is ctx for the piece of the string from one byte offset to
+// another: see shapeContext.keptBefore and shapeContext.within.
+func (c *cutScan) context(ctx shapeContext, at, end int) shapeContext {
+	if c.lastKept >= end {
+		ctx.keptAfter = true
+	}
+	if at == 0 {
+		return ctx
+	}
+	ctx.within, ctx.justDropped = 0, 0
+	if k := sort.SearchInts(c.offsets, at); k < len(c.offsets) && c.offsets[k] == at {
+		ctx.within = at - c.starts[k]
+		if k > 0 && c.dropFrom[k-1] >= 0 {
+			ctx.justDropped = at - c.dropFrom[k-1]
+		}
+	}
+	if ctx.keptBefore {
+		return ctx
+	}
+	if c.firstKept < at {
+		ctx.keptBefore, ctx.dropped = true, 0
+		return ctx
+	}
+	ctx.dropped += at
+	return ctx
+}
+
+// clustersAfterCut is what HarfBuzz's taking out of the characters nothing
+// is drawn for, before a piece in its string, does to the piece's clusters:
+// the clusters of its first glyphs, its earliest in the text, merged back to
+// where those characters start — where nothing before them is drawn; or, in
+// a run drawn right to left, which HarfBuzz walks in the order it is drawn,
+// where they stand immediately before the piece. buf is in the order the
+// text is written.
+func clustersAfterCut(buf []Glyph, ctx shapeContext, rtl bool) {
+	back := ctx.dropped
+	if ctx.keptBefore {
+		back = 0
+	}
+	if rtl {
+		back = ctx.justDropped
+	}
+	if back == 0 || len(buf) == 0 {
+		return
+	}
+	first := buf[0].Cluster
+	for i := 0; i < len(buf) && buf[i].Cluster == first; i++ {
+		buf[i].Cluster = -back
+	}
 }
 
 // runes returns the two sides as the shortest slices that still answer the
@@ -449,6 +578,7 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 		pieces[i] = [2]int{r.Start, r.End}
 	}
 	behind, ahead := scriptsBeside(s, pieces, scriptBehind(ctx.before), scriptAhead(ctx.after))
+	scan := newCutScan(s)
 	for i, r := range runs {
 		piece := s[r.Start:r.End]
 		// A run inside the string has the rest of the string for context, and
@@ -475,8 +605,12 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 			// got it for a Latin word and not for the same word beside a Hebrew
 			// one — the same declaration, honoured or not by whether the
 			// paragraph happened to change direction.
-			features: ctx.features,
+			features:   ctx.features,
+			keptBefore: ctx.keptBefore,
+			keptAfter:  ctx.keptAfter,
+			dropped:    ctx.dropped,
 		}
+		inner = scan.context(inner, r.Start, r.End)
 		// The sides that may contribute *glyphs* belong to the pieces they
 		// touch: what precedes the whole string precedes its first run, and
 		// what follows it follows its last. They were dropped as well, so a
@@ -528,12 +662,13 @@ func (f *Face) shapeDirection(s string, behind, ahead uint16, rtl bool, extra []
 		out     []Glyph
 		missing int
 	)
+	scan := newCutScan(s)
 	for k := range pieces {
 		p := pieces[k]
 		if rtl {
 			p = pieces[len(pieces)-1-k]
 		}
-		inner := ctx
+		inner := scan.context(ctx, p.start, p.end)
 		inner.at = ctx.at + p.start
 		if p.start > 0 {
 			inner.before = contextBefore(ctx.before, s[:p.start])
@@ -709,12 +844,29 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	if len(buf) == 0 {
 		return nil, missing
 	}
+	// Each grapheme is one cluster from here on, a grapheme the run starts in
+	// the middle of included. See cluster.go.
+	formClusters(buf, func(i int) (bool, bool) {
+		switch {
+		case isInsertedCircle(runes, offsets, i):
+			return true, true
+		case model == modelHangul:
+			return hangulJoins(runes, offsets, i)
+		}
+		return false, false
+	})
+	if ctx.within > 0 {
+		first := buf[0].Cluster
+		for i := 0; i < len(buf) && buf[i].Cluster == first; i++ {
+			buf[i].Cluster = -ctx.within
+		}
+	}
 	if model == modelIndic || model == modelUniversal {
 		markVowelCircles(buf, runes, offsets)
 	}
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.
-	sh := shaper{f: f, l: l, rtl: rtl, ligIDs: new(int), morx: morx,
+	sh := shaper{f: f, l: l, rtl: rtl, ligIDs: new(int), morx: morx, keptAhead: ctx.keptAhead(rtl),
 		zeroMarks: model.zeroMarks(), features: ctx.features, lang: lang,
 		ops: lookupBudget(len(buf))}
 	// What the run applies, and in which stages: see plan.go. It covers every
@@ -729,7 +881,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		maskFractions(buf, runes, rtl)
 	}
 	if p.rtlm {
-		maskUnmirrored(buf, runes, s)
+		maskUnmirrored(buf, runes, offsets, s)
 	}
 	// A script whose characters are not in the order they are drawn is shaped
 	// whole by its own pass: the reordering decides which of the font's rules
@@ -739,7 +891,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	before, after := ctx.runes()
 	if morx {
 		buf = sh.applyMorx(buf, rtl, vertical, ctx.features.requested(extra))
-		buf = dropIgnorables(buf)
+		buf = sh.dropIgnorables(buf)
 	} else if model.syllabic() {
 		buf = sh.shapeSyllabic(buf, runes, script, p, before, after)
 	} else {
@@ -764,8 +916,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		}
 		// The characters nothing is drawn for have said all they have to say
 		// once the substitutions are done. See ignorable.go.
-		buf = dropIgnorables(buf)
+		buf = sh.dropIgnorables(buf)
 	}
+	clustersAfterCut(buf, ctx, rtl)
 	if model == modelHebrew {
 		sh.gposScript = f.chosenPositioningTag(script, lang)
 	}
@@ -829,14 +982,14 @@ func (f *Face) keepUnmirrorable(s string, runes []rune, offsets []int) {
 // ones: a character with no mirror, and one whose mirror the face could not
 // draw, both leave the choice of a mirrored form to the font.
 //
-// buf is one to one with runes, and each glyph's cluster is the offset in s of
-// the character it came from.
-func maskUnmirrored(buf []Glyph, runes []rune, s string) {
+// buf is one to one with runes, and offsets are where in s each character
+// is: a glyph's cluster is its grapheme's and not always its own character's.
+func maskUnmirrored(buf []Glyph, runes []rune, offsets []int, s string) {
 	for i := range buf {
-		if i >= len(runes) || buf[i].Cluster < 0 || buf[i].Cluster >= len(s) {
+		if i >= len(runes) || offsets[i] < 0 || offsets[i] >= len(s) {
 			continue
 		}
-		orig, _ := utf8.DecodeRuneInString(s[buf[i].Cluster:])
+		orig, _ := utf8.DecodeRuneInString(s[offsets[i]:])
 		if m, ok := bidi.MirrorOf(orig); ok && m == runes[i] && m != orig {
 			continue
 		}

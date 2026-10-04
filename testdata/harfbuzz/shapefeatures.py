@@ -107,16 +107,17 @@ for spec, text in cases:
     tags = tags_of(split_spec(spec))
     font = hb.Font(face)
     buf = hb.Buffer()
-    buf.add_str(text)
+    # As UTF-8, so that a cluster is a byte offset, as a Glyph's is.
+    buf.add_utf8(text.encode("utf-8"))
     buf.guess_segment_properties()
     buf.flags = hb.BufferFlags.REMOVE_DEFAULT_IGNORABLES
     hb.shape(font, buf, {t: True for t in tags})
     fields = []
     for info, pos in zip(buf.glyph_infos, buf.glyph_positions):
         if pos.x_offset or pos.y_offset:
-            fields.append(f"{info.codepoint},{pos.x_advance},{pos.x_offset},{pos.y_offset}")
+            fields.append(f"{info.codepoint},{pos.x_advance},{pos.x_offset},{pos.y_offset}@{info.cluster}")
         else:
-            fields.append(f"{info.codepoint},{pos.x_advance}")
+            fields.append(f"{info.codepoint},{pos.x_advance}@{info.cluster}")
     out.append(" ".join(fields))
 
 with open(out_path, "w", encoding="utf-8") as w:

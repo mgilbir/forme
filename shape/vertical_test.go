@@ -57,7 +57,38 @@ func harfbuzzFont(t *testing.T, name string) []byte {
 
 // hbPosition is one glyph as HarfBuzz placed it, in font units, its offsets
 // measured from the pen as HarfBuzz measures them.
-type hbPosition struct{ gid, xAdvance, yAdvance, dx, dy int }
+type hbPosition struct {
+	gid, xAdvance, yAdvance, dx, dy int
+	// cluster is the glyph's cluster, a byte offset into the string.
+	cluster int
+}
+
+// parseHBPosition reads one glyph of an expectation: index, x and y advance,
+// x and y offset, and after an @ the cluster.
+func parseHBPosition(field string) (hbPosition, error) {
+	at := strings.IndexByte(field, '@')
+	if at < 0 {
+		return hbPosition{}, fmt.Errorf("%q states no cluster", field)
+	}
+	parts := strings.Split(field[:at], ",")
+	if len(parts) != 5 {
+		return hbPosition{}, fmt.Errorf("%q has %d parts, want 5", field, len(parts))
+	}
+	var n [6]int
+	for i, p := range append(parts, field[at+1:]) {
+		v, err := strconv.Atoi(p)
+		if err != nil {
+			return hbPosition{}, fmt.Errorf("%q: %v", field, err)
+		}
+		n[i] = v
+	}
+	return hbPosition{n[0], n[1], n[2], n[3], n[4], n[5]}, nil
+}
+
+// positionOf is a shaped glyph as an expectation states it, in font units.
+func positionOf(f *Face, g Glyph) hbPosition {
+	return hbPosition{g.GID, f.units(g.XAdvance), f.units(g.YAdvance), f.units(g.XOffset), f.units(g.YOffset), g.Cluster}
+}
 
 // hbVertical is one face's expectations.
 type hbVertical struct {
@@ -123,17 +154,11 @@ func readVerticalGolden(t *testing.T) (corpus []string, featured []featuredLine,
 		}
 		var glyphs []hbPosition
 		for _, field := range strings.Fields(rest) {
-			parts := strings.Split(field, ",")
-			if len(parts) != 5 {
-				t.Fatalf("%s:%d: %q has %d parts, want 5", path, line, field, len(parts))
+			p, err := parseHBPosition(field)
+			if err != nil {
+				t.Fatalf("%s:%d: %v", path, line, err)
 			}
-			var n [5]int
-			for i, p := range parts {
-				if n[i], err = strconv.Atoi(p); err != nil {
-					t.Fatalf("%s:%d: %v", path, line, err)
-				}
-			}
-			glyphs = append(glyphs, hbPosition{n[0], n[1], n[2], n[3], n[4]})
+			glyphs = append(glyphs, p)
 		}
 		switch kind {
 		case "V":
@@ -201,6 +226,8 @@ func sameUpright(f *Face, got []Glyph, want []hbPosition) (bool, string) {
 				i, f.units(g.XAdvance), f.units(g.YAdvance), w.xAdvance, w.yAdvance)
 		case dx != w.dx || dy != w.dy:
 			return false, fmt.Sprintf("glyph %d is placed at (%d, %d), want (%d, %d)", i, dx, dy, w.dx, w.dy)
+		case g.Cluster != w.cluster:
+			return false, fmt.Sprintf("glyph %d is in cluster %d, want %d", i, g.Cluster, w.cluster)
 		}
 	}
 	return true, ""
@@ -258,10 +285,10 @@ func TestSidewaysRunsAreShapedAsBefore(t *testing.T) {
 				for k, g := range glyphs {
 					w := expected[k]
 					if g.GID != w.gid || f.units(g.XAdvance) != w.xAdvance ||
-						f.units(g.XOffset) != w.dx || f.units(g.YOffset) != w.dy {
-						t.Errorf("%s: glyph %d is %d advancing %d at (%d, %d), want %d advancing %d at (%d, %d)",
+						f.units(g.XOffset) != w.dx || f.units(g.YOffset) != w.dy || g.Cluster != w.cluster {
+						t.Errorf("%s: glyph %d is %d advancing %d at (%d, %d) in cluster %d, want %d advancing %d at (%d, %d) in %d",
 							describeRunes(s), k, g.GID, f.units(g.XAdvance), f.units(g.XOffset),
-							f.units(g.YOffset), w.gid, w.xAdvance, w.dx, w.dy)
+							f.units(g.YOffset), g.Cluster, w.gid, w.xAdvance, w.dx, w.dy, w.cluster)
 						break
 					}
 					if g.YAdvance != 0 || g.VOriginX != 0 || g.VOriginY != 0 {

@@ -388,16 +388,16 @@ func TestMarkStaysOnItsBaseAfterReversal(t *testing.T) {
 	}
 	at := drawnAt(glyphs)
 
-	// Find the mark and its base by where they came from: the mark is the last
-	// character written, its base the one before it.
+	// Find the mark by its glyph, and its base by where it came from: the
+	// beh written second, which with its mark is the cluster two bytes in.
 	var markAt, baseAt float64
 	found := 0
 	for i, g := range glyphs {
-		switch g.Cluster {
-		case 4: // the fatha, two two-byte letters in
+		switch {
+		case g.GID == gMark:
 			markAt = at[i]
 			found++
-		case 2: // the beh it is written on
+		case g.GID == gBase && g.Cluster == 2:
 			baseAt = at[i]
 			found++
 		}

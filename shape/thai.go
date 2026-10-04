@@ -44,10 +44,9 @@ package shape
 // moved across become one cluster, since there is no longer a place between
 // them a caret could sit, and the offsets have to stay in order. That is the
 // rule normalize.go applies to a mark that moves past another. Where nothing
-// moves, the two pieces keep the offset of the character they came from and
-// nothing else is merged: a cluster here is a character, not a grapheme — see
-// Glyph.Cluster — which is where this parts from HarfBuzz, whose default cluster
-// level merges the pieces into the consonant's cluster as well.
+// moves, the two pieces keep the offset of the character they came from, and
+// it is formClusters that then merges them into the consonant's cluster, as
+// HarfBuzz does — see cluster.go.
 func thaiPreprocess(runes []rune, offsets []int) ([]rune, []int) {
 	first := -1
 	for i, r := range runes {

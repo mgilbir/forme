@@ -154,6 +154,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 			// Nothing was consumed, so the caller stays where it is: what
 			// followed has moved into this place and has not been looked at.
 			if ok && len(reps) == 0 {
+				deleteClusterAt(sh.edges, sh.settledRun(), buf, at)
 				out := sh.replace(buf, at, 1, nil)
 				sh.deleted(at)
 				return 0, out
@@ -399,13 +400,11 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 	last := comps[len(comps)-1]
 
 	// The cluster is the earliest of everything the ligature spans, kept glyphs
-	// included: it is where the indivisible stretch of text begins.
+	// included: it is where the indivisible stretch of text begins. It is
+	// merged as ligate_input merges it, so a glyph beside the ligature that
+	// shared a cluster with one of its parts shares the ligature's.
+	mergeClustersAt(sh.edges, sh.settledRun(), buf, at, at, last+1, false)
 	cluster := buf[at].Cluster
-	for i := at; i <= last; i++ {
-		if buf[i].Cluster < cluster {
-			cluster = buf[i].Cluster
-		}
-	}
 
 	isComponent := make([]bool, last-at+1)
 	for _, p := range comps {
