@@ -273,6 +273,7 @@ func FuzzLoadAndUse(f *testing.F) {
 		"KerxPairs.ttf",         // AAT kerx: the pair formats, tuples, across the line
 		"KerxMachines.ttf",      // AAT kerx: the state machines, ankr
 		"TrakCases.ttf",         // AAT trak: tracks, sizes, graphemes
+		"SVGPaint.ttf",          // SVG documents, gzipped and cut at the table's end
 	} {
 		if data, err := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", name)); err == nil {
 			f.Add(data)

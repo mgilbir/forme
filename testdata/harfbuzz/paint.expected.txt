@@ -3179,6 +3179,58 @@ G 3
 CG 3
 S 51 102 153 204 1
 c
+face SVGPaint.ttf palette 0 ppem 0 overrides - 1f4dad6e03e5ae4798666abd4c4e3362b00d607084597b2a9a953db318f08da3
+G 0
+CG 0
+S 51 102 153 204 1
+c
+G 1
+I 0 0 svg 0.0 none 142 b66bb638dbe7fa19
+G 2
+CG 1
+S 0 128 0 255 0
+c
+G 3
+I 0 0 svg 0.0 none 150 1f565c93c5573f19
+G 4
+I 90 100 png 0.0 181 1408 1355 -1600 16 098d4b88253a69d6
+G 5
+I 0 0 svg 0.0 none 226 70504f4dfb01d317
+G 6
+I 0 0 svg 0.0 none 226 70504f4dfb01d317
+G 7
+I 0 0 svg 0.0 none 143 d3c66530d2f813e2
+G 8
+CG 8
+S 51 102 153 204 1
+c
+face SVGPaint.ttf palette 0 ppem 20 overrides - 1f4dad6e03e5ae4798666abd4c4e3362b00d607084597b2a9a953db318f08da3
+G 0
+CG 0
+S 51 102 153 204 1
+c
+G 1
+I 0 0 svg 0.0 none 142 b66bb638dbe7fa19
+G 2
+CG 1
+S 0 128 0 255 0
+c
+G 3
+I 0 0 svg 0.0 none 150 1f565c93c5573f19
+G 4
+CG 4
+S 51 102 153 204 1
+c
+G 5
+I 0 0 svg 0.0 none 226 70504f4dfb01d317
+G 6
+I 0 0 svg 0.0 none 226 70504f4dfb01d317
+G 7
+I 0 0 svg 0.0 none 143 d3c66530d2f813e2
+G 8
+CG 8
+S 51 102 153 204 1
+c
 face Noto-COLRv1.ttf palette 0 ppem 0 overrides - b8e25ea68db82f9e4d0aee921f4420be2be39887bd5c893a2ad98710531f9d0c
 G 3827
 CR 32.0 -160.0 1248.0 864.0

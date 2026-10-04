@@ -247,6 +247,9 @@ type Face struct {
 	kerx *kerxTable
 	trak []byte
 
+	// svg is the face's SVG glyphs, where it has them. See svg.go.
+	svg *svgTable
+
 	// bitmapOnly is a face whose glyphs are only bitmaps, with no outlines at
 	// all. See BitmapOnly.
 	bitmapOnly bool
@@ -552,6 +555,7 @@ func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face,
 	f.feat = readFeat(tables["feat"])
 	f.kerx = readKerx(tables, prog.NumGlyphs)
 	f.trak = readTrak(tables)
+	f.svg = readSVG(tables["SVG "])
 	f.bitmap = newCBDTInk(tables, f.unitsPerEm)
 	f.sbix = newSbixInk(tables, prog.NumGlyphs, f.unitsPerEm)
 	f.varc = newVARCFace(f, tables, prog.NumGlyphs)

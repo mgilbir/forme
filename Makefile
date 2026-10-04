@@ -322,7 +322,9 @@ hbcolrink:
 # (which nothing overrides). ColourInk.ttf is every paint
 # format and every thing painting does to a box (colrink_fixture.py, built by
 # hbcolrink). The bitmap faces are asked at sizes on, between and past their
-# strikes, which is how the strike is chosen. Noto Color Emoji's COLRv1 build,
+# strikes, which is how the strike is chosen. SVGPaint.ttf (paint_fixture.py, from
+# BitmapInk.ttf) is SVG documents painted after COLR and before the bitmaps,
+# at two sizes. Noto Color Emoji's COLRv1 build,
 # from `make emoji-fonts`, is painted for a few glyphs: three flags with coats of
 # arms of thousands of paints each, and two ordinary emoji; and its CBDT build,
 # which has no outlines at all, for a few glyphs and at a size below its strike.
@@ -355,6 +357,8 @@ hbpaint:
 		SbixInk.ttf=$(HBFONTS)/SbixInk.ttf:bitmap=1:ppem=100 \
 		SbixInkLarge.ttf=$(HBFONTS)/SbixInkLarge.ttf:bitmap=1 \
 		SbixInkRejected.ttf=$(HBFONTS)/SbixInkRejected.ttf:bitmap=1 \
+		SVGPaint.ttf=$(HBFONTS)/SVGPaint.ttf:bitmap=1 \
+		SVGPaint.ttf=$(HBFONTS)/SVGPaint.ttf:bitmap=1:ppem=20 \
 		Noto-COLRv1.ttf=$(EMOJI_DIR)/Noto-COLRv1.ttf:glyphs=3827,3830,3979,100,1500 \
 		NotoColorEmoji.ttf=$(EMOJI_DIR)/NotoColorEmoji.ttf:bitmap=1:glyphs=0,1,5,1494,1714,1978,2032,2325,4045 \
 		NotoColorEmoji.ttf=$(EMOJI_DIR)/NotoColorEmoji.ttf:bitmap=1:ppem=20:glyphs=5,1714,2032

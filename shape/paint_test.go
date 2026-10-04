@@ -77,11 +77,19 @@ func (r *recordingPainter) SweepGradient(g SweepGradient) {
 	r.add("W %s", lineText(g.Line, g.Center.X, g.Center.Y, g.StartAngle, g.EndAngle))
 }
 func (r *recordingPainter) Image(img Image) {
+	sum := sha256.Sum256(img.Data)
+	if img.Format == ImageSVG {
+		if img.Width != 0 || img.Height != 0 || img.Box != (Rect{}) {
+			r.add("I an SVG document with a size %d %d %v", img.Width, img.Height, img.Box)
+			return
+		}
+		r.add("I 0 0 svg 0.0 none %d %s", len(img.Data), hex.EncodeToString(sum[:])[:16])
+		return
+	}
 	if img.Format != ImagePNG {
 		r.add("I unknown format %d", img.Format)
 		return
 	}
-	sum := sha256.Sum256(img.Data)
 	r.add("I %d %d png 0.0 %s %s %s %s %d %s", img.Width, img.Height,
 		num(img.Box.XMin), num(img.Box.YMax), num(img.Box.XMax-img.Box.XMin), num(img.Box.YMin-img.Box.YMax),
 		len(img.Data), hex.EncodeToString(sum[:])[:16])
@@ -298,7 +306,9 @@ func TestGlyphColourSaysWhatIsPainted(t *testing.T) {
 			case ColourNone:
 				ok = plain || f.BitmapOnly() && len(r.lines) == 0
 			case ColourBitmap:
-				ok = image
+				ok = image && !strings.Contains(r.lines[0], " svg ")
+			case ColourSVG:
+				ok = image && strings.Contains(r.lines[0], " svg ")
 			case ColourLayers:
 				ok = !image && len(r.lines)%3 == 0
 			case ColourPaint:
@@ -309,7 +319,7 @@ func TestGlyphColourSaysWhatIsPainted(t *testing.T) {
 			}
 		}
 	}
-	for _, kind := range []GlyphColour{ColourNone, ColourPaint, ColourLayers, ColourBitmap} {
+	for _, kind := range []GlyphColour{ColourNone, ColourPaint, ColourLayers, ColourBitmap, ColourSVG} {
 		if !seen[kind] {
 			t.Errorf("no glyph is %d, so this test does not reach it", kind)
 		}

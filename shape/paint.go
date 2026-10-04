@@ -31,9 +31,10 @@ import (
 // each outline a fill is clipped to; painting here is in font units, where
 // both are the identity, and they are left out.
 //
-// Which table a glyph is painted from is HarfBuzz's order too: COLR, then CBDT,
-// then sbix, and a glyph none of them paints is painted as its outline, filled
-// with the foreground colour. GlyphColour says which, ahead of painting.
+// Which table a glyph is painted from is HarfBuzz's order too: COLR, then SVG,
+// then CBDT, then sbix, and a glyph none of them paints is painted as its
+// outline, filled with the foreground colour. GlyphColour says which, ahead of
+// painting.
 //
 // # What it costs, and what is refused
 //
@@ -167,12 +168,23 @@ type ImageFormat uint8
 // HarfBuzz paints them.
 const (
 	ImagePNG ImageFormat = iota + 1
+	// ImageSVG is an SVG glyph's document. See Image.
+	ImageSVG
 )
 
-// Image is a bitmap glyph's image, for its strike: the image file, its width
-// and height in pixels, and Box, where it is drawn, in font units — the image
-// is scaled to fill it. Data is the font's own bytes, and is not to be
+// Image is a glyph's image. Data is the font's own bytes, and is not to be
 // changed.
+//
+// A bitmap glyph's is the image file for its strike, its width and height in
+// pixels, and Box, where it is drawn, in font units — the image is scaled to
+// fill it.
+//
+// An SVG glyph's is the SVG document the glyph is in, as the font holds it,
+// and nothing else: Width, Height and Box are zero, as HarfBuzz hands it over.
+// The document may draw several glyphs, each the element whose id is "glyph"
+// and the glyph's index ("glyph42"), which is the one to draw; it places
+// itself, in font units with y running down from the baseline; and it may be
+// gzip-compressed, which its first two bytes, 0x1F and 0x8B, say.
 type Image struct {
 	Format        ImageFormat
 	Data          []byte
@@ -237,7 +249,9 @@ type PaintOptions struct {
 // GlyphColour is which of its representations PaintGlyph paints a glyph from.
 type GlyphColour uint8
 
-// The representations, in the order PaintGlyph asks for them.
+// The representations. PaintGlyph asks for them in the order COLR (ColourPaint
+// and ColourLayers), ColourSVG, ColourBitmap; ColourSVG comes last here only
+// so that the others keep their values.
 const (
 	// ColourNone is a glyph with no colour: it is painted as its outline,
 	// filled with the foreground, or, in a face with no outlines
@@ -250,6 +264,8 @@ const (
 	ColourLayers
 	// ColourBitmap is a CBDT or sbix glyph, an image.
 	ColourBitmap
+	// ColourSVG is a glyph of the SVG table, an SVG document. See Image.
+	ColourSVG
 )
 
 // GlyphColour says which representation PaintGlyph paints a glyph from, at a
@@ -270,14 +286,18 @@ func (f *Face) GlyphColour(gid, ppem int) GlyphColour {
 			return ColourLayers
 		}
 	}
+	if _, ok := f.svg.document(gid); ok {
+		return ColourSVG
+	}
 	if _, ok := f.bitmapImage(gid, ppem); ok {
 		return ColourBitmap
 	}
 	return ColourNone
 }
 
-// PaintGlyph paints a glyph through p: its COLR paints, or its CBDT or sbix
-// image, or, for a glyph with none, its outline in the foreground; see
+// PaintGlyph paints a glyph through p: its COLR paints, or its SVG document,
+// or its CBDT or sbix image, or, for a glyph with none, its outline in the
+// foreground; see
 // GlyphColour. A face whose glyphs are only bitmaps (BitmapOnly) paints nothing
 // for a glyph with no image. Coordinates are in font units, y increasing
 // upwards.
@@ -301,6 +321,10 @@ func (f *Face) PaintGlyph(gid int, opts PaintOptions, p Painter) error {
 		if painted, err := f.paintCOLR(t, gid, opts, p, paintWork); painted || err != nil {
 			return err
 		}
+	}
+	if doc, ok := f.svg.document(gid); ok {
+		p.Image(Image{Format: ImageSVG, Data: doc})
+		return nil
 	}
 	if img, ok := f.bitmapImage(gid, opts.PPEM); ok {
 		p.Image(img)
