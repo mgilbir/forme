@@ -131,23 +131,109 @@ def morx():
     return struct.pack(">HHI", 2, 0, 2) + one + two
 
 
-def build(path):
+def save(path, family, glyphs, letters, tables):
+    """A face of the glyphs, each a box a little wider than the one before,
+    the letters mapped to the glyphs of their names, and the tables given as
+    their bytes."""
     fb = FontBuilder(1000, isTTF=True)
-    fb.setupGlyphOrder(GLYPHS)
-    fb.setupCharacterMap({ord(n): n for n in "ABCDEF"})
-    fb.setupGlyf({name: box(400 + 50 * i) for i, name in enumerate(GLYPHS)})
-    fb.setupHorizontalMetrics({name: (400 + 50 * i, 50) for i, name in enumerate(GLYPHS)})
+    fb.setupGlyphOrder(glyphs)
+    fb.setupCharacterMap({ord(n): n for n in letters})
+    fb.setupGlyf({name: box(400 + 50 * i) for i, name in enumerate(glyphs)})
+    fb.setupHorizontalMetrics({name: (400 + 50 * i, 50) for i, name in enumerate(glyphs)})
     fb.setupHorizontalHeader(ascent=800, descent=-200)
     fb.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
-    fb.setupNameTable({"familyName": "MorxCases", "styleName": "Regular"})
+    fb.setupNameTable({"familyName": family, "styleName": "Regular"})
     fb.setupPost()
-    table = DefaultTable("morx")
-    table.data = morx()
-    fb.font["morx"] = table
+    for tag, data in tables.items():
+        table = DefaultTable(tag)
+        table.data = data
+        fb.font[tag] = table
     fb.font["head"].created = fb.font["head"].modified = 3660681600
     fb.font.recalcTimestamp = False
     fb.save(path)
 
 
+def build(path):
+    save(path, "MorxCases", GLYPHS, "ABCDEF", {"morx": morx()})
+
+
+# MorxFeatures.ttf: a morx chain whose features turn its subtables on and off,
+# and a feat table offering their types, for the features a caller asks for.
+# Each subtable turns one letter into X, so which ran shows letter by letter:
+#
+#   G  flag 0x01, on by default; contextual alternates (36) off clears it
+#   H  flag 0x02, common ligatures (1) on sets it, off clears it
+#   I  flag 0x04, small capitals by their deprecated type (3, setting 3),
+#      which a request for small capitals (37, setting 1) reaches
+#   J  flag 0x08, character alternatives (17), which 'aalt' asks for
+#   K  flag 0x10, lining figures (21, setting 1), which clear oldstyle
+#   L  flag 0x20, oldstyle figures (21, setting 0), which clear lining
+#   M  flag 0x40, small capitals (37, setting 1) itself
+#   N  flag 0x80, full-width text (22, setting 1)
+#   O  flag 0x100, half-width text (22, setting 2)
+#
+# The figure types are exclusive, so asking for both keeps the first; so is
+# text spacing, whose two settings here are not a setting and its opposite,
+# and which a type that is not exclusive would keep both of.
+# MorxFeaturesDeprecated.ttf is the same with a feat that offers small capitals
+# under their deprecated type alone, which HarfBuzz looks for where the
+# current one is not offered; MorxFeaturesNoFeat.ttf the same chain with no
+# feat table at all, which HarfBuzz runs with its default flags whatever is
+# asked.
+FEATURE_GLYPHS = [".notdef", "G", "H", "I", "J", "K", "L", "M", "X", "N", "O"]
+FEATURE_GID = {name: i for i, name in enumerate(FEATURE_GLYPHS)}
+ALL = 0xFFFFFFFF
+
+
+def feat(features):
+    """A feat table: (type, exclusive, settings) for each feature type, sorted
+    by type, each setting named by name ID 256."""
+    head = struct.pack(">IHHI", 0x00010000, len(features), 0, 0)
+    records, settings = b"", b""
+    at = 12 + 12 * len(features)
+    for typ, exclusive, values in features:
+        offset = at + len(settings)
+        records += struct.pack(">HHIHh", typ, len(values), offset, 0x8000 if exclusive else 0, 256)
+        settings += b"".join(struct.pack(">Hh", v, 256) for v in values)
+    return head + records + settings
+
+
+def feature_chain():
+    letters = [("G", 0x01), ("H", 0x02), ("I", 0x04), ("J", 0x08), ("K", 0x10), ("L", 0x20), ("M", 0x40),
+               ("N", 0x80), ("O", 0x100)]
+    subtables = [subtable(4, bit, single_lookup([(FEATURE_GID[g], FEATURE_GID["X"])])) for g, bit in letters]
+    features = [
+        (36, 1, 0, ALL & ~0x01),  # contextual alternates off
+        (36, 0, 0x01, ALL),  # contextual alternates on
+        (1, 2, 0x02, ALL),  # common ligatures on
+        (1, 3, 0, ALL & ~0x02),  # common ligatures off
+        (3, 3, 0x04, ALL),  # small capitals, deprecated
+        (37, 1, 0x40, ALL),  # small capitals
+        (17, 1, 0x08, ALL),  # character alternatives
+        (21, 0, 0x20, ALL & ~0x10),  # oldstyle figures
+        (21, 1, 0x10, ALL & ~0x20),  # lining figures
+        (22, 1, 0x80, ALL),  # full-width text
+        (22, 2, 0x100, ALL),  # half-width text
+    ]
+    body = b"".join(struct.pack(">HHII", *f) for f in features) + b"".join(subtables)
+    head = struct.pack(">IIII", 0x01, 16 + len(body), len(features), len(subtables))
+    return struct.pack(">HHI", 2, 0, 1) + head + body
+
+
+FEAT_TYPES = [(1, False, [2, 3]), (17, True, [0, 1]), (21, True, [0, 1]), (22, True, [0, 1, 2]),
+              (36, False, [0, 1])]
+
+
+def build_features(directory):
+    letters = "GHIJKLMNO"
+    save(os.path.join(directory, "MorxFeatures.ttf"), "MorxFeatures", FEATURE_GLYPHS, letters,
+         {"morx": feature_chain(), "feat": feat(FEAT_TYPES + [(37, True, [0, 1])])})
+    save(os.path.join(directory, "MorxFeaturesDeprecated.ttf"), "MorxFeaturesDeprecated", FEATURE_GLYPHS,
+         letters, {"morx": feature_chain(), "feat": feat([(1, False, [2, 3]), (3, True, [0, 3])] + FEAT_TYPES[1:])})
+    save(os.path.join(directory, "MorxFeaturesNoFeat.ttf"), "MorxFeaturesNoFeat", FEATURE_GLYPHS, letters,
+         {"morx": feature_chain()})
+
+
 if __name__ == "__main__":
     build(os.path.join(sys.argv[1], "MorxCases.ttf"))
+    build_features(sys.argv[1])

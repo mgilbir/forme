@@ -357,8 +357,9 @@ hbpaint:
 
 # AAT morx, set by HarfBuzz: the text-rendering tests' morx suite (aat/, as
 # HarfBuzz keeps it at HARFBUZZ_VERSION), every case of which HarfBuzz sets as
-# the suite expects, and strings in a face built here for what the suite does
-# not reach (morx_fixture.py). See morx.py.
+# the suite expects, and strings in faces built here (morx_fixture.py) for
+# what the suite does not reach and for the features a caller asks for. See
+# morx.py.
 hbmorx:
 	$(PYTHON) $(HARFBUZZ_DIR)/morx_fixture.py $(HARFBUZZ_DIR)/fonts
 	$(PYTHON) $(HARFBUZZ_DIR)/morx.py $(HARFBUZZ_DIR)/morx.expected.txt

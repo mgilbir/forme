@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,16 +17,26 @@ import (
 // morx suite, every case of which HarfBuzz sets as the suite expects: the
 // rearrangement, contextual, ligature, noncontextual and insertion subtables,
 // chains and their flags, the subtables that walk the run backwards, glyphs
-// deleted and inserted, and state machines that loop. The answers are checked
-// in as morx.expected.txt; see morx.py.
+// deleted and inserted, and state machines that loop. And over the faces
+// morx_fixture.py builds: what the suite does not reach, and the features a
+// caller asks for (aatfeatures.go). The answers are checked in as
+// morx.expected.txt; see morx.py.
 
 // morxCase is one case of morx.expected.txt.
 type morxCase struct {
 	test, font, sum string
 	text            string
-	fails           bool
-	glyphs          [][5]int
+	// on and off are the features the case asks for; ordered says it only
+	// turns them on, in the order named, which ShapeGlyphsWith asks them in.
+	on, off []string
+	ordered bool
+	fails   bool
+	glyphs  [][5]int
 }
+
+// morxFixtures are the faces of morx.expected.txt that morx_fixture.py builds
+// into testdata/harfbuzz/fonts; the rest are the suite's, in aat/fonts.
+var morxFixtures = []string{"MorxCases.ttf", "MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFeat.ttf"}
 
 func readMorxGolden(t *testing.T) []morxCase {
 	t.Helper()
@@ -42,8 +53,8 @@ func readMorxGolden(t *testing.T) []morxCase {
 			continue
 		}
 		f := strings.Fields(line)
-		if len(f) < 4 {
-			t.Fatalf("%q: a test, a font, its sum and code points", line)
+		if len(f) < 5 {
+			t.Fatalf("%q: a test, a font, its sum, code points and features", line)
 		}
 		c := morxCase{test: f[0], font: f[1], sum: f[2]}
 		for _, cp := range strings.Split(f[3], ",") {
@@ -53,10 +64,21 @@ func readMorxGolden(t *testing.T) []morxCase {
 			}
 			c.text += string(rune(r))
 		}
-		if len(f) == 5 && f[4] == "fails" {
+		if f[4] != "." {
+			c.ordered = true
+			for _, feature := range strings.Split(f[4], ",") {
+				if feature[0] == '+' {
+					c.on = append(c.on, feature[1:])
+				} else {
+					c.off = append(c.off, feature[1:])
+					c.ordered = false
+				}
+			}
+		}
+		if len(f) == 6 && f[5] == "fails" {
 			c.fails = true
 		} else {
-			for _, g := range f[4:] {
+			for _, g := range f[5:] {
 				var v [5]int
 				parts := strings.Split(g, ",")
 				if len(parts) != 5 {
@@ -78,9 +100,22 @@ func readMorxGolden(t *testing.T) []morxCase {
 	return cases
 }
 
+// shapeMorxCase shapes a case as morx.py asked HarfBuzz to: with ShapeGlyphsWith
+// where it only turns features on, in its order; otherwise with Features,
+// turned off and on.
+func shapeMorxCase(f *Face, c morxCase) []Glyph {
+	if c.ordered {
+		glyphs, _ := f.ShapeGlyphsWith(c.text, c.on...)
+		return glyphs
+	}
+	on, off := slices.Sorted(slices.Values(c.on)), slices.Sorted(slices.Values(c.off))
+	glyphs, _ := f.ShapeGlyphsInContext(c.text, "", "", Features{Tags: strings.Join(on, ","), TagsOff: strings.Join(off, ",")})
+	return glyphs
+}
+
 func TestMorxAgreesWithHarfBuzz(t *testing.T) {
 	cases := readMorxGolden(t)
-	if len(cases) < 170 {
+	if len(cases) < 230 {
 		t.Fatalf("morx.expected.txt holds %d cases; run `make hbmorx`", len(cases))
 	}
 	faces := map[string]*Face{}
@@ -88,7 +123,7 @@ func TestMorxAgreesWithHarfBuzz(t *testing.T) {
 		f, ok := faces[c.font]
 		if !ok {
 			dir := filepath.Join(harfbuzzDir, "aat", "fonts")
-			if c.font == "MorxCases.ttf" {
+			if slices.Contains(morxFixtures, c.font) {
 				dir = filepath.Join(harfbuzzDir, "fonts")
 			}
 			data, err := os.ReadFile(filepath.Join(dir, c.font))
@@ -107,7 +142,7 @@ func TestMorxAgreesWithHarfBuzz(t *testing.T) {
 			}
 			faces[c.font] = f
 		}
-		glyphs, _ := f.ShapeGlyphs(c.text)
+		glyphs := shapeMorxCase(f, c)
 		if c.fails {
 			continue
 		}
@@ -116,13 +151,14 @@ func TestMorxAgreesWithHarfBuzz(t *testing.T) {
 		for _, g := range glyphs {
 			got = append(got, [5]int{g.GID, g.Cluster, units(g.XAdvance), units(g.XOffset), units(g.YOffset)})
 		}
+		label := c.test + " " + c.font + " " + strconv.Quote(c.text) + " +" + strings.Join(c.on, ",+") + " -" + strings.Join(c.off, ",-")
 		if len(got) != len(c.glyphs) {
-			t.Errorf("%s %q: %d glyphs %v, HarfBuzz %d %v", c.test, c.text, len(got), got, len(c.glyphs), c.glyphs)
+			t.Errorf("%s: %d glyphs %v, HarfBuzz %d %v", label, len(got), got, len(c.glyphs), c.glyphs)
 			continue
 		}
 		for i := range got {
 			if got[i] != c.glyphs[i] {
-				t.Errorf("%s %q glyph %d: %v, HarfBuzz %v\n  forme    %v\n  HarfBuzz %v", c.test, c.text, i, got[i], c.glyphs[i], got, c.glyphs)
+				t.Errorf("%s glyph %d: %v, HarfBuzz %v\n  forme    %v\n  HarfBuzz %v", label, i, got[i], c.glyphs[i], got, c.glyphs)
 				break
 			}
 		}

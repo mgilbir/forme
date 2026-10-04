@@ -14,10 +14,9 @@ import "github.com/mgilbir/forme/font"
 // set across the page, GSUB or no GSUB:
 //
 //   - A morx is chains of subtables, each switched on or off by the chain's
-//     flags. A chain runs with its default flags: the features a caller asks
-//     for are not mapped to AAT's feature types and selectors, which is what
-//     HarfBuzz does with features a caller names and the one thing of its AAT
-//     substitution this does not do.
+//     flags. A chain runs with its default flags, changed by the features a
+//     caller asks for where the face's feat table offers them: see
+//     aatfeatures.go.
 //   - A subtable is a lookup of glyph to glyph (noncontextual) or a finite
 //     state machine walked over the run, glyph class by glyph class, whose
 //     transitions rearrange glyphs, substitute them in context, form
@@ -38,7 +37,8 @@ import "github.com/mgilbir/forme/font"
 // there.
 //
 // Not here: the older mort table; kerx, AAT's positioning, and trak, its
-// tracking, which HarfBuzz applies beside it; and the language tags of ltag.
+// tracking, which HarfBuzz applies beside it; and the language tags of ltag,
+// by which a chain's feature may follow the run's language.
 
 // The values the subtables have in common.
 const (
@@ -88,10 +88,19 @@ type morxTable struct {
 	numGlyphs int
 }
 
-// morxChain is a chain of subtables and the flags it runs them under.
+// morxChain is a chain of subtables, the flags it runs them under by default,
+// and its features: what a feature a caller asks for does to the flags.
 type morxChain struct {
 	defaultFlags uint32
+	features     []aatChainFeature
 	subtables    []morxSubtable
+}
+
+// aatChainFeature is one of a chain's features: an AAT feature type and
+// setting, and the flags it turns on and leaves on where a caller asks for it.
+type aatChainFeature struct {
+	typ, setting    int
+	enable, disable uint32
 }
 
 // morxSubtable is one subtable: its kind, its coverage bits, the flags that
@@ -136,6 +145,13 @@ func readMorx(tables map[string][]byte, numGlyphs int) *morxTable {
 		}
 		end := at + length
 		chain := morxChain{defaultFlags: font.Be32(b, at)}
+		for i := range features {
+			fe := at + 16 + 12*i
+			chain.features = append(chain.features, aatChainFeature{
+				typ: font.Be16(b, fe), setting: font.Be16(b, fe+2),
+				enable: font.Be32(b, fe+4), disable: font.Be32(b, fe+8),
+			})
+		}
 		sub := at + 16 + 12*features
 		for range count {
 			if end-sub < 12 {
@@ -632,11 +648,13 @@ func removeDeleted(info []Glyph) []Glyph {
 }
 
 // applyMorx runs a face's morx over a run in the order its characters are
-// written: each chain with its default flags, each of its subtables for the
-// run's direction. rtl says the run is set right to left, which decides which
-// way a subtable that walks the run in layout order walks it.
-func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool) []Glyph {
+// written: each chain with the flags the features a caller asked for leave it
+// (see aatfeatures.go), each of its subtables for the run's direction. rtl says
+// the run is set right to left, which decides which way a subtable that walks
+// the run in layout order walks it.
+func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) []Glyph {
 	m := sh.f.morx
+	settings := sh.f.aatSettings(user)
 	b := &aatBuf{info: buf, ok: true, f: sh.f, maxOps: max(len(buf)*morxOpsPerGlyph, morxOpsFloor)}
 	if len(buf) >= 4 {
 		b.seen = map[int]bool{}
@@ -646,9 +664,10 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool) []Glyph {
 	}
 	reversed := false
 	for _, chain := range m.chains {
+		flags := chain.flagsFor(settings)
 		for i := range chain.subtables {
 			s := &chain.subtables[i]
-			if s.flags&chain.defaultFlags == 0 {
+			if s.flags&flags == 0 {
 				continue
 			}
 			if s.coverage&morxAllDirections == 0 && vertical != (s.coverage&morxVertical != 0) {
