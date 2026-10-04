@@ -1,0 +1,13 @@
+The Unicode Consortium's text-rendering tests for AAT morx: the MORX-1 to
+MORX-42 cases (tests/) and the fonts they name (fonts/), unmodified, as
+HarfBuzz keeps them at its 14.5.0 tag, which is the release the oracle is
+pinned to:
+
+  https://github.com/harfbuzz/harfbuzz/tree/14.5.0/test/shape/data/text-rendering-tests
+
+HarfBuzz imports them from https://github.com/unicode-org/text-rendering-tests.
+They are under the Apache License 2.0; see COPYING, and THIRD_PARTY_NOTICES at
+the root of the repository.
+
+morx.py shapes every case with HarfBuzz and writes morx.expected.txt, which
+shape/morx_test.go holds the morx reader to.

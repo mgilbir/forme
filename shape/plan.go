@@ -114,6 +114,12 @@ const (
 	// (hangul.go). Hangul cancels no mark's advance.
 	modelHebrew
 	modelHangul
+	// modelDumber is HarfBuzz's dumber shaper, which sets a run whose
+	// substitutions are a morx (morx.go) in a script with a model of its
+	// own: the morx does what the model would, so the run is put through it
+	// as it stands, no mark loses its advance and nothing is placed by
+	// fallback.
+	modelDumber
 )
 
 // syllabic reports whether the model cuts a run into syllables and reorders
@@ -196,7 +202,7 @@ func categorize(script uint16, chosen string, vertical bool) shaperModel {
 // zeroMarks is when the model cancels a mark's own advance. See zeroMarkWidths.
 func (m shaperModel) zeroMarks() zeroMarkWidths {
 	switch m {
-	case modelIndic, modelKhmer, modelHangul:
+	case modelIndic, modelKhmer, modelHangul, modelDumber:
 		return zeroMarksNone
 	case modelMyanmar, modelUniversal:
 		return zeroMarksEarly
