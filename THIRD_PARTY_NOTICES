@@ -2194,6 +2194,7 @@ Fonts built for the AAT positioning oracle
 Files:   testdata/harfbuzz/fonts/KerxPairs.ttf
          testdata/harfbuzz/fonts/KerxMachines.ttf
          testdata/harfbuzz/fonts/KerxPoints.ttf
+         testdata/harfbuzz/fonts/KerxPointsCFF.otf
          testdata/harfbuzz/fonts/KerxPlanGSUBGPOS.ttf
          testdata/harfbuzz/fonts/KerxPlanGPOS.ttf
          testdata/harfbuzz/fonts/KerxPlanNoKern.ttf

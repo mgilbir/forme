@@ -1,4 +1,4 @@
-.PHONY: hbpaint hbclusters hbmorx hbaatpos ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+.PHONY: ftpoints hbpaint hbclusters hbmorx hbaatpos ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -376,6 +376,28 @@ hbmorx:
 # decides whether it positions a run, and trak at sizes on and between a
 # table's, in faces built here (aatpos_fixture.py); and HarfBuzz's own tracking
 # face and cases (aat-inhouse/). See aatpos.py.
+# The outline points FreeType loads for CFF and CFF2 glyphs, unscaled and
+# unhinted, which kerx attaches by over FreeType: the CFF faces in the tree,
+# KerxPointsCFF among them, and the CFF fonts of `make cff-fonts`: at their
+# default each glyph's points hashed, and Source Sans 3 cut at a weight every
+# 25th glyph's whole. Source Serif 4 is not cut anywhere: LoadInstance's CFF2
+# instancer draws it at a location up to four units from where HarfBuzz does
+# (see shape/outline.go), and its points would be held to that, not to this. hbaatpos reads these for its
+# CFF face, so this comes first. Needs a FreeType pkg-config can find. See
+# testdata/freetype/points.py.
+FT_DIR := testdata/freetype
+ftpoints:
+	$(PYTHON) $(HARFBUZZ_DIR)/aatpos_fixture.py $(HBFONTS)
+	$(PYTHON) $(FT_DIR)/points.py $(FT_DIR)/points.expected.txt \
+		CFFInk.otf=$(HBFONTS)/CFFInk.otf \
+		VarCompositeCFF.otf=$(HBFONTS)/VarCompositeCFF.otf \
+		KerxPointsCFF.otf=$(HBFONTS)/KerxPointsCFF.otf \
+		SourceSans3-Regular.otf=$(CFF_DIR)/SourceSans3-Regular.otf#hash \
+		SourceSerif4-Regular.otf=$(CFF_DIR)/SourceSerif4-Regular.otf#hash \
+		SourceSans3VF-Upright.otf=$(CFF_DIR)/SourceSans3VF-Upright.otf#hash \
+		SourceSans3VF-Upright.otf=$(CFF_DIR)/SourceSans3VF-Upright.otf@wght=900#every=25 \
+		SourceSerif4Variable-Roman.otf=$(CFF_DIR)/SourceSerif4Variable-Roman.otf#hash
+
 hbaatpos:
 	$(PYTHON) $(HARFBUZZ_DIR)/aatpos_fixture.py $(HARFBUZZ_DIR)/fonts
 	$(PYTHON) $(HARFBUZZ_DIR)/aatpos.py $(HARFBUZZ_DIR)/aatpos.expected.txt

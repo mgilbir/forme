@@ -17,7 +17,9 @@
 # uharfbuzz carries, on a font whose one function of its own is that one: each
 # point the glyph's glyf states, a composite's components resolved by
 # fontTools, moved so that the left phantom point is the origin, as FreeType's
-# TrueType loader moves the outline. Everything else is HarfBuzz's own.
+# TrueType loader moves the outline; and for a CFF face, the points FreeType's
+# CFF loader builds, read from ../freetype/points.expected.txt (`make
+# ftpoints`, which runs FreeType). Everything else is HarfBuzz's own.
 #
 # Each case is a face, a string, the size it is set at in points (0 for none,
 # which is HarfBuzz's and CoreText's 12), whether kerning is on, and the
@@ -47,6 +49,8 @@ STRINGS = {
                          "C" + ACUTE + ACUTE],
     "KerxPoints.ttf": ["\uE000" + ACUTE, "\uE001" + ACUTE, "D" + ACUTE, "D" + ACUTE + ACUTE,
                        "\uE000" + ACUTE + ACUTE, "\uE001D" + ACUTE, "A" + ACUTE],
+    "KerxPointsCFF.otf": ["\uE000" + ACUTE, "\uE001" + ACUTE, "D" + ACUTE, "D" + ACUTE + ACUTE,
+                          "\uE000" + ACUTE + ACUTE, "\uE001D" + ACUTE, "A" + ACUTE],
     "KerxPlanGSUBGPOS.ttf": ["AV", "A" + ACUTE + "V"],
     "KerxPlanGPOS.ttf": ["AV", "A" + ACUTE + "V"],
     "KerxPlanNoKern.ttf": ["AV", "A" + ACUTE, "A" + ACUTE + "V"],
@@ -90,11 +94,33 @@ def names(font, buf):
     return "[" + "|".join(out) + "]"
 
 
+def freetype_points(path):
+    """A CFF face's points as FreeType loads them, from the points it was
+    recorded loading: the face of the same bytes, recorded whole."""
+    digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
+    out, face = {}, None
+    for line in open(os.path.join(HERE, "..", "freetype", "points.expected.txt"), encoding="utf-8"):
+        f = line.split()
+        if not f or f[0] == "#":
+            continue
+        if f[0] == "face":
+            face = f[2] == digest and f[3] == "-" and f[4] == "full"
+        elif face and f[0] == "G":
+            pts = [] if f[2:] == ["none"] else [tuple(int(v) for v in p.split(",")[:2]) for p in f[2:]]
+            out[int(f[1])] = pts
+    if not out:
+        sys.exit(f"{path}: no points FreeType loaded for it are recorded; run `make ftpoints`")
+    return out
+
+
 def contour_points(path):
     """Each glyph's points as FreeType loads them: glyf's, a composite's
     components resolved, rounded, and moved by the left phantom point,
-    which is the glyph's xMin less its side bearing."""
+    which is the glyph's xMin less its side bearing; or a CFF face's, as
+    FreeType's CFF loader built them."""
     f = TTFont(path)
+    if "CFF " in f:
+        return freetype_points(path)
     if "glyf" not in f:
         return {}
     glyf, hmtx = f["glyf"], f["hmtx"]

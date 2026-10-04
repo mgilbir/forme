@@ -307,6 +307,37 @@ func (f *Face) cffSegments(gid int, c *outlineCache) ([]Segment, error) {
 	return pen.segs, nil
 }
 
+// cffPointSegments is what a CFF glyph's charstring draws, for its points: the
+// charstring itself, never a VARC table's composition of it, since FreeType's
+// CFF loader reads none; a seac's accent before its base; and an allowance of
+// its own, since kerx asks for a glyph's points once for each attachment and
+// what it asks must not spend the face's drawing budget.
+func (f *Face) cffPointSegments(gid int) []Segment {
+	ink := f.ink
+	ink.load()
+	o, run := ink.outlines, gid
+	switch {
+	case gid < 0:
+		return nil
+	case ink.cff2 != nil:
+		if gid >= ink.numGlyphs {
+			return nil
+		}
+		o, run = &cffOutlines{charStrings: [][]byte{ink.cff2.glyph(gid)}}, 0
+	case o == nil, gid >= len(o.charStrings):
+		return nil
+	}
+	var pen outlinePen
+	r := t2Run{o: o, budget: font.NewBudget(maxFontWork), draw: true, path: pen.add, accentFirst: true}
+	ink.mu.Lock()
+	_, ok := r.bounds(run, false)
+	ink.mu.Unlock()
+	if !ok || r.spent || r.capped {
+		return nil
+	}
+	return pen.segs
+}
+
 var errOutlineWork = errors.New("shape: drawing the face's glyphs has run past the work one face may spend on it")
 
 func outlineBudgetError(c *outlineCache) error {
