@@ -2272,6 +2272,34 @@ none of its code is in what it wrote. They are listed here because every font
 the repository keeps is, and for where they came from.
 
 ============================================================================
+WOFF 2 collection variants
+============================================================================
+
+Files:   font/testdata/woff2-collections/variants/flavors.woff2
+         font/testdata/woff2-collections/variants/hmtx-across-glyfs.woff2
+         font/testdata/woff2-collections/variants/loca-apart.woff2
+         font/testdata/woff2-collections/variants/mixed-transforms.woff2
+         font/testdata/woff2-collections/variants/named-twice.woff2
+         font/testdata/woff2-collections/variants/no-tables.woff2
+         font/testdata/woff2-collections/variants/one-font.woff2
+         font/testdata/woff2-collections/variants/reordered.woff2
+         font/testdata/woff2-collections/variants/spell-254.woff2
+         font/testdata/woff2-collections/variants/spell-255.woff2
+         font/testdata/woff2-collections/variants/spell-word.woff2
+         font/testdata/woff2-collections/variants/unreferenced.woff2
+Source:  font/woff2variants_test.go, in this repository, which builds them
+         with the fixture builder from the collections above and
+         testdata/harfbuzz/fonts/CFF2Blend.otf
+Licence: the licence in LICENSE; they are not anyone else's work
+
+The collections above, and a face this repository builds, put together in the
+forms the WOFF 2 format allows and google/woff2's encoder does not write, and
+in forms it forbids. They are listed here because every font the repository
+keeps is, and for where they came from; no third party's work is in them.
+google.txt and allsorts.txt beside them are what two other decoders, run on
+them, rebuilt; make.sh there says how.
+
+============================================================================
 Fonts built for the matched components oracle
 ============================================================================
 

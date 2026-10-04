@@ -296,6 +296,15 @@ func FuzzLoadAndUse(f *testing.F) {
 	for _, pair := range encodedWOFF2Collections(f) {
 		f.Add(pair[0])
 	}
+	// And the variants the font package builds of them: each spelling of a
+	// 255UInt16, tables in any order, a CFF2 face beside TrueType and CFF ones.
+	if variants, err := filepath.Glob(filepath.Join("..", "font", "testdata", "woff2-collections", "variants", "*.woff2")); err == nil {
+		for _, name := range variants {
+			if data, err := os.ReadFile(name); err == nil {
+				f.Add(data)
+			}
+		}
+	}
 	// A collection, its two fonts sharing the tables they have in common: a
 	// header and directories, each a count and offsets the file states.
 	f.Add(buildCollection(

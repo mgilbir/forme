@@ -610,6 +610,13 @@ func FuzzDecodeWOFF2(f *testing.F) {
 		f.Fatal(err)
 	}
 	files = append(files, collections...)
+	// And the collection variants (woff2variants_test.go): every spelling of a
+	// 255UInt16, tables in any order, untransformed glyf beside transformed.
+	variants, err := filepath.Glob(filepath.Join("testdata", "woff2-collections", "variants", "*.woff2"))
+	if err != nil {
+		f.Fatal(err)
+	}
+	files = append(files, variants...)
 	for _, name := range files {
 		b, err := os.ReadFile(name)
 		if err != nil {
