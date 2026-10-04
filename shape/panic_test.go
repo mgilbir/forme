@@ -272,8 +272,24 @@ func FuzzLoadAndUse(f *testing.F) {
 			f.Add(data)
 		}
 	}
+	// A collection, its two fonts sharing the tables they have in common: a
+	// header and directories, each a count and offsets the file states.
+	f.Add(buildCollection(
+		fonttest.SFNT(fonttest.SFNTOptions{Glyphs: []fonttest.Glyph{{Rune: 'a', Advance: 500, HasShape: true}}}),
+		fonttest.SFNT(fonttest.SFNTOptions{Glyphs: []fonttest.Glyph{{Rune: 'b', Advance: 400, HasShape: true}}})))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
+		// Each face of a collection, as LoadCollection reads it from the
+		// collection's bytes, and as CollectionFaces describes it without.
+		if faces, err := CollectionFaces(data); err == nil {
+			for _, d := range faces[:min(len(faces), 4)] {
+				if face, err := LoadCollection(data, d.Index); err == nil {
+					useFace(face)
+					checkSubset(t, face)
+				}
+			}
+		}
+
 		for _, load := range []func([]byte) (*Face, error){Load, LoadSimple} {
 			face, err := load(data)
 			if err != nil || face == nil {
