@@ -541,6 +541,7 @@ func useFace(face *Face) {
 	_ = face.UnitsPerEm()
 	_ = face.NumGlyphs()
 	_ = face.BitmapOnly()
+	_ = face.FeaturesAt(Features{}, 24)
 	_ = face.Descriptor()
 	_ = face.Cmap()
 	_ = face.Used()

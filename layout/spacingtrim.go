@@ -348,9 +348,14 @@ func hasFeatureTag(list, tag string) bool {
 // width the line took off it is the width that feature takes off, so drawing
 // it any other way would put the ink half an em from where the line left room
 // for it.
+//
+// And the size the run is set at, for a face that tracks its text by size
+// (shape.Face.FeaturesAt): the size paragraph measured it at, so that a
+// backend shaping the run again tracks it as the line was filled.
 func runFeatures(item inlineItem) shape.Features {
+	off := item.Off
 	if item.StartTrimmed {
-		return startTrimmedFeatures(item.Off)
+		off = startTrimmedFeatures(off)
 	}
-	return item.Off
+	return item.Face.FeaturesAt(off, item.Size.Px())
 }

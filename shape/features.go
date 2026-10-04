@@ -199,6 +199,10 @@ type Features struct {
 	// text tighter as it grows (trak.go). Zero is 12, CoreText's default and
 	// HarfBuzz's for a font given no size. Nothing else in shaping depends on
 	// the size, which is why it is the one length here.
+	//
+	// CoreText's points are CSS pixels, and a browser's size in CSS pixels is
+	// what it gives here; Face.FeaturesAt sets it so, for a face it changes,
+	// and the measuring calls that take a size set it from theirs.
 	PointSize float64
 
 	// faceOn and faceOff are the face's own settings, CSS Fonts 4 §7.2's

@@ -6,6 +6,10 @@ package shape
 // MeasureShaped is the width of a shaped string at the given size, in
 // user-space units.
 //
+// The size is also the one a face with an AAT tracking table is tracked at,
+// as FeaturesAt says, and so is each MeasureShaped's below: a size in CSS
+// pixels, as a browser's is.
+//
 // It is what the text will occupy on the page: the same shaping ShapeGlyphs
 // does, measured rather than drawn. That is the whole contract, and it
 // is the reason this measures by shaping rather than by a cheaper approximation
@@ -25,7 +29,7 @@ func (f *Face) MeasureShaped(s string, size float64) float64 {
 		// font program to give one.
 		return f.Measure(s, size)
 	}
-	glyphs, _ := f.ShapeGlyphs(s)
+	glyphs, _ := f.shapeGlyphsWith(s, nil, shapeContext{features: f.FeaturesAt(Features{}, size)})
 	return MeasureGlyphs(glyphs, size)
 }
 
@@ -45,6 +49,7 @@ func (f *Face) MeasureShapedInContext(s string, size float64, before, after stri
 		// features change nothing about it.
 		return f.Measure(s, size)
 	}
+	off = f.FeaturesAt(off, size)
 	var glyphs []Glyph
 	if kerns {
 		glyphs, _ = f.ShapeGlyphsInContext(s, before, after, off)
@@ -90,6 +95,7 @@ func (f *Face) MeasureShapedMergedSpan(s string, size float64,
 	if !f.composite() {
 		return 0, f.Measure(s, size)
 	}
+	off = f.FeaturesAt(off, size)
 	if mergeBefore == "" && mergeAfter == "" {
 		glyphs, _ := f.ShapeGlyphsInContextOrAcross(s, before, after, kerns, off)
 		return 0, MeasureGlyphs(glyphs, size)
@@ -248,4 +254,23 @@ func sortStrings(a []string) {
 			a[j], a[j-1] = a[j-1], a[j]
 		}
 	}
+}
+
+// FeaturesAt is off with PointSize set to size, for a face that tracks its
+// text by the size it is set at — one with an AAT tracking table HarfBuzz
+// applies (trak.go) — where off states no size of its own; and off unchanged
+// for every other face. So a caller that keys what it shaped by the
+// Features it shaped with keeps one entry for a run set at any size in a face
+// that is not tracked, and one a size in a face that is.
+//
+// The size is in CSS pixels, which is what a browser hands HarfBuzz as the
+// point size: Chromium sets hb_font_set_ptem to the CSS pixel size, the
+// meaning HarfBuzz's pull request 1484 settled on with Apple — CoreText's
+// "points" are CSS pixels — and Firefox shapes an AAT face with CoreText at
+// that size. A caller laying out in other units converts first.
+func (f *Face) FeaturesAt(off Features, size float64) Features {
+	if f != nil && f.trak != nil && off.PointSize == 0 && size > 0 {
+		off.PointSize = size
+	}
+	return off
 }
