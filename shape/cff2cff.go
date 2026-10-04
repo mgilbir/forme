@@ -517,15 +517,16 @@ func solveQuadratic(a, b, c float64) []float64 {
 }
 
 // cff1Private writes a Font DICT's Private DICT in CFF's form: its entries as
-// the CFF2 font wrote them, a blended one resolved at the location, and
-// without the operators CFF has no use for or does not have — the local
-// subroutines, which are run rather than kept, and vsindex and blend — with
-// the default and nominal widths the glyphs' widths are written against.
+// the CFF2 font wrote them, a blended one resolved at the location, with the
+// default and nominal widths the glyphs' widths are written against. Only the
+// entries a CFF Private DICT has are written (cff1PrivateOps): not the local
+// subroutines, which are run rather than kept, nor vsindex, nor anything else
+// a CFF2 DICT can hold and a CFF one cannot — vstore is operator 24 there, and
+// 24 is a reserved byte in a CFF DICT, which a reader refuses.
 func cff1Private(entries []cff2Entry, blend *cff2Blend, ivs, def, nominal int) ([]byte, error) {
 	var out []byte
 	for _, e := range entries {
-		switch e.op {
-		case opVsindex, opSubrs, 20, 21: // vsindex; Subrs; defaultWidthX and nominalWidthX, written below
+		if !cff1PrivateOps[e.op] {
 			continue
 		}
 		if !e.blended {
@@ -560,6 +561,20 @@ func cff1Private(entries []cff2Entry, blend *cff2Blend, ivs, def, nominal int) (
 	out = append(append(out, d...), 20)  // defaultWidthX
 	out = append(append(out, nw...), 21) // nominalWidthX
 	return out, nil
+}
+
+// cff1PrivateOps are the operators of a CFF Private DICT this writer copies,
+// as fontTools' privateDictOperators lists them: the blue zones, the standard
+// and snapped stems, BlueScale, BlueShift, BlueFuzz, ForceBold,
+// LanguageGroup, ExpansionFactor and initialRandomSeed. Subrs, defaultWidthX
+// and nominalWidthX are not among them: the subroutines are run rather than
+// kept, and the widths are written after the rest.
+var cff1PrivateOps = map[int]bool{
+	6: true, 7: true, 8: true, 9: true, // BlueValues, OtherBlues, FamilyBlues, FamilyOtherBlues
+	10: true, 11: true, // StdHW, StdVW
+	1209: true, 1210: true, 1211: true, // BlueScale, BlueShift, BlueFuzz
+	1212: true, 1213: true, 1214: true, // StemSnapH, StemSnapV, ForceBold
+	1217: true, 1218: true, 1219: true, // LanguageGroup, ExpansionFactor, initialRandomSeed
 }
 
 // dictNumber writes v as a DICT operand: an integer in its shortest form, and
