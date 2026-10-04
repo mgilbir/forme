@@ -37,9 +37,10 @@ import (
 //     glyphs' outlines (contourPoint). The last is where this parts from
 //     HarfBuzz's own font functions, which read no outline points, so that
 //     HarfBuzz with them attaches nothing; CoreText reads the points, and so
-//     does HarfBuzz over FreeType, and this does as they do. A point a glyph
-//     does not have attaches nothing and moves on to no new mark, as in
-//     HarfBuzz;
+//     does HarfBuzz over FreeType, and this does as they do, numbering a
+//     TrueType glyph's points and a CFF or CFF2 glyph's as FreeType's loaders
+//     number them. A point a glyph does not have attaches nothing and moves
+//     on to no new mark, as in HarfBuzz;
 //   - a subtable kerning across the line ties the whole run into a chain as a
 //     cursive joint would, the first time one is applied, so that a glyph
 //     raised carries every glyph after it.
@@ -696,15 +697,30 @@ func (k *kerxFormat4) transition(b *aatBuf, flags, data int) {
 
 // contourPoint is a point of a glyph's outline as FreeType loads it, which is
 // what HarfBuzz over FreeType hands kerx (hb_ft_get_glyph_contour_point): the
-// i-th of the glyph's points, a composite's components resolved in order, in
-// font units, with the outline moved so that its left phantom point is the
-// origin, as FreeType's TrueType loader moves it; and false for a point the
-// glyph does not have. A CFF or CFF2 face has no points of this kind to number
-// — a charstring states curves, not the points of TrueType's instructions —
-// and answers false for every one.
+// i-th of the glyph's points, in font units, and false for a point the glyph
+// does not have.
+//
+// For a TrueType glyph it is the glyph's own points, a composite's components
+// resolved in order, with the outline moved so that its left phantom point is
+// the origin, as FreeType's TrueType loader moves it. For a CFF glyph, and a
+// CFF2 one, which states curves rather than numbered points, it is the points
+// FreeType's CFF loader builds the outline of (cffContourPoints).
 func (f *Face) contourPoint(gid, i int) (x, y int, ok bool) {
+	if i < 0 {
+		return 0, 0, false
+	}
 	g := f.glyfOut
-	if g == nil || gid < 0 || gid >= g.glyfNumGlyphs() || i < 0 {
+	if g == nil {
+		if f.ink == nil {
+			return 0, 0, false
+		}
+		points := f.cffContourPoints(gid)
+		if i >= len(points) {
+			return 0, 0, false
+		}
+		return points[i][0], points[i][1], true
+	}
+	if gid < 0 || gid >= g.glyfNumGlyphs() {
 		return 0, 0, false
 	}
 	w := &glyfWalk{dec: decycler{tortoise: -1}}
@@ -718,4 +734,69 @@ func (f *Face) contourPoint(gid, i int) (x, y int, ok bool) {
 	shift := w.points[n].x
 	p := w.points[i]
 	return int(math.Round(float64(p.x - shift))), int(math.Round(float64(p.y))), true
+}
+
+// cffContourPoints is a CFF glyph's outline points as FreeType's CFF loader
+// numbers them, unscaled and unhinted (FreeType 2.14's Adobe engine, the
+// default since 2.5): each contour's move a point, each line a point, each
+// curve its two control points and its end, a seac's accent before its base
+// (cffPointSegments), and every coordinate the whole unit at or below it —
+// an unscaled load shifts the fraction off a 16.16 number, which floors it. A
+// line that goes nowhere is no point, as FreeType's engine ignores one
+// (cf2_glyphpath_lineTo); a curve that goes nowhere is three. A contour that
+// comes back to where it started does not repeat its first point
+// (ps_builder_close_contour), and one left with a single point is no contour
+// at all.
+//
+// It is the walk measuring does, HarfBuzz's, and so a charstring HarfBuzz and
+// FreeType read differently — operands the wrong count for their operator,
+// numbers past what a 16.16 holds, a stack fuller than FreeType's — gives the
+// points HarfBuzz's reading draws. Every glyph of Source Sans 3 and Source
+// Serif 4, static and variable, gives FreeType's; see cffpoints_test.go.
+func (f *Face) cffContourPoints(gid int) [][2]int {
+	segs := f.cffPointSegments(gid)
+	round := func(p Point) [2]int { return [2]int{int(math.Floor(p.X)), int(math.Floor(p.Y))} }
+	var points [][2]int
+	var at Point
+	first, lastOn := -1, false
+	closeContour := func() {
+		if first < 0 {
+			return
+		}
+		n := len(points)
+		if n-first > 1 && lastOn && points[n-1] == points[first] {
+			points = points[:n-1]
+		}
+		if len(points)-first == 1 {
+			points = points[:first]
+		}
+		first = -1
+	}
+	for _, s := range segs {
+		switch s.Op {
+		case MoveTo:
+			closeContour()
+			first = len(points)
+			points = append(points, round(s.Pts[0]))
+			at = s.Pts[0]
+			lastOn = true
+		case LineTo:
+			if s.Pts[0] == at {
+				continue
+			}
+			points = append(points, round(s.Pts[0]))
+			at = s.Pts[0]
+			lastOn = true
+		case QuadTo:
+			points = append(points, round(s.Pts[0]), round(s.Pts[1]))
+			at = s.Pts[1]
+			lastOn = true
+		case CubicTo:
+			points = append(points, round(s.Pts[0]), round(s.Pts[1]), round(s.Pts[2]))
+			at = s.Pts[2]
+			lastOn = true
+		}
+	}
+	closeContour()
+	return points
 }

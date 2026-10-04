@@ -45,6 +45,8 @@ from oracle import fonttools
 fonttools()
 from fontTools.feaLib.builder import addOpenTypeFeaturesFromString  # noqa: E402
 from fontTools.fontBuilder import FontBuilder  # noqa: E402
+from fontTools.misc.psCharStrings import T2CharString  # noqa: E402
+from fontTools.pens.t2CharStringPen import T2CharStringPen  # noqa: E402
 from fontTools.otlLib.builder import buildStatTable  # noqa: E402
 from fontTools.pens.ttGlyphPen import TTGlyphPen  # noqa: E402
 from fontTools.ttLib import newTable  # noqa: E402
@@ -367,6 +369,57 @@ feature mark { pos base A <anchor 300 700> mark @TOP; } mark;
 PLAN_KERX = kerx([format0([("A", "V", -80)])])
 
 
+# KerxPointsCFF.otf is KerxPoints with CFF outlines, whose points FreeType's
+# CFF loader numbers: Bcomp a seac of B and the acute (StandardEncoding's
+# "acute", a glyph after the rest so that every other keeps its index), whose
+# points FreeType builds the accent's first; and Ccomp curves at coordinates
+# with halves and quarters, which an unscaled load floors. The kerx is
+# KerxPoints's: Bcomp's point 5, Ccomp's point 2 and D's point 40.
+CFF_GLYPHS = GLYPHS + ["acute"]
+
+
+def cff_outline(name):
+    if name == "Bcomp":
+        # A seac: the acute 120 across and 650 up, over B.
+        return T2CharString(program=[advance("B"), 120, 650, ord("B"), 194, "endchar"])
+    pen = T2CharStringPen(advance(name), None, roundTolerance=0)
+    if name == "Ccomp":
+        pen.moveTo((60.5, 10.25))
+        pen.curveTo((100.75, 300.5), (250.5, 420.25), (400, 300))
+        pen.lineTo((420.5, -10.5))
+        pen.closePath()
+    elif name == "acute":
+        pen.moveTo((0, 0))
+        pen.lineTo((80, 120))
+        pen.lineTo((120, 100))
+        pen.closePath()
+    else:
+        w = max(advance(name), 120)
+        pen.moveTo((50, 0))
+        pen.lineTo((50, 600))
+        pen.lineTo((w - 50, 600))
+        pen.lineTo((w - 50, 0))
+        pen.closePath()
+    return pen.getCharString()
+
+
+def base_cff(name, extra):
+    fb = FontBuilder(1000, isTTF=False)
+    fb.setupGlyphOrder(CFF_GLYPHS)
+    fb.setupCharacterMap(CMAP)
+    fb.setupCFF(name, {"FullName": name}, {n: cff_outline(n) for n in CFF_GLYPHS}, {})
+    fb.setupHorizontalMetrics({n: (advance(n), 50) for n in CFF_GLYPHS})
+    fb.setupHorizontalHeader(ascent=800, descent=-200)
+    fb.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
+    fb.setupNameTable({"familyName": name, "styleName": "Regular"})
+    fb.setupPost()
+    for tag, data in extra.items():
+        fb.font[tag] = raw(tag, data)
+    fb.font["head"].created = fb.font["head"].modified = 3660681600
+    fb.font.recalcTimestamp = False
+    return fb.font
+
+
 def build(directory):
     def save(font, name):
         font.save(os.path.join(directory, name))
@@ -374,6 +427,7 @@ def build(directory):
     save(base("KerxPairs", {"kerx": pairs_kerx()}), "KerxPairs.ttf")
     save(base("KerxMachines", {"kerx": machines_kerx(), "ankr": ankr()}), "KerxMachines.ttf")
     save(base("KerxPoints", {"kerx": points_kerx()}), "KerxPoints.ttf")
+    save(base_cff("KerxPointsCFF", {"kerx": points_kerx()}), "KerxPointsCFF.otf")
     save(base("KerxPlanGSUBGPOS", {"kerx": PLAN_KERX}, fea=LS + GSUB + GPOS_KERN), "KerxPlanGSUBGPOS.ttf")
     save(base("KerxPlanGPOS", {"kerx": PLAN_KERX}, fea=LS + GPOS_KERN), "KerxPlanGPOS.ttf")
     save(base("KerxPlanNoKern", {"kerx": PLAN_KERX}, fea=LS + GSUB + GPOS_MARK_ONLY), "KerxPlanNoKern.ttf")

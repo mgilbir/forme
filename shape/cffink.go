@@ -622,6 +622,10 @@ type t2Run struct {
 	// accent runs and nothing otherwise.
 	path       func(t2Seg)
 	offX, offY float64
+	// accentFirst draws a seac's accent before its base, which is the order
+	// FreeType's CFF loader builds an outline's points in (cffContourPoints);
+	// measuring and drawing take HarfBuzz's, the base first.
+	accentFirst bool
 	// hints, when it is not nil, is handed every hint the charstring
 	// declares: a stem operator and its operands, or a mask operator, the
 	// stems a first mask declares by the operands in front of it (nil for
@@ -1230,6 +1234,16 @@ func (in *t2Interp) seac() {
 	accent := o.stdCodeToGlyph(toIntClamped(in.args[n-1]))
 	if in.inSeac || base == 0 || accent == 0 {
 		in.err = true
+		return
+	}
+	if in.run.accentFirst {
+		in.run.offX, in.run.offY = dx, dy
+		_, ok := in.run.bounds(accent, true)
+		in.run.offX, in.run.offY = 0, 0
+		if ok {
+			_, ok = in.run.bounds(base, true)
+		}
+		in.err = in.err || !ok
 		return
 	}
 	bb, ok := in.run.bounds(base, true)

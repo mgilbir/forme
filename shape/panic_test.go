@@ -274,6 +274,7 @@ func FuzzLoadAndUse(f *testing.F) {
 		"KerxPairs.ttf",         // AAT kerx: the pair formats, tuples, across the line
 		"KerxMachines.ttf",      // AAT kerx: the state machines, ankr
 		"KerxPoints.ttf",        // AAT kerx: attached by outline points of composites
+		"KerxPointsCFF.otf",     // and of CFF glyphs, a seac among them
 		"TrakCases.ttf",         // AAT trak: tracks, sizes, graphemes
 		"SVGPaint.ttf",          // SVG documents, gzipped and cut at the table's end
 	} {
