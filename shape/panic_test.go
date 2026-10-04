@@ -293,6 +293,12 @@ func FuzzLoadAndUse(f *testing.F) {
 	f.Add(buildCollection(
 		fonttest.SFNT(fonttest.SFNTOptions{Glyphs: []fonttest.Glyph{{Rune: 'a', Advance: 500, HasShape: true}}}),
 		fonttest.SFNT(fonttest.SFNTOptions{Glyphs: []fonttest.Glyph{{Rune: 'b', Advance: 400, HasShape: true}}})))
+	// And one of variable faces, glyf and CFF2, whose instances are cut.
+	vc, err1 := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", "VarComposite.ttf"))
+	cff2, err2 := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", "CFF2Blend.otf"))
+	if err1 == nil && err2 == nil {
+		f.Add(buildCollection(vc, cff2))
+	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		// Each face of a collection, as LoadCollection reads it from the
@@ -302,6 +308,15 @@ func FuzzLoadAndUse(f *testing.F) {
 				if face, err := LoadCollection(data, d.Index); err == nil {
 					useFace(face)
 					checkSubset(t, face)
+					// And cut at the far end of its axes, which reads the
+					// variation tables as the face's instance does.
+					coords := map[string]float64{}
+					for _, a := range face.Axes() {
+						coords[a.Tag] = a.Max
+					}
+					if inst, err := LoadCollectionInstance(data, d.Index, coords); err == nil {
+						useFace(inst)
+					}
 				}
 			}
 		}

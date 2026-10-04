@@ -33,14 +33,18 @@ type collectionFace struct {
 // program is the face as a font of its own: its tables, copied out of the
 // collection into an sfnt.
 func (c *collectionFace) program() []byte {
-	c.once.Do(func() {
-		if _, cff := c.tables["CFF "]; cff {
-			c.standalone = assembleOTTO(c.tables)
-		} else {
-			c.standalone = assembleSFNT(c.tables)
-		}
-	})
+	c.once.Do(func() { c.standalone = standaloneProgram(c.tables) })
 	return c.standalone
+}
+
+// standaloneProgram is a font taken apart into its tables, written back out as
+// an sfnt of its own: OpenType's 'OTTO' where its outlines are CFF, TrueType's
+// otherwise.
+func standaloneProgram(tables map[string][]byte) []byte {
+	if _, cff := tables["CFF "]; cff {
+		return assembleOTTO(tables)
+	}
+	return assembleSFNT(tables)
 }
 
 // sfntTables is the face's font taken apart into its tables: a face of a
@@ -75,12 +79,46 @@ func programSize(data []byte, tables map[string][]byte) int {
 // zero. A face of a collection loads at its default instance, as Load loads a
 // variable font.
 func LoadCollection(data []byte, index int) (*Face, error) {
+	tables, err := collectionFaceTables(data, index)
+	if err != nil {
+		return nil, err
+	}
+	if tables == nil {
+		return Load(data)
+	}
+	f, err := loadTables(nil, tables, nil)
+	if err != nil {
+		return nil, err
+	}
+	f.collection = &collectionFace{tables: tables}
+	return f, nil
+}
+
+// LoadCollectionInstance is LoadInstance for one face of a font collection: the
+// face, by its index from zero, at a point in its design space. An instance is
+// a font program of its own, written for the location, so it shares nothing
+// with the collection. A single font loads as LoadInstance loads it, at index
+// zero.
+func LoadCollectionInstance(data []byte, index int, coords map[string]float64) (*Face, error) {
+	tables, err := collectionFaceTables(data, index)
+	if err != nil {
+		return nil, err
+	}
+	if tables == nil {
+		return LoadInstance(data, coords)
+	}
+	return LoadInstance(standaloneProgram(tables), coords)
+}
+
+// collectionFaceTables is the tables of a face of a collection, and nil and no
+// error for data that is a single font, whose only face is index zero.
+func collectionFaceTables(data []byte, index int) (map[string][]byte, error) {
 	offsets := font.CollectionOffsets(data)
 	if offsets == nil {
 		if index != 0 {
 			return nil, fmt.Errorf("fonts: a single font has one face, and face %d was asked for", index)
 		}
-		return Load(data)
+		return nil, nil
 	}
 	if index < 0 || index >= len(offsets) {
 		return nil, fmt.Errorf("fonts: the collection holds %d fonts, and font %d was asked for", len(offsets), index)
@@ -89,12 +127,7 @@ func LoadCollection(data []byte, index int) (*Face, error) {
 	if tables == nil {
 		return nil, fmt.Errorf("fonts: font %d of the collection has a table directory that cannot be read", index)
 	}
-	f, err := loadTables(nil, tables, nil)
-	if err != nil {
-		return nil, err
-	}
-	f.collection = &collectionFace{tables: tables}
-	return f, nil
+	return tables, nil
 }
 
 // CollectionFace describes one face of a font file, as the face describes
