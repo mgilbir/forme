@@ -142,7 +142,7 @@ question.
 
 **Glyphs, drawn.** A glyph's outline (`Face.GlyphOutline`), and its colour
 (`Face.PaintGlyph`): a COLR glyph's layers or paint graph, coloured from a CPAL
-palette with any of its entries overridden as CSS `override-colors` does, an
+palette with any of its entries overridden (`PaintOptions.PaletteOverrides`), an
 SVG glyph's document, and a CBDT or sbix glyph's PNG image at the strike for
 the size drawn, handed to a `Painter` call for call as HarfBuzz's
 `hb_font_paint_glyph` hands them out. `Face.GlyphColour` says which a glyph is
