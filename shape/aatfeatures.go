@@ -28,9 +28,11 @@ import (
 // would keep the first of two that disagree. A face with no feat table runs
 // every chain with its default flags whatever is asked, as HarfBuzz runs it.
 //
-// Not here: a chain's feature that follows the run's language (type 39, read
-// through the ltag table), which needs a language this package does not hand
-// the morx.
+// A chain's feature may also follow the run's language rather than a request:
+// type 39, whose setting names a language tag of the ltag table. It is on where
+// the tag is the run's language (Features.Language) or a less specific form of
+// it — "zh" for "zh-Hant" — as hb_language_matches has it, whatever the caller
+// asked for, as HarfBuzz turns it on in the flags it compiles for a plan.
 
 // aatFeatureMapping is one row of HarfBuzz's feature_mappings: an OpenType tag,
 // the AAT feature type it is, and the settings that turn it on and off.
@@ -136,6 +138,9 @@ const (
 	aatLetterCaseSmallCaps = 3
 	aatLowerCase           = 37
 	aatLowerCaseSmallCaps  = 1
+	// aatLanguageTag is the type whose setting is one more than the index of
+	// a language tag in ltag.
+	aatLanguageTag = 39
 )
 
 // findAATMapping is hb_aat_layout_find_feature_mapping.
@@ -290,12 +295,10 @@ func settleFeatures(user []userFeature) []userFeature {
 
 // flagsFor is Chain::compile_flags: the chain's default flags, changed by each
 // of its features a caller's settings ask for — a chain naming small capitals
-// by their deprecated type is asked by the current one.
-func (c *morxChain) flagsFor(settings []aatSetting) uint32 {
+// by their deprecated type is asked by the current one — and by each that names
+// a language tag of ltag the run's language matches.
+func (c *morxChain) flagsFor(settings []aatSetting, lang aatLanguage, ltag []aatLanguage) uint32 {
 	flags := c.defaultFlags
-	if settings == nil {
-		return flags
-	}
 	asked := func(typ, setting int) bool {
 		for _, s := range settings {
 			if s.typ == typ && s.setting == setting {
@@ -306,10 +309,91 @@ func (c *morxChain) flagsFor(settings []aatSetting) uint32 {
 	}
 	for _, fe := range c.features {
 		if asked(fe.typ, fe.setting) ||
-			fe.typ == aatLetterCase && fe.setting == aatLetterCaseSmallCaps && asked(aatLowerCase, aatLowerCaseSmallCaps) {
+			fe.typ == aatLetterCase && fe.setting == aatLetterCaseSmallCaps && asked(aatLowerCase, aatLowerCaseSmallCaps) ||
+			fe.typ == aatLanguageTag && fe.setting != 0 && hbLanguageMatches(ltagAt(ltag, fe.setting-1), lang) {
 			flags &= fe.disable
 			flags |= fe.enable
 		}
 	}
 	return flags
+}
+
+// aatLanguage is an hb_language_t: a language tag in HarfBuzz's canonical
+// form, or, where valid is false, HB_LANGUAGE_INVALID, which is what a run
+// with no language has.
+type aatLanguage struct {
+	tag   string
+	valid bool
+}
+
+// hbLanguage is hb_language_from_string: no language for an empty tag; else
+// the first 63 bytes, each letter lowered and an underscore made a hyphen, cut
+// at the first byte that is none of letter, digit, hyphen or underscore.
+func hbLanguage(s string) aatLanguage {
+	if s == "" || s[0] == 0 {
+		return aatLanguage{}
+	}
+	if len(s) > 63 {
+		s = s[:63]
+	}
+	b := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == '-':
+		case 'A' <= c && c <= 'Z':
+			c += 'a' - 'A'
+		case c == '_':
+			c = '-'
+		default:
+			return aatLanguage{tag: string(b), valid: true}
+		}
+		b = append(b, c)
+	}
+	return aatLanguage{tag: string(b), valid: true}
+}
+
+// hbLanguageMatches is hb_language_matches: whether specific is lang, or a more
+// specific form of it, lang followed by a hyphen. Two runs with no language
+// match each other, and nothing else.
+func hbLanguageMatches(lang, specific aatLanguage) bool {
+	if lang == specific {
+		return true
+	}
+	if !lang.valid || !specific.valid {
+		return false
+	}
+	l, s := lang.tag, specific.tag
+	return len(l) <= len(s) && s[:len(l)] == l && (len(s) == len(l) || s[len(l)] == '-')
+}
+
+// ltagAt is ltag::get_language: the i-th tag, and no language for one the
+// table does not have.
+func ltagAt(ltag []aatLanguage, i int) aatLanguage {
+	if i < 0 || i >= len(ltag) {
+		return aatLanguage{}
+	}
+	return ltag[i]
+}
+
+// readLtag reads an ltag table's language tags, and none for a table
+// HarfBuzz's sanitizer refuses: a version before 1, or a tag whose bytes are
+// not inside the table.
+func readLtag(b []byte) []aatLanguage {
+	if len(b) < 12 || font.Be32(b, 0) < 1 {
+		return nil
+	}
+	n := int(font.Be32(b, 8))
+	if n > (len(b)-12)/4 {
+		return nil
+	}
+	out := make([]aatLanguage, n)
+	for i := range out {
+		off, length := font.Be16(b, 12+4*i), font.Be16(b, 14+4*i)
+		if off > len(b) || length > len(b)-off {
+			return nil
+		}
+		out[i] = hbLanguage(string(b[off : off+length]))
+	}
+	return out
 }

@@ -382,6 +382,46 @@ def mort():
     return struct.pack(">HHI", 1, 0, 1) + chain
 
 
+# MorxLanguage.ttf: a morx chain whose features follow the run's language,
+# type 39, each setting one more than the index of a tag in the ltag table,
+# which states "tr", "ZH_Hant" and "sr-Latn". Each feature turns on a subtable
+# turning its letter into X:
+#
+#   G  setting 1, "tr", which "tr", "TR" and "tr-TR" are, and "trk" is not
+#   H  setting 2, "ZH_Hant", which HarfBuzz reads as "zh-hant": "zh-Hant"
+#      and "zh_hant_TW" are, and "zh" is not
+#   K  setting 3, "sr-Latn": "sr-Latn-RS" is, "sr" is not
+#   I  setting 9, which names no tag: no language, which only a run with no
+#      language matches
+#   J  setting 0, which names nothing and is never on
+LANGUAGE_GLYPHS = [".notdef", "G", "H", "I", "J", "K", "X"]
+LANGUAGE_GID = {name: i for i, name in enumerate(LANGUAGE_GLYPHS)}
+
+
+def ltag(tags):
+    """An ltag table: version 1, no flags, and each tag's range."""
+    at = 12 + 4 * len(tags)
+    ranges, strings = b"", b""
+    for t in tags:
+        ranges += struct.pack(">HH", at + len(strings), len(t))
+        strings += t.encode("ascii")
+    return struct.pack(">III", 1, 0, len(tags)) + ranges + strings
+
+
+def language_chain():
+    letters = [("G", 0x02), ("H", 0x04), ("K", 0x08), ("I", 0x10), ("J", 0x20)]
+    subtables = [subtable(4, bit, single_lookup([(LANGUAGE_GID[g], LANGUAGE_GID["X"])])) for g, bit in letters]
+    features = [(39, 1, 0x02, ALL), (39, 2, 0x04, ALL), (39, 3, 0x08, ALL), (39, 9, 0x10, ALL), (39, 0, 0x20, ALL)]
+    body = b"".join(struct.pack(">HHII", *f) for f in features) + b"".join(subtables)
+    head = struct.pack(">IIII", 0x01, 16 + len(body), len(features), len(subtables))
+    return struct.pack(">HHI", 2, 0, 1) + head + body
+
+
+def build_language(directory):
+    save(os.path.join(directory, "MorxLanguage.ttf"), "MorxLanguage", LANGUAGE_GLYPHS, "GHIJK",
+         {"morx": language_chain(), "ltag": ltag(["tr", "ZH_Hant", "sr-Latn"])})
+
+
 def build_mort(directory):
     save(os.path.join(directory, "MortCases.ttf"), "MortCases", MORT_GLYPHS, "GHIJKLMNOP", {"mort": mort()})
 
@@ -390,3 +430,4 @@ if __name__ == "__main__":
     build(os.path.join(sys.argv[1], "MorxCases.ttf"))
     build_features(sys.argv[1])
     build_mort(sys.argv[1])
+    build_language(sys.argv[1])

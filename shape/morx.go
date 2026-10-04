@@ -783,6 +783,7 @@ func removeDeleted(info []Glyph) []Glyph {
 func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) []Glyph {
 	m := sh.f.morx
 	settings := sh.f.aatSettings(user)
+	lang := hbLanguage(sh.features.Language)
 	b := &aatBuf{info: buf, ok: true, f: sh.f, maxOps: max(len(buf)*morxOpsPerGlyph, morxOpsFloor)}
 	if len(buf) >= 4 {
 		b.seen = map[int]bool{}
@@ -792,7 +793,7 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) 
 	}
 	reversed := false
 	for _, chain := range m.chains {
-		flags := chain.flagsFor(settings)
+		flags := chain.flagsFor(settings, lang, sh.f.ltag)
 		for i := range chain.subtables {
 			s := &chain.subtables[i]
 			if s.flags&flags == 0 {

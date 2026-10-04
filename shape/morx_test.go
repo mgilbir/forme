@@ -30,13 +30,17 @@ type morxCase struct {
 	// turns them on, in the order named, which ShapeGlyphsWith asks them in.
 	on, off []string
 	ordered bool
-	fails   bool
-	glyphs  [][5]int
+	// language is the run's language, where the case sets one after an @:
+	// lang says it does, and language may be empty, which is no language.
+	language string
+	lang     bool
+	fails    bool
+	glyphs   [][5]int
 }
 
 // morxFixtures are the faces of morx.expected.txt that morx_fixture.py builds
 // into testdata/harfbuzz/fonts; the rest are the suite's, in aat/fonts.
-var morxFixtures = []string{"MorxCases.ttf", "MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFeat.ttf", "MortCases.ttf"}
+var morxFixtures = []string{"MorxCases.ttf", "MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFeat.ttf", "MortCases.ttf", "MorxLanguage.ttf"}
 
 func readMorxGolden(t *testing.T) []morxCase {
 	t.Helper()
@@ -64,9 +68,11 @@ func readMorxGolden(t *testing.T) []morxCase {
 			}
 			c.text += string(rune(r))
 		}
-		if f[4] != "." {
+		spec, language, lang := strings.Cut(f[4], "@")
+		c.language, c.lang = language, lang
+		if spec != "." {
 			c.ordered = true
-			for _, feature := range strings.Split(f[4], ",") {
+			for _, feature := range strings.Split(spec, ",") {
 				if feature[0] == '+' {
 					c.on = append(c.on, feature[1:])
 				} else {
@@ -104,6 +110,11 @@ func readMorxGolden(t *testing.T) []morxCase {
 // where it only turns features on, in its order; otherwise with Features,
 // turned off and on.
 func shapeMorxCase(f *Face, c morxCase) []Glyph {
+	if c.lang {
+		glyphs, _ := f.ShapeGlyphsInContext(c.text, "", "", Features{Tags: strings.Join(c.on, ","),
+			TagsOff: strings.Join(c.off, ","), Language: c.language})
+		return glyphs
+	}
 	if c.ordered {
 		glyphs, _ := f.ShapeGlyphsWith(c.text, c.on...)
 		return glyphs

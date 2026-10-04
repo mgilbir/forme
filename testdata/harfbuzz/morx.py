@@ -63,8 +63,19 @@ for face in ("MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFe
 FIXTURE += [("MortCases.ttf", t, ".") for t in
             ["GHI", "JK", "LM", "O", "P", "GHIJKLMOP", "LML", "JJK", "KJ", "GH", "HI", "LLM", "OO"]]
 
+# MorxLanguage.ttf: its letters in runs of no language, of languages its ltag
+# tags are or are a less specific form of, and of languages they are not. A
+# language follows the features after an @; with none, the run has none,
+# which HarfBuzz has where nothing sets one (its script and direction are set
+# here, not guessed, since guessing would give it the language of the process
+# running this).
+FIXTURE += [("MorxLanguage.ttf", "GHIJK", "." + lang) for lang in
+            ["@", "@tr", "@TR", "@tr-TR", "@trk", "@zh-Hant", "@zh_hant_TW", "@zh", "@sr-Latn-RS", "@sr",
+             "@en"]]
+FIXTURE += [("MorxLanguage.ttf", "GHIJK", "+liga@tr")]
+
 FIXTURE_FONTS = {"MorxCases.ttf", "MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFeat.ttf",
-                 "MortCases.ttf"}
+                 "MortCases.ttf", "MorxLanguage.ttf"}
 
 
 def cases():
@@ -123,11 +134,18 @@ for test, name, text, expected, features in cases():
     font, digest = fonts[name]
     buf = hb.Buffer()
     buf.add_str(text)
-    buf.guess_segment_properties()
+    spec, at_lang, lang = features.partition("@")
+    if at_lang:
+        buf.direction = "ltr"
+        buf.script = "Latn"
+        if lang:
+            buf.language = lang
+    else:
+        buf.guess_segment_properties()
     buf.flags = hb.BufferFlags.REMOVE_DEFAULT_IGNORABLES
     codes = ",".join(f"{ord(c):04X}" for c in text)
     try:
-        hb.shape(font, buf, hb_features(features))
+        hb.shape(font, buf, hb_features(spec))
     except MemoryError:
         # HarfBuzz gave up: the case's state machine ran past the buffer's
         # allowance, which uharfbuzz reports as running out of memory.
@@ -150,7 +168,8 @@ with open(out_path, "w", encoding="utf-8") as w:
     w.write("#\n")
     w.write("# Each case of the text-rendering tests' morx suite and of the fixture\n")
     w.write("# faces: the test, the font, its SHA-256, the code points, the features\n")
-    w.write("# asked for (+ on, - off, . none), and the glyphs HarfBuzz sets them as —\n")
+    w.write("# asked for (+ on, - off, . none; after an @, the run's language), and\n")
+    w.write("# the glyphs HarfBuzz sets them as —\n")
     w.write("# index, cluster (a byte offset into the UTF-8 string), x advance,\n")
     w.write("# x offset and y offset, in font units — which for the suite are the\n")
     w.write("# glyphs it expects, by name and position; or fails, where HarfBuzz\n")
