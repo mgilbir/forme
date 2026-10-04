@@ -54,7 +54,32 @@ func liftWOFF2(t *testing.T, data []byte) ([]fonttest.WOFF2Table, map[string][]b
 	return out, decoded
 }
 
-// plainTables is a small font's tables, none transformed, in tag order.
+// locaAfterGlyf is the tables with loca moved to right after glyf, which is
+// where a collection has to have it (W3C WOFF 2.0 (2024) §5.5); a single font
+// may have tables between them.
+func locaAfterGlyf(tables []fonttest.WOFF2Table) []fonttest.WOFF2Table {
+	var loca *fonttest.WOFF2Table
+	var out []fonttest.WOFF2Table
+	for _, tb := range tables {
+		if tb.Tag == "loca" {
+			loca = &tb
+			continue
+		}
+		out = append(out, tb)
+	}
+	if loca == nil {
+		return out
+	}
+	for i, tb := range out {
+		if tb.Tag == "glyf" {
+			return append(out[:i+1], append([]fonttest.WOFF2Table{*loca}, out[i+1:]...)...)
+		}
+	}
+	return append(out, *loca)
+}
+
+// plainTables is a small font's tables, none transformed, in tag order but for
+// loca, which is right after glyf as a collection has it.
 func plainTables(r rune) ([]fonttest.WOFF2Table, map[string][]byte) {
 	tabs := SFNTTables(fonttest.SFNT(fonttest.SFNTOptions{
 		Glyphs: []fonttest.Glyph{{Rune: r, Advance: 600, HasShape: true}},
@@ -68,7 +93,7 @@ func plainTables(r rune) ([]fonttest.WOFF2Table, map[string][]byte) {
 	for _, tag := range tags {
 		out = append(out, fonttest.WOFF2Table{Tag: tag, Data: tabs[tag]})
 	}
-	return out, tabs
+	return locaAfterGlyf(out), tabs
 }
 
 // sameTables compares a decoded font's tables to the ones it was made from,
@@ -103,6 +128,7 @@ func TestAWOFF2CollectionIsTheCollectionItWasMadeFrom(t *testing.T) {
 		t.Fatal(err)
 	}
 	real, realTables := liftWOFF2(t, src)
+	real = locaAfterGlyf(real)
 	transformed := 0
 	for _, tb := range real {
 		if tb.Transformed {

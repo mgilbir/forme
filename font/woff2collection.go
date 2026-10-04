@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-// A font collection wrapped as WOFF 2: W3C WOFF 2.0 §5.3.
+// A font collection wrapped as WOFF 2: W3C WOFF 2.0 (2024) §4.2.
 //
 // A collection — a .ttc or .otc — is several fonts sharing the tables they have
 // in common, and WOFF 2 keeps the sharing: its table directory lists each table
@@ -30,7 +30,7 @@ type woff2CollectionFont struct {
 }
 
 // u255 reads a 255UInt16: one byte, or one of three escapes saying a second
-// byte or a 16-bit word follows (W3C WOFF 2.0 §4.1).
+// byte or a 16-bit word follows (W3C WOFF 2.0 (2024) §3.1).
 func (r *woff2Reader) u255() (int, bool) {
 	b, ok := r.u8()
 	if !ok {
@@ -164,8 +164,14 @@ func rebuildCollection(version uint32, fonts []woff2CollectionFont, tables []wof
 			if tables[glyf].transformed != tables[loca].transformed {
 				return nil, errors.New("fonts: a font of the WOFF 2 collection transformed one of glyf and loca and not the other")
 			}
+			// In a single font loca has only to come after glyf; in a
+			// collection it is the very next table of the directory, which
+			// is what pairs it with its glyf (W3C WOFF 2.0 (2024) §5.5).
 			if glyf > loca {
 				return nil, errors.New("fonts: a font of the WOFF 2 collection names its loca table before the glyf table it comes out of")
+			}
+			if loca != glyf+1 {
+				return nil, errors.New("fonts: a font of the WOFF 2 collection has a loca table that is not the one right after its glyf")
 			}
 			if g, ok := glyfs[glyf]; ok {
 				if g.loca != &tables[loca] {
