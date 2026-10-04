@@ -39,6 +39,9 @@ func LoadSimple(data []byte) (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
+	if f.bitmapOnly {
+		return nil, errors.New("fonts: a font whose glyphs are only bitmaps has no outlines to embed as a simple font")
+	}
 	if f.cff {
 		// A CFF program embeds as FontFile3, and a simple font with CFF
 		// outlines is a Type1C font whose encoding lives inside the program.

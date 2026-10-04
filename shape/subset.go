@@ -77,6 +77,10 @@ func (f *Face) subset() ([]byte, []int, error) {
 	if f.std != nil {
 		return nil, nil, errors.New("fonts: a standard font has no program to subset")
 	}
+	if f.bitmapOnly {
+		return nil, nil, errors.New("fonts: the font's glyphs are only bitmaps, and a font program " +
+			"embedded in a document has to carry outlines")
+	}
 	n := f.prog.NumGlyphs
 	if n <= 0 {
 		// A font declaring no glyphs at all. Every sfnt has .notdef at index

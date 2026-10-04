@@ -100,7 +100,7 @@ type paintCase struct {
 
 // paintFaces are the corpus faces paint.expected.txt paints, by the variable
 // naming the directory each is fetched to; every other face is in the tree.
-var paintFaces = map[string]string{"Noto-COLRv1.ttf": "EMOJI_FONTS"}
+var paintFaces = map[string]string{"Noto-COLRv1.ttf": "EMOJI_FONTS", "NotoColorEmoji.ttf": "EMOJI_FONTS"}
 
 // paintFont is a face of paint.expected.txt, and nil for a corpus face that has
 // not been fetched.
@@ -229,6 +229,11 @@ func TestPaintGlyphAgreesWithHarfBuzz(t *testing.T) {
 		}
 		for i, want := range c.glyphs {
 			gid := c.gids[i]
+			if f.BitmapOnly() && len(want) == 3 && want[0] == fmt.Sprintf("CG %d", gid) {
+				// HarfBuzz fills the empty outline of a glyph with no image;
+				// a face with no outlines paints nothing for it.
+				want = nil
+			}
 			r := &recordingPainter{}
 			if err := f.PaintGlyph(gid, c.opts, r); err != nil {
 				t.Errorf("%s glyph %d: %v", label, gid, err)
@@ -279,7 +284,7 @@ func TestGlyphColourSaysWhatIsPainted(t *testing.T) {
 			var ok bool
 			switch kind {
 			case ColourNone:
-				ok = plain
+				ok = plain || f.BitmapOnly() && len(r.lines) == 0
 			case ColourBitmap:
 				ok = image
 			case ColourLayers:

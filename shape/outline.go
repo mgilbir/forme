@@ -199,6 +199,9 @@ func (f *Face) glyphOutline(gid int) ([]Segment, error) {
 		segs, err = f.glyfSegments(gid, c)
 	case f.ink != nil:
 		segs, err = f.cffSegments(gid, c)
+	case f.bitmapOnly:
+		// No outlines at all: every glyph's is empty, and a bitmap glyph's is
+		// said to be a bitmap below.
 	default:
 		err = errors.New("shape: the face has no glyf or CFF outlines")
 	}
