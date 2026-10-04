@@ -322,7 +322,9 @@ hbcolrink:
 # hbcolrink). The bitmap faces are asked at sizes on, between and past their
 # strikes, which is how the strike is chosen. Noto Color Emoji's COLRv1 build,
 # from `make emoji-fonts`, is painted for a few glyphs: three flags with coats of
-# arms of thousands of paints each, and two ordinary emoji. See paint.py.
+# arms of thousands of paints each, and two ordinary emoji; and its CBDT build,
+# which has no outlines at all, for a few glyphs and at a size below its strike.
+# See paint.py.
 HBFONTS := $(HARFBUZZ_DIR)/fonts
 hbpaint:
 	$(PYTHON) $(HARFBUZZ_DIR)/paint_fixture.py $(HBFONTS)
@@ -349,7 +351,9 @@ hbpaint:
 		SbixInk.ttf=$(HBFONTS)/SbixInk.ttf:bitmap=1:ppem=100 \
 		SbixInkLarge.ttf=$(HBFONTS)/SbixInkLarge.ttf:bitmap=1 \
 		SbixInkRejected.ttf=$(HBFONTS)/SbixInkRejected.ttf:bitmap=1 \
-		Noto-COLRv1.ttf=$(EMOJI_DIR)/Noto-COLRv1.ttf:glyphs=3827,3830,3979,100,1500
+		Noto-COLRv1.ttf=$(EMOJI_DIR)/Noto-COLRv1.ttf:glyphs=3827,3830,3979,100,1500 \
+		NotoColorEmoji.ttf=$(EMOJI_DIR)/NotoColorEmoji.ttf:bitmap=1:glyphs=0,1,5,1494,1714,1978,2032,2325,4045 \
+		NotoColorEmoji.ttf=$(EMOJI_DIR)/NotoColorEmoji.ttf:bitmap=1:ppem=20:glyphs=5,1714,2032
 
 # Variable composites (VARC): a face built here (see varc_fixture.py), its
 # ink and outlines asked of HarfBuzz at its default and six locations, and its

@@ -231,7 +231,8 @@ type GlyphColour uint8
 // The representations, in the order PaintGlyph asks for them.
 const (
 	// ColourNone is a glyph with no colour: it is painted as its outline,
-	// filled with the foreground.
+	// filled with the foreground, or, in a face with no outlines
+	// (BitmapOnly), not at all.
 	ColourNone GlyphColour = iota
 	// ColourPaint is a COLRv1 glyph, a graph of paints.
 	ColourPaint
@@ -268,7 +269,9 @@ func (f *Face) GlyphColour(gid, ppem int) GlyphColour {
 
 // PaintGlyph paints a glyph through p: its COLR paints, or its CBDT or sbix
 // image, or, for a glyph with none, its outline in the foreground; see
-// GlyphColour. Coordinates are in font units, y increasing upwards.
+// GlyphColour. A face whose glyphs are only bitmaps (BitmapOnly) paints nothing
+// for a glyph with no image. Coordinates are in font units, y increasing
+// upwards.
 //
 // It is an error for a glyph the face does not have, and for a standard face,
 // which has no glyphs to paint (ErrNoOutline). A COLR glyph whose painting
@@ -292,6 +295,12 @@ func (f *Face) PaintGlyph(gid int, opts PaintOptions, p Painter) error {
 	}
 	if img, ok := f.bitmapImage(gid, opts.PPEM); ok {
 		p.Image(img)
+		return nil
+	}
+	if f.bitmapOnly {
+		// A face with no outlines paints nothing for a glyph its strike has
+		// no image of, where HarfBuzz fills an empty outline: the same
+		// nothing, said without the calls.
 		return nil
 	}
 	p.PushClipGlyph(gid)

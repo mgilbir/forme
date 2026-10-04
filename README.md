@@ -127,8 +127,8 @@ knowledge. Cursive joining for Arabic and its relatives, and the mark ordering o
 UTR #53. OpenType layout: GSUB 1–6 and GPOS 1–8, mark attachment, cursive
 attachment, contextual and chained-contextual rules, mark filtering sets.
 
-**Fonts.** sfnt and CFF, Type 1, and the WOFF and WOFF 2 wrappers a web font
-arrives in; variable fonts instanced at a named or arbitrary point in their
+**Fonts.** sfnt and CFF, Type 1, the WOFF and WOFF 2 wrappers a web font
+arrives in, and fonts whose glyphs are only bitmaps, as bitmap emoji fonts are; variable fonts instanced at a named or arbitrary point in their
 design space — where CSS's font-weight, font-width, font-style,
 font-optical-sizing and font-variation-settings place them — subsetting, and
 the metrics a layout engine has to ask for —

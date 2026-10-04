@@ -176,7 +176,7 @@ def hb_color(r, g, b, a):
     return b << 24 | g << 16 | r << 8 | a
 
 
-def paint_bitmaps(data, ppem, out):
+def paint_bitmaps(data, ppem, out, only=None):
     lines = []
 
     def image(_f, _d, blob, width, height, fmt, slant, ext, _u):
@@ -210,7 +210,7 @@ def paint_bitmaps(data, ppem, out):
     face = lib.hb_face_create(blob, 0)
     font = lib.hb_font_create(face)
     lib.hb_font_set_ppem(font, ppem, ppem)
-    for gid in range(lib.hb_face_get_glyph_count(face)):
+    for gid in only or range(lib.hb_face_get_glyph_count(face)):
         lines.clear()
         lib.hb_font_paint_glyph(font, gid, funcs, None, 0, hb_color(*FOREGROUND))
         out.append(f"G {gid}")
@@ -236,7 +236,7 @@ for arg in sys.argv[2:]:
     label = name + (f"@wght={weight}" if weight is not None else "")
     out.append(f"face {label} palette {palette} ppem {ppem} {hashlib.sha256(data).hexdigest()}")
     if "bitmap" in settings:
-        paint_bitmaps(data, ppem, out)
+        paint_bitmaps(data, ppem, out, only)
     else:
         paint_colr(data, weight, palette, out, only)
 

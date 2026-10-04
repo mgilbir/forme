@@ -237,6 +237,10 @@ type Face struct {
 	// WithFeatureSettings.
 	settingsOn, settingsOff string
 
+	// bitmapOnly is a face whose glyphs are only bitmaps, with no outlines at
+	// all. See BitmapOnly.
+	bitmapOnly bool
+
 	used    map[int]bool // glyph indices this face has encoded
 	runWork *runWork     // opt-in per-call budget, never shared by Clone
 	// spareWork is the budget ShapeGlyphsBounded reuses from call to call on
@@ -244,6 +248,20 @@ type Face struct {
 	// Clone, for the reason used is not.
 	spareWork *runWork
 }
+
+// hasBitmaps reports whether a font has a table of bitmap glyphs: CBDT and
+// CBLC, sbix, or EBDT and EBLC.
+func hasBitmaps(tables map[string][]byte) bool {
+	present := func(tag string) bool { return len(tables[tag]) > 0 }
+	return present("CBDT") && present("CBLC") || present("sbix") || present("EBDT") && present("EBLC")
+}
+
+// BitmapOnly reports whether the face's glyphs are only bitmaps: a font with
+// CBDT, sbix or EBDT and no glyf, CFF or CFF2 outlines, such as Noto Color
+// Emoji's CBDT build. Every glyph's outline is empty, so GlyphOutline draws
+// nothing and the glyphs are painted from their images (PaintGlyph); and it
+// cannot be subsetted or embedded as a font, which has to carry outlines.
+func (f *Face) BitmapOnly() bool { return f.bitmapOnly }
 
 // layoutTableNames are the tables readLayout reads, and so the ones a face
 // keeps in order to read them again per script. The rest of the font is not
@@ -353,8 +371,14 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	// else.
 	_, hasCFF2 := tables["CFF2"]
 	cff2Outlines := hasCFF2 && !hasGlyf && !hasCFF
-	if !hasGlyf && !hasCFF && !cff2Outlines {
-		return nil, errors.New("fonts: the font carries neither glyf nor CFF outlines")
+	// A font whose glyphs are only bitmaps — CBDT, sbix or EBDT and no
+	// outlines, which is how Noto Color Emoji's CBDT build and most bitmap
+	// emoji fonts are made — is a face whose every outline is empty: it is
+	// shaped and measured from hmtx and the bitmaps, and painted from them.
+	// See BitmapOnly.
+	bitmapOnly := !hasGlyf && !hasCFF && !cff2Outlines && hasBitmaps(tables)
+	if !hasGlyf && !hasCFF && !cff2Outlines && !bitmapOnly {
+		return nil, errors.New("fonts: the font carries neither glyf nor CFF outlines, nor bitmaps")
 	}
 	// One budget for the whole font, shared by the sfnt and CFF readers, so
 	// that what is bounded is the font and not each of its parts.
@@ -391,7 +415,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		// glyph's CID its index: see cff2cff.go.
 		gidToCID = identityCIDs(prog.NumGlyphs)
 		registry, ordering, supplement = "Adobe", "Identity", 0
-	} else if !hasGlyf {
+	} else if !hasGlyf && !bitmapOnly {
 		// The CFF table has to be parsed on its own: the sfnt reader answers
 		// questions from cmap, hmtx and maxp and never opens it, so nothing
 		// about the outlines is known until it is asked directly. (Reading
@@ -434,7 +458,8 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 		ordering:   ordering,
 		supplement: supplement,
 		prog:       prog,
-		cff:        !hasGlyf,
+		cff:        !hasGlyf && !bitmapOnly,
+		bitmapOnly: bitmapOnly,
 		unitsPerEm: unitsPerEm,
 		varCoords:  coords,
 		used:       map[int]bool{},
@@ -478,7 +503,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	case cff2 != nil:
 		f.cff2 = cff2
 		f.ink = newCFF2Ink(cff2)
-	case !hasGlyf:
+	case !hasGlyf && !bitmapOnly:
 		f.ink = newCFFInk(tables["CFF "], prog.NumGlyphs)
 	}
 	if len(tables["COLR"]) > 0 {
