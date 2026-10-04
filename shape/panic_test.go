@@ -270,6 +270,9 @@ func FuzzLoadAndUse(f *testing.F) {
 		"MorxCases.ttf",         // AAT morx: chains, insertion, context at the end
 		"MorxFeatures.ttf",      // a morx chain's features, and the feat table offering them
 		"MortCases.ttf",         // the older mort: byte-offset states and tables
+		"KerxPairs.ttf",         // AAT kerx: the pair formats, tuples, across the line
+		"KerxMachines.ttf",      // AAT kerx: the state machines, ankr
+		"TrakCases.ttf",         // AAT trak: tracks, sizes, graphemes
 	} {
 		if data, err := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", name)); err == nil {
 			f.Add(data)

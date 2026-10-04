@@ -490,6 +490,8 @@ func (sh shaper) planFor(model shaperModel, arabicScript bool, extra []string) *
 	// plan is kept per layout — and asks nothing of the plan itself, so two
 	// languages the font sets alike share one.
 	key.features.Language = ""
+	// Nor the size, which only tracking reads, after the plan.
+	key.features.PointSize = 0
 	if len(extra) > 0 {
 		key.extra = joinTags(extra)
 	}

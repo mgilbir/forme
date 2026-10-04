@@ -1,0 +1,13 @@
+TRAK.ttf, the face of HarfBuzz's own tracking tests, and those tests
+(tests/aat-trak.tests), unmodified, as HarfBuzz keeps them at its 14.5.0 tag,
+which is the release the oracle is pinned to:
+
+  https://github.com/harfbuzz/harfbuzz/tree/14.5.0/test/shape/data/in-house
+
+The face is Copyright 2018 Unicode, Inc., as its name table says, and is
+under the SIL Open Font License 1.1, which its name table also says; OFL.txt
+is the licence as HarfBuzz keeps it beside its test fonts (test/COPYING). See
+THIRD_PARTY_NOTICES at the root of the repository.
+
+aatpos.py positions the cases with HarfBuzz and writes aatpos.expected.txt,
+which shape/kerx_test.go holds the trak reader to.

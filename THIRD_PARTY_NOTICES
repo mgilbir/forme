@@ -2170,6 +2170,45 @@ Quoted from testdata/harfbuzz/aat/COPYING:
     you may not use this file except in compliance with the License.
 
 ============================================================================
+HarfBuzz's tracking test face
+============================================================================
+
+Files:   testdata/harfbuzz/aat-inhouse/fonts/TRAK.ttf
+Source:  HarfBuzz 14.5.0, test/shape/data/in-house/fonts; see
+         testdata/harfbuzz/aat-inhouse/README
+Licence: SIL Open Font License 1.1 (OFL-1.1)
+
+The face of HarfBuzz's own trak tests, kept unmodified beside those tests and
+the licence HarfBuzz keeps beside its test fonts. Its name table states
+"Copyright © 2018 Unicode, Inc." and the licence.
+
+Quoted from testdata/harfbuzz/aat-inhouse/OFL.txt:
+
+    This Font Software is licensed under the SIL Open Font License,
+    Version 1.1.
+
+============================================================================
+Fonts built for the AAT positioning oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/KerxPairs.ttf
+         testdata/harfbuzz/fonts/KerxMachines.ttf
+         testdata/harfbuzz/fonts/KerxPlanGSUBGPOS.ttf
+         testdata/harfbuzz/fonts/KerxPlanGPOS.ttf
+         testdata/harfbuzz/fonts/KerxPlanNoKern.ttf
+         testdata/harfbuzz/fonts/KerxPlanLegacyKern.ttf
+         testdata/harfbuzz/fonts/TrakCases.ttf
+         testdata/harfbuzz/fonts/TrakNoSTAT.ttf
+Source:  testdata/harfbuzz/aatpos_fixture.py, in this repository, which
+         builds them with fontTools
+Licence: the licence in LICENSE; they are not anyone else's work
+
+Small faces made from nothing by the script named above, whose kerx and trak
+tables state what each table can say. They are listed here because every font
+the repository keeps is, and for where they came from; no third party's work
+is in them.
+
+============================================================================
 Fonts built for the morx oracle
 ============================================================================
 
