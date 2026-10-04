@@ -212,6 +212,9 @@ func (l *layouter) readEmphasis(b *Box, raw string, size style.Unit) *runEmphasi
 	if e.face == nil {
 		return nil
 	}
+	// The marks are set at half the text's size, and a face that tracks by
+	// size tracks them at theirs. See shape.Face.FeaturesAt.
+	e.features = e.face.FeaturesAt(e.features, e.size.Px())
 	e.markAscent, e.markDescent = extentsOr(primary, e.size)
 	e.ascent, e.descent = extentsOr(primary, size)
 	if vertical {

@@ -188,7 +188,7 @@ func (br *Breaker) MeasureSpacedInContext(face *shape.Face, text string, size st
 		// the glyphs take. The two ends are rounded apart, as a merge group's
 		// are; see uprightSpan.
 		head, through := uprightSpan(br.advances(uprightKey(face, text, how.Before,
-			how.After, how.Off)), 0, len(text), size)
+			how.After, how.Off), size.Px()), 0, len(text), size)
 		w = through.Sub(head)
 	case how.Upright:
 		// A face that states no vertical metrics: CSS Writing Modes §4.4 has
@@ -273,7 +273,7 @@ func (br *Breaker) mergedSpan(face *shape.Face, text string, size float64,
 		face: face, whole: mergedText(how.MergeBefore, text, how.MergeAfter, how.MergeGroup),
 		before: before, after: after, kerns: how.ContextKerns, off: how.Off,
 	}
-	return shape.GroupSpan(br.advances(key), len(how.MergeBefore),
+	return shape.GroupSpan(br.advances(key, size), len(how.MergeBefore),
 		len(how.MergeBefore)+len(text), size)
 }
 
@@ -304,7 +304,7 @@ func (br *Breaker) spanWidth(item Item, from, to int, piece Item) style.Unit {
 	if item.Face.StatesVerticalMetrics() && item.Upright && piece.Text != "" {
 		whole, base, before, after := item.uprightRun()
 		head, through := uprightSpan(br.advances(uprightKey(item.Face, whole, before,
-			after, item.Off)), base+from, base+to, item.Size)
+			after, item.Off), item.Size.Px()), base+from, base+to, item.Size)
 		return through.Sub(head).Add(br.spacingIn(item, from, to, piece.Text))
 	}
 	if item.Face != nil && item.Upright && piece.Text != "" {
@@ -323,7 +323,7 @@ func (br *Breaker) spanWidth(item Item, from, to int, piece Item) style.Unit {
 	}
 	// The two ends rounded separately, so that the pieces of one item add up to
 	// the item's own rounded width. See shape.GroupSpan.
-	head, through := shape.GroupSpan(br.advances(key), base+from, base+to, item.Size.Px())
+	head, through := shape.GroupSpan(br.advances(key, item.Size.Px()), base+from, base+to, item.Size.Px())
 	lo, _ := style.FromPx(head)
 	hi, _ := style.FromPx(through)
 	return hi.Sub(lo).Add(br.spacingIn(item, from, to, piece.Text))
@@ -505,7 +505,7 @@ func (br *Breaker) LineEndCorrection(item Item) style.Unit {
 		_, through := shape.GroupSpan(br.advances(groupKey{
 			face: item.Face, whole: whole, before: before, after: after,
 			kerns: item.ContextKerns, off: item.Off,
-		}), base, end, item.Size.Px())
+		}, item.Size.Px()), base, end, item.Size.Px())
 		was, _ := style.FromPx(through)
 		now, _ := style.FromPx(through + delta)
 		return now.Sub(was)
@@ -571,8 +571,12 @@ func (br *Breaker) runBounds(run string) []int {
 	return all
 }
 
-// advances is the group's cumulative advances, shaped once and kept.
-func (br *Breaker) advances(key groupKey) []float64 {
+// advances is the group's cumulative advances, shaped once and kept, at the
+// size the group is set at in CSS pixels — which a face that tracks its text
+// by size shapes it at, and so keys it by (shape.Face.FeaturesAt). Any other
+// face keeps one entry for every size, its glyphs being the same at each.
+func (br *Breaker) advances(key groupKey, size float64) []float64 {
+	key.off = key.face.FeaturesAt(key.off, size)
 	if br.lastAdvances != nil && br.lastGroup == key {
 		// Equal, and perhaps spelled in another string: the comparison after
 		// this one is then of one pointer. See runIndex for why that matters.
