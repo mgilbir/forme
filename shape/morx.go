@@ -6,18 +6,19 @@ import "github.com/mgilbir/forme/font"
 // font, which Apple's fonts state there and not in GSUB. Apple Color Emoji
 // builds every emoji sequence — a skin tone, a family joined by zero width
 // joiners, a flag, a keycap — as a ligature in its morx, and a shaper that
-// reads only GSUB draws each character of the sequence on its own.
+// reads only GSUB draws each character of the sequence on its own. And its
+// predecessor, mort, which older AAT fonts carry instead, read where a face
+// has no morx.
 //
 // What is here is HarfBuzz's AAT substitution at the release the oracle is
 // pinned to (hb-aat-layout-morx-table.hh and hb-aat-layout-common.hh), which
-// HarfBuzz runs, as CoreText does, wherever a font has a morx and the run is
-// set across the page, GSUB or no GSUB:
+// HarfBuzz runs, as CoreText does, wherever a font has a morx or a mort and
+// the run is set across the page, GSUB or no GSUB:
 //
 //   - A morx is chains of subtables, each switched on or off by the chain's
-//     flags. A chain runs with its default flags: the features a caller asks
-//     for are not mapped to AAT's feature types and selectors, which is what
-//     HarfBuzz does with features a caller names and the one thing of its AAT
-//     substitution this does not do.
+//     flags. A chain runs with its default flags, changed by the features a
+//     caller asks for where the face's feat table offers them: see
+//     aatfeatures.go.
 //   - A subtable is a lookup of glyph to glyph (noncontextual) or a finite
 //     state machine walked over the run, glyph class by glyph class, whose
 //     transitions rearrange glyphs, substitute them in context, form
@@ -37,8 +38,13 @@ import "github.com/mgilbir/forme/font"
 // an entry or a glyph table past the end of the table reads as doing nothing
 // there.
 //
-// Not here: the older mort table; kerx, AAT's positioning, and trak, its
-// tracking, which HarfBuzz applies beside it; and the language tags of ltag.
+// A mort is the same chains and subtables with narrower fields and a state
+// machine that addresses its states and tables by byte offset: see readMorph
+// and aatMachine.
+//
+// Not here: kerx, AAT's positioning, and trak, its tracking, which HarfBuzz
+// applies beside it; and the language tags of ltag, by which a chain's
+// feature may follow the run's language.
 
 // The values the subtables have in common.
 const (
@@ -82,27 +88,37 @@ const (
 	morxLogical       = 0x10
 )
 
-// morxTable is a face's morx, read into its chains.
+// morxTable is a face's morx, or its mort, read into its chains.
 type morxTable struct {
 	chains    []morxChain
 	numGlyphs int
 }
 
-// morxChain is a chain of subtables and the flags it runs them under.
+// morxChain is a chain of subtables, the flags it runs them under by default,
+// and its features: what a feature a caller asks for does to the flags.
 type morxChain struct {
 	defaultFlags uint32
+	features     []aatChainFeature
 	subtables    []morxSubtable
 }
 
+// aatChainFeature is one of a chain's features: an AAT feature type and
+// setting, and the flags it turns on and leaves on where a caller asks for it.
+type aatChainFeature struct {
+	typ, setting    int
+	enable, disable uint32
+}
+
 // morxSubtable is one subtable: its kind, its coverage bits, the flags that
-// switch it on, and its body, which is the subtable past its twelve-byte
-// header — for a state machine, starting at the state table, which its
-// offsets are from.
+// switch it on, and its body, which is the subtable past its header — for a
+// state machine, starting at the state table, which its offsets are from.
+// extended says it is a morx subtable and not a mort one: see aatMachine.
 type morxSubtable struct {
 	kind     int
 	coverage int
 	flags    uint32
 	body     []byte
+	extended bool
 	// starts is, for a state machine, which classes leave the start state
 	// doing anything (collect_initial_glyphs), and nil where it has more
 	// classes than are tracked, in which case every glyph its class table
@@ -110,53 +126,95 @@ type morxSubtable struct {
 	starts []bool
 }
 
-// readMorx reads a morx, and nil for a face with none, one whose version is
-// zero, one HarfBuzz's sanitizer refuses for a chain or subtable that does not
-// fit, and the one font HarfBuzz refuses by name.
+// readMorx reads a face's morx, or where it has none its mort, as HarfBuzz
+// asks for one and then the other; and nil for a face with neither, one whose
+// version is zero, one HarfBuzz's sanitizer refuses for a chain or subtable
+// that does not fit, and the one font HarfBuzz refuses by name.
 func readMorx(tables map[string][]byte, numGlyphs int) *morxTable {
 	b := tables["morx"]
-	if len(b) < 8 || font.Be16(b, 0) == 0 {
-		return nil
-	}
 	// HarfBuzz's issue 4108: AALMAGHRIBI.ttf, whose morx and GSUB disagree,
 	// known by the lengths of its morx, GSUB and GDEF.
 	if len(b) == 19892 && len(tables["GSUB"]) == 2794 && len(tables["GDEF"]) == 340 {
+		b = nil
+	}
+	if m := readMorph(b, numGlyphs, true); m != nil {
+		return m
+	}
+	return readMorph(tables["mort"], numGlyphs, false)
+}
+
+// readMorph reads a morx, extended, or a mort: the same chains and subtables,
+// with a mort's counts and lengths in sixteen bits where a morx's are in
+// thirty-two.
+func readMorph(b []byte, numGlyphs int, extended bool) *morxTable {
+	if len(b) < 8 || font.Be16(b, 0) == 0 {
 		return nil
 	}
+	// The size of a count — of features and subtables in a chain's header, of
+	// a subtable's length and coverage in its own — and so of the headers.
+	size := 2
+	word := func(at int) int { return font.Be16(b, at) }
+	if extended {
+		size = 4
+		word = func(at int) int { return int(font.Be32(b, at)) }
+	}
+	chainHeader, subHeader := 8+2*size, 4+2*size
 	m := &morxTable{numGlyphs: numGlyphs}
 	at := 8
 	for range font.Be32(b, 4) {
-		if len(b)-at < 16 {
+		if len(b)-at < chainHeader {
 			return nil
 		}
 		length := int(font.Be32(b, at+4))
-		features, count := int(font.Be32(b, at+8)), int(font.Be32(b, at+12))
-		if length < 16 || length > len(b)-at || features > (length-16)/12 {
+		features, count := word(at+8), word(at+8+size)
+		if length < chainHeader || length > len(b)-at || features > (length-chainHeader)/12 {
 			return nil
 		}
 		end := at + length
 		chain := morxChain{defaultFlags: font.Be32(b, at)}
-		sub := at + 16 + 12*features
+		for i := range features {
+			fe := at + chainHeader + 12*i
+			chain.features = append(chain.features, aatChainFeature{
+				typ: font.Be16(b, fe), setting: font.Be16(b, fe+2),
+				enable: font.Be32(b, fe+4), disable: font.Be32(b, fe+8),
+			})
+		}
+		sub := at + chainHeader + 12*features
 		for range count {
-			if end-sub < 12 {
+			if end-sub < subHeader {
 				return nil
 			}
-			n := int(font.Be32(b, sub))
-			if n < 12 || n > end-sub {
+			n := word(sub)
+			if n < subHeader || n > end-sub {
 				return nil
 			}
-			coverage := font.Be32(b, sub+4)
+			coverage := word(sub + size)
 			s := morxSubtable{
-				kind:     int(coverage & 0xFF),
-				coverage: int(coverage >> 24),
-				flags:    font.Be32(b, sub+8),
-				body:     b[sub+12 : sub+n : sub+n],
+				kind:     coverage & 0xFF,
+				coverage: coverage >> (8*size - 8),
+				flags:    font.Be32(b, sub+2*size),
+				body:     b[sub+subHeader : sub+n : sub+n],
+				extended: extended,
 			}
 			if s.kind != morxNoncontextual {
-				if len(s.body) < 16 || font.Be32(s.body, 0) < 4 {
+				mach := s.machine(numGlyphs)
+				if len(s.body) < 4*mach.size || mach.nClasses < 4 {
 					return nil
 				}
-				s.starts = s.machine(numGlyphs).starts(s.kind)
+				// The sanitizer's one look at a kind's own tables: a
+				// ligature subtable has all three, and an insertion one its
+				// list of glyphs.
+				switch s.kind {
+				case morxLigature:
+					if mach.field(4) == 0 || mach.field(5) == 0 || mach.field(6) == 0 {
+						return nil
+					}
+				case morxInsertion:
+					if mach.field(4) == 0 {
+						return nil
+					}
+				}
+				s.starts = mach.starts(s.kind)
 			}
 			chain.subtables = append(chain.subtables, s)
 			sub += n
@@ -256,16 +314,28 @@ func aatSearch(t []byte, at, gid, terms int) (int, bool) {
 	return 0, false
 }
 
-// aatMachine is an extended state table: its classes, and where its class
-// table, state array and entries are in the subtable's body.
+// aatMachine is a state table: its classes, and where its class table, state
+// array and entries are in the subtable's body.
+//
+// A morx's is extended: its header's fields are thirty-two bits, a glyph's
+// class is a lookup table's, the state array's cells are sixteen bits, and an
+// entry names its next state by number. A mort's is not: its header's fields
+// are sixteen bits, a glyph's class is a byte of an array from a first glyph,
+// the cells are bytes, and an entry names its next state by the byte offset
+// of its row, which may be a row before the array's first — a state below the
+// start. ObsoleteTypes and ExtendedTypes, in HarfBuzz.
 type aatMachine struct {
 	t                                  []byte
+	extended                           bool
+	size                               int
 	nClasses                           int
 	classTable, stateArray, entryTable int
 	entrySize, numGlyphs               int
 }
 
-// The size of each kind's entry: a new state and flags, then its data.
+// The size of each kind's entry: a new state and flags, then its data. A
+// morx ligature entry carries the index of its actions, and a mort one keeps
+// their offset in its flags.
 var aatEntrySize = [...]int{
 	morxRearrangement: 4,
 	morxContextual:    8,
@@ -276,12 +346,47 @@ var aatEntrySize = [...]int{
 }
 
 func (s *morxSubtable) machine(numGlyphs int) aatMachine {
-	t := s.body
-	return aatMachine{
-		t: t, nClasses: int(font.Be32(t, 0)),
-		classTable: int(font.Be32(t, 4)), stateArray: int(font.Be32(t, 8)), entryTable: int(font.Be32(t, 12)),
-		entrySize: aatEntrySize[s.kind%len(aatEntrySize)], numGlyphs: numGlyphs,
+	m := aatMachine{t: s.body, extended: s.extended, size: 2, numGlyphs: numGlyphs}
+	if s.extended {
+		m.size = 4
 	}
+	m.nClasses, m.classTable, m.stateArray, m.entryTable = m.field(0), m.field(1), m.field(2), m.field(3)
+	m.entrySize = aatEntrySize[s.kind%len(aatEntrySize)]
+	if !s.extended && s.kind == morxLigature {
+		m.entrySize = 4
+	}
+	return m
+}
+
+// field is the i-th field of the state table's header: the four every state
+// table has, then the offsets of a kind's own tables.
+func (m aatMachine) field(i int) int {
+	if len(m.t) < (i+1)*m.size {
+		return 0
+	}
+	if m.extended {
+		return int(font.Be32(m.t, 4*i))
+	}
+	return font.Be16(m.t, 2*i)
+}
+
+// classOf is the class table's class for a glyph, and whether it names the
+// glyph at all.
+func (m aatMachine) classOf(gid int) (int, bool) {
+	if m.extended {
+		return aatLookup(m.t, m.classTable, gid, m.numGlyphs)
+	}
+	// ClassTable: a first glyph, a count, and a class a byte for each glyph
+	// from the first.
+	at := m.classTable
+	if at < 0 || len(m.t)-at < 4 {
+		return 0, false
+	}
+	i := gid - font.Be16(m.t, at)
+	if i < 0 || i >= font.Be16(m.t, at+2) || len(m.t)-(at+4+i) < 1 {
+		return 0, false
+	}
+	return int(m.t[at+4+i]), true
 }
 
 // class is a glyph's class: the class table's, the out-of-bounds class for a
@@ -290,7 +395,7 @@ func (m aatMachine) class(gid int) int {
 	if gid == aatDeletedGlyph {
 		return aatClassDeleted
 	}
-	if v, ok := aatLookup(m.t, m.classTable, gid, m.numGlyphs); ok {
+	if v, ok := m.classOf(gid); ok {
 		return v
 	}
 	return aatClassOutOfBounds
@@ -303,15 +408,30 @@ func (m aatMachine) entry(state, class int) (next, flags, data int) {
 	if class >= m.nClasses {
 		class = aatClassOutOfBounds
 	}
-	p := m.stateArray + 2*(state*m.nClasses+class)
-	if state < 0 || p < 0 || len(m.t)-p < 2 {
-		return 0, 0, -1
+	var index int
+	if m.extended {
+		p := m.stateArray + 2*(state*m.nClasses+class)
+		if state < 0 || p < 0 || len(m.t)-p < 2 {
+			return 0, 0, -1
+		}
+		index = font.Be16(m.t, p)
+	} else {
+		p := m.stateArray + state*m.nClasses + class
+		if p < 0 || len(m.t)-p < 1 {
+			return 0, 0, -1
+		}
+		index = int(m.t[p])
 	}
-	e := m.entryTable + font.Be16(m.t, p)*m.entrySize
+	e := m.entryTable + index*m.entrySize
 	if e < 0 || len(m.t)-e < m.entrySize {
 		return 0, 0, -1
 	}
-	return font.Be16(m.t, e), font.Be16(m.t, e+2), e + 4
+	next = font.Be16(m.t, e)
+	if !m.extended {
+		// new_state: the byte offset of a row, as a row from the start.
+		next = (next - m.stateArray) / m.nClasses
+	}
+	return next, font.Be16(m.t, e+2), e + 4
 }
 
 // data16 is the i-th word of an entry's data, and 0xFFFF — no action — for
@@ -321,6 +441,21 @@ func (m aatMachine) data16(data, i int) int {
 		return 0xFFFF
 	}
 	return font.Be16(m.t, data+2*i)
+}
+
+// obsoleteAt is ObsoleteTypes::offsetToIndex, as a place: where the element a
+// mort names by its byte offset from the state table is, in an array of
+// elements of a size at arrayAt, and false for one before the array, which
+// HarfBuzz reads as an index past anything, or past the table.
+func (m aatMachine) obsoleteAt(offset, arrayAt, size int) (int, bool) {
+	if offset < arrayAt {
+		return 0, false
+	}
+	at := arrayAt + (offset-arrayAt)/size*size
+	if len(m.t)-at < size {
+		return 0, false
+	}
+	return at, true
 }
 
 // starts is collect_initial_glyphs's filter: the classes whose entry from the
@@ -351,8 +486,15 @@ func morxActs(kind int, m aatMachine, flags, data int) bool {
 	case morxRearrangement:
 		return flags&0xF != 0
 	case morxContextual:
+		if !m.extended {
+			return data >= 0 && (m.data16(data, 0) != 0 || m.data16(data, 1) != 0)
+		}
 		return m.data16(data, 0) != 0xFFFF || m.data16(data, 1) != 0xFFFF
 	case morxLigature:
+		if !m.extended {
+			// A mort entry acts where its flags hold an action list's offset.
+			return flags&0x3FFF != 0
+		}
 		return flags&0x2000 != 0
 	case morxInsertion:
 		return flags&(0x3E0|0x1F) != 0 && (m.data16(data, 0) != 0xFFFF || m.data16(data, 1) != 0xFFFF)
@@ -372,12 +514,14 @@ func (s *morxSubtable) startsAt(gid, numGlyphs int) bool {
 	if gid == aatDeletedGlyph {
 		return s.starts != nil && aatClassDeleted < len(s.starts) && s.starts[aatClassDeleted]
 	}
-	v, ok := aatLookup(m.t, m.classTable, gid, numGlyphs)
+	v, ok := m.classOf(gid)
 	if !ok {
 		return false
 	}
 	if s.starts == nil {
-		return true
+		// Every glyph the class table names; for a mort, every one it names
+		// as anything but out of bounds.
+		return m.extended || v != aatClassOutOfBounds
 	}
 	return v < len(s.starts) && s.starts[v]
 }
@@ -632,11 +776,13 @@ func removeDeleted(info []Glyph) []Glyph {
 }
 
 // applyMorx runs a face's morx over a run in the order its characters are
-// written: each chain with its default flags, each of its subtables for the
-// run's direction. rtl says the run is set right to left, which decides which
-// way a subtable that walks the run in layout order walks it.
-func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool) []Glyph {
+// written: each chain with the flags the features a caller asked for leave it
+// (see aatfeatures.go), each of its subtables for the run's direction. rtl says
+// the run is set right to left, which decides which way a subtable that walks
+// the run in layout order walks it.
+func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) []Glyph {
 	m := sh.f.morx
+	settings := sh.f.aatSettings(user)
 	b := &aatBuf{info: buf, ok: true, f: sh.f, maxOps: max(len(buf)*morxOpsPerGlyph, morxOpsFloor)}
 	if len(buf) >= 4 {
 		b.seen = map[int]bool{}
@@ -646,9 +792,10 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool) []Glyph {
 	}
 	reversed := false
 	for _, chain := range m.chains {
+		flags := chain.flagsFor(settings)
 		for i := range chain.subtables {
 			s := &chain.subtables[i]
-			if s.flags&chain.defaultFlags == 0 {
+			if s.flags&flags == 0 {
 				continue
 			}
 			if s.coverage&morxAllDirections == 0 && vertical != (s.coverage&morxVertical != 0) {
@@ -721,11 +868,11 @@ func (sh shaper) applyMorxSubtable(b *aatBuf, s *morxSubtable, numGlyphs int) {
 	case morxRearrangement:
 		t = &aatRearrange{}
 	case morxContextual:
-		t = &aatContextual{m: m, subs: int(font.Be32(m.t, 16))}
+		t = &aatContextual{m: m, subs: m.field(4)}
 	case morxLigature:
-		t = &aatLigature{m: m, actions: int(font.Be32(m.t, 16)), components: int(font.Be32(m.t, 20)), ligatures: int(font.Be32(m.t, 24))}
+		t = &aatLigature{m: m, actions: m.field(4), components: m.field(5), ligatures: m.field(6)}
 	case morxInsertion:
-		t = &aatInsertion{m: m, glyphs: int(font.Be32(m.t, 16))}
+		t = &aatInsertion{m: m, glyphs: m.field(4)}
 	default:
 		return
 	}
@@ -846,20 +993,42 @@ func (c *aatContextual) lookup(i int) int {
 	return c.subs + int(font.Be32(c.m.t, p))
 }
 
+// substitute is what an entry's index makes a glyph: in a morx, the value of
+// the lookup the index names, where it is not 0xFFFF; in a mort, where the
+// index is not zero, the glyph at twice the sum of the index, signed, and the
+// glyph, as a byte offset from the state table into the substitution array, a
+// zero there substituting nothing.
+func (c *aatContextual) substitute(index, gid int) (int, bool) {
+	if c.m.extended {
+		if index == 0xFFFF {
+			return 0, false
+		}
+		return aatLookup(c.m.t, c.lookup(index), gid, c.m.numGlyphs)
+	}
+	if index == 0 {
+		return 0, false
+	}
+	at, ok := c.m.obsoleteAt(2*(int(int16(index))+gid), c.subs, 2)
+	if !ok {
+		return 0, false
+	}
+	v := font.Be16(c.m.t, at)
+	return v, v != 0
+}
+
 func (c *aatContextual) transition(b *aatBuf, flags, data int) {
 	// CoreText applies neither substitution at the end of the text where no
 	// glyph was marked.
 	if b.idx == len(b.info) && !c.markSet {
 		return
 	}
-	if mark := c.m.data16(data, 0); mark != 0xFFFF && c.mark < len(b.info) {
-		if v, ok := aatLookup(c.m.t, c.lookup(mark), b.info[c.mark].GID, c.m.numGlyphs); ok {
+	if c.mark < len(b.info) {
+		if v, ok := c.substitute(c.m.data16(data, 0), b.info[c.mark].GID); ok {
 			b.replaceInPlace(c.mark, v)
 		}
 	}
-	at := min(b.idx, len(b.info)-1)
-	if cur := c.m.data16(data, 1); cur != 0xFFFF && at >= 0 {
-		if v, ok := aatLookup(c.m.t, c.lookup(cur), b.info[at].GID, c.m.numGlyphs); ok {
+	if at := min(b.idx, len(b.info)-1); at >= 0 {
+		if v, ok := c.substitute(c.m.data16(data, 1), b.info[at].GID); ok {
 			b.replaceInPlace(at, v)
 		}
 	}
@@ -881,6 +1050,24 @@ type aatLigature struct {
 
 func (*aatLigature) inPlace() bool { return false }
 
+// at is where a word of the component or ligature table is: in a morx, the
+// i-th; in a mort, the one at the byte offset i names from the state table —
+// an offset in words for a component, in bytes for a ligature — and false for
+// one outside the table.
+func (l *aatLigature) at(table, i int, words bool) (int, bool) {
+	if !l.m.extended {
+		if words {
+			i *= 2
+		}
+		return l.m.obsoleteAt(i, table, 2)
+	}
+	p := table + 2*i
+	if p < 0 || len(l.m.t)-p < 2 {
+		return 0, false
+	}
+	return p, true
+}
+
 func (l *aatLigature) transition(b *aatBuf, flags, data int) {
 	if flags&0x8000 != 0 {
 		// Never the same position twice, where the entry did not advance.
@@ -890,7 +1077,7 @@ func (l *aatLigature) transition(b *aatBuf, flags, data int) {
 		l.positions[l.matched%aatMaxContext] = len(b.out)
 		l.matched++
 	}
-	if flags&0x2000 == 0 {
+	if !morxActs(morxLigature, l.m, flags, data) {
 		return
 	}
 	end := len(b.out)
@@ -899,7 +1086,15 @@ func (l *aatLigature) transition(b *aatBuf, flags, data int) {
 	}
 	t := l.m.t
 	cursor := l.matched
+	// The actions: a morx entry names the first by its index, and a mort one
+	// by its offset, kept in its flags.
 	action := l.actions + 4*l.m.data16(data, 0)
+	if !l.m.extended {
+		var ok bool
+		if action, ok = l.m.obsoleteAt(flags&0x3FFF, l.actions, 4); !ok {
+			action = -1
+		}
+	}
 	index := 0
 	for {
 		if cursor == 0 {
@@ -919,14 +1114,14 @@ func (l *aatLigature) transition(b *aatBuf, flags, data int) {
 		if offset&0x20000000 != 0 {
 			offset |= -0x40000000 // sign-extended from thirty bits
 		}
-		component := l.components + 2*(b.cur().GID+int(offset))
-		if component < 0 || len(t)-component < 2 {
+		component, ok := l.at(l.components, b.cur().GID+int(offset), true)
+		if !ok {
 			break
 		}
 		index += font.Be16(t, component)
 		if a&0xC0000000 != 0 {
-			lig := l.ligatures + 2*index
-			if lig < 0 || len(t)-lig < 2 {
+			lig, ok := l.at(l.ligatures, index, false)
+			if !ok {
 				break
 			}
 			b.replaceGlyph(font.Be16(t, lig))

@@ -268,6 +268,8 @@ func FuzzLoadAndUse(f *testing.F) {
 		"PointMatch.ttf",        // and matched as an instance keeps them
 		"VarComposite.ttf",      // variable composites (VARC), measured, drawn, instanced
 		"MorxCases.ttf",         // AAT morx: chains, insertion, context at the end
+		"MorxFeatures.ttf",      // a morx chain's features, and the feat table offering them
+		"MortCases.ttf",         // the older mort: byte-offset states and tables
 	} {
 		if data, err := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", name)); err == nil {
 			f.Add(data)

@@ -732,7 +732,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// which is why these are alternatives rather than stages.
 	before, after := ctx.runes()
 	if morx {
-		buf = sh.applyMorx(buf, rtl, vertical)
+		buf = sh.applyMorx(buf, rtl, vertical, ctx.features.requested(extra))
 		buf = dropIgnorables(buf)
 	} else if model.syllabic() {
 		buf = sh.shapeSyllabic(buf, runes, script, p, before, after)
