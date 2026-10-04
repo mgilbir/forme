@@ -69,6 +69,10 @@ const (
 	// rewind moves and glyphs inserted.
 	morxOpsPerGlyph = 4096
 	morxOpsFloor    = 65536
+	// morxLenPerGlyph and morxLenFloor are HB_BUFFER_MAX_LEN_FACTOR and
+	// _MIN: how long the run may grow.
+	morxLenPerGlyph = 256
+	morxLenFloor    = 65536
 )
 
 // The subtable kinds.
@@ -534,8 +538,13 @@ type aatBuf struct {
 	idx        int
 	haveOutput bool
 	maxOps     int
-	ok         bool
-	f          *Face
+	// maxLen is HarfBuzz's max_len: the most glyphs the run may grow to,
+	// 256 for each it started with and never fewer than 65,536. Insertion
+	// is bounded by the allowance too, which is sixteen times as generous,
+	// and a run a hostile font grew to that many glyphs was megabytes.
+	maxLen int
+	ok     bool
+	f      *Face
 	// seen is every glyph the run has held since the morx began, which is
 	// what HarfBuzz asks whether a subtable can start in a run of four or
 	// more; nil for a shorter run, which is asked itself.
@@ -620,8 +629,17 @@ func (b *aatBuf) moveTo(i int) bool {
 }
 
 // outputGlyph writes a glyph into the output as a copy of the one at the
-// position, or of the last written at the end of the run.
+// position, or of the last written at the end of the run — unless the run
+// would then be longer than maxLen, which ends the subtable as the allowance
+// running out does.
 func (b *aatBuf) outputGlyph(gid int) {
+	if !b.ok {
+		return
+	}
+	if len(b.out)+len(b.info)-b.idx+1 > b.maxLen {
+		b.ok = false
+		return
+	}
 	var g Glyph
 	if b.idx < len(b.info) {
 		g = b.info[b.idx]
@@ -784,7 +802,9 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) 
 	m := sh.f.morx
 	settings := sh.f.aatSettings(user)
 	lang := hbLanguage(sh.features.Language)
-	b := &aatBuf{info: buf, ok: true, f: sh.f, maxOps: max(len(buf)*morxOpsPerGlyph, morxOpsFloor)}
+	b := &aatBuf{info: buf, ok: true, f: sh.f,
+		maxOps: max(len(buf)*morxOpsPerGlyph, morxOpsFloor),
+		maxLen: max(len(buf)*morxLenPerGlyph, morxLenFloor)}
 	if len(buf) >= 4 {
 		b.seen = map[int]bool{}
 		for _, g := range buf {

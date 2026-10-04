@@ -184,7 +184,17 @@ jobs:
       # not the fuzzing, which -fuzztime bounds: go test stops its alarm there.
       # It is named anyway, as every go test in this repository names one; see
       # the note on TEST_TIMEOUT in the Makefile.
-      - run: go test -run XXX -timeout 15m -fuzz '^${{ matrix.target }}$' -fuzztime 10m ${{ matrix.package }}
+      #
+      # Minimizing is capped at 200 tries an input. Every input that widens
+      # coverage is sent back to a worker to be cut down, for up to a minute by
+      # default, and a worker cutting one down runs nothing else: an input grown
+      # from a font of a quarter of a megabyte takes tens of milliseconds a try,
+      # and ten workers spent whole stretches of FuzzLoadAndUse doing nothing but
+      # this, at no executions a second. Over 90 seconds from the same seeds,
+      # the default found 15 new inputs, a cap of 10 seconds 77, and this cap
+      # 906. A crasher is minimized under the same cap, which leaves it larger
+      # and no less a crasher.
+      - run: go test -run XXX -timeout 15m -fuzz '^${{ matrix.target }}$' -fuzztime 10m -fuzzminimizetime 200x ${{ matrix.package }}
       # A crasher is written into testdata/fuzz, which is exactly what wants
       # keeping: it is the seed that reproduces the failure.
       - name: Keep whatever it found
