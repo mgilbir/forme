@@ -402,6 +402,12 @@ func (f *Face) normalize(runes []rune, offsets []int, how normalization) ([]rune
 	if !f.needsNormalizing(runes, !how.syllabic) {
 		return runes, offsets
 	}
+	// What it writes is the face's, kept from run to run, and apart from what
+	// it reads (runScratch).
+	s := f.runScratch()
+	if room := len(runes) + 4; cap(s.normRunes) < room || cap(s.normOffsets) < room {
+		s.normRunes, s.normOffsets = make([]rune, 0, room), make([]int, 0, room)
+	}
 	n := normalizer{
 		f:           f,
 		indic:       how.indic,
@@ -411,10 +417,14 @@ func (f *Face) normalize(runes []rune, offsets []int, how normalization) ([]rune
 		syllabic:    how.syllabic,
 		shortest:    !how.syllabic,
 		always:      how.none,
-		out:         make([]rune, 0, len(runes)+4),
-		off:         make([]int, 0, len(runes)+4),
+		out:         s.normRunes[:0],
+		off:         s.normOffsets[:0],
 	}
-	if n.decomposeRound(runes, offsets) {
+	done := n.decomposeRound(runes, offsets)
+	// Kept as far as the decomposition grew them; the rounds after it only
+	// shorten the run.
+	s.normRunes, s.normOffsets = n.out, n.off
+	if done {
 		// Nothing in the run was a base with marks on it, so there is no cluster
 		// to order and nothing that could compose: rounds two and three would
 		// walk the buffer to no purpose.

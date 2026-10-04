@@ -357,7 +357,7 @@ func (sh shaper) stepsOver(g Glyph, at int, context bool) bool {
 // to no glyph at all, and a pass that deleted every glyph with that index would
 // delete the spaces of the text along with the joiners.
 func dropGlyphs(buf []Glyph, drop func(i int) bool) []Glyph {
-	return dropGlyphsIf(buf, drop, false, false)
+	return dropGlyphsIf(buf, drop, false, false, nil)
 }
 
 // dropUnsubstituted is what a syllabic shaper does with the characters nothing
@@ -375,7 +375,7 @@ func dropGlyphs(buf []Glyph, drop func(i int) bool) []Glyph {
 // the page, which decide whose cluster a glyph taken out leaves behind: see
 // dropGlyphsIf.
 func (sh shaper) dropUnsubstituted(buf []Glyph, hidden func(i int) bool) []Glyph {
-	return dropGlyphsIf(buf, func(i int) bool { return hidden(i) && !buf[i].substituted }, sh.keptAhead, sh.rtl)
+	return dropGlyphsIf(buf, func(i int) bool { return hidden(i) && !buf[i].substituted }, sh.keptAhead, sh.rtl, sh.f.runScratch())
 }
 
 // dropGlyphsIf takes out the glyphs drop names, as HarfBuzz's
@@ -388,8 +388,17 @@ func (sh shaper) dropUnsubstituted(buf []Glyph, hidden func(i int) bool) []Glyph
 // the one written after it. keptAhead says something of the same buffer is
 // drawn before the run, so that a glyph taken out at its drawn start has its
 // cluster kept by that rather than merged into the glyph after it.
-func dropGlyphsIf(buf []Glyph, drop func(i int) bool, keptAhead, rtl bool) []Glyph {
-	flags := make([]bool, len(buf))
+//
+// Which glyphs go is noted in scratch where there is one, the face's own
+// (runScratch), so that taking glyphs out of a run allocates nothing.
+func dropGlyphsIf(buf []Glyph, drop func(i int) bool, keptAhead, rtl bool, scratch *runScratch) []Glyph {
+	var flags []bool
+	if scratch != nil {
+		scratch.drop = reuse(scratch.drop, len(buf))
+		flags = scratch.drop
+	} else {
+		flags = make([]bool, len(buf))
+	}
 	any := false
 	for i := range buf {
 		flags[i] = drop(i)

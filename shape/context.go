@@ -71,6 +71,12 @@ const (
 
 // lookupBudget is one run's allowance, sized from the glyphs it holds.
 func lookupBudget(glyphs int) *int {
+	n := lookupAllowance(glyphs)
+	return &n
+}
+
+// lookupAllowance is the number lookupBudget points at.
+func lookupAllowance(glyphs int) int {
 	n := glyphs * lookupOpsPerGlyph
 	if n < lookupOpsFloor {
 		n = lookupOpsFloor
@@ -78,7 +84,7 @@ func lookupBudget(glyphs int) *int {
 	if n > lookupOpsCeiling {
 		n = lookupOpsCeiling
 	}
-	return &n
+	return n
 }
 
 // recurse reports whether a matched rule may apply another lookup, spending one
@@ -153,7 +159,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 			//
 			// Nothing was consumed, so the caller stays where it is: what
 			// followed has moved into this place and has not been looked at.
-			if ok && len(reps) == 0 {
+			if ok && reps.len() == 0 {
 				deleteClusterAt(sh.edges, sh.settledRun(), buf, at)
 				out := sh.replace(buf, at, 1, nil)
 				sh.deleted(at)
@@ -163,9 +169,10 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 			// would take the empty sequence too and quietly do the right thing
 			// to the buffer and the wrong thing to the record beside it,
 			// reporting a ligature where a glyph was removed.
-			if ok && len(reps) > 0 {
-				product := sh.product(len(reps))
-				for k, gid := range reps {
+			if ok && reps.len() > 0 {
+				product := sh.product(reps.len())
+				for k := range reps.len() {
+					gid := reps.at(k)
 					// Each part still stands for the character the whole stood
 					// for, so it is classified as that character was and is for
 					// the same features. The second is what makes a cursive
@@ -182,7 +189,7 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 					// already belongs to a ligature keeps what it had, as it
 					// does there, and so does one that is not taken apart.
 					lig := buf[at].lig
-					if lig.id == 0 && len(reps) > 1 {
+					if lig.id == 0 && reps.len() > 1 {
 						lig = ligatureRef{comp: k, comps: lig.comps}
 					}
 					// A sequence of one is a replacement, and HarfBuzz does
@@ -190,14 +197,14 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 					product = append(product, Glyph{
 						GID: gid, Cluster: buf[at].Cluster, XAdvance: sh.f.advanceGID(gid),
 						lig: lig, class: buf[at].class, mask: buf[at].mask,
-						substituted: true, multiplied: len(reps) > 1 || buf[at].multiplied,
+						substituted: true, multiplied: reps.len() > 1 || buf[at].multiplied,
 						umark: buf[at].umark, space: buf[at].space,
 						stch: buf[at].stch, word: buf[at].word, cont: buf[at].cont,
 					})
 				}
 				out := sh.replace(buf, at, 1, product)
-				sh.resized(at, len(reps)-1)
-				return len(reps), out
+				sh.resized(at, reps.len()-1)
+				return reps.len(), out
 			}
 		case 3:
 			if gid, ok := alternateSubstAt(sub, buf[at].GID); ok {
@@ -255,7 +262,10 @@ func singleSubstAt(sub []byte, gid int) (int, bool) {
 
 // multipleSubstAt reads a type 2 subtable and reports the glyphs that replace
 // one, if it covers it.
-func multipleSubstAt(sub []byte, gid int) ([]int, bool) {
+//
+// They are reported as the font states them, without a copy: a run of a script
+// that takes its letters apart does so at nearly every glyph.
+func multipleSubstAt(sub []byte, gid int) (glyphSeq, bool) {
 	if len(sub) < 6 || font.Be16(sub, 0) != 1 {
 		return nil, false
 	}
@@ -274,12 +284,16 @@ func multipleSubstAt(sub []byte, gid int) ([]int, bool) {
 	if n < 0 || n > maxSubstitutionLength || 2+2*n > len(seq) {
 		return nil, false
 	}
-	out := make([]int, n)
-	for k := range out {
-		out[k] = font.Be16(seq, 2+2*k)
-	}
-	return out, true
+	return glyphSeq(seq[2 : 2+2*n]), true
 }
+
+// glyphSeq is a sequence of glyph indices as a font states them, two bytes
+// each.
+type glyphSeq []byte
+
+// len is how many glyphs it has, and at the one at k.
+func (s glyphSeq) len() int     { return len(s) / 2 }
+func (s glyphSeq) at(k int) int { return font.Be16(s, 2*k) }
 
 // maxSubstitutionLength bounds what one glyph may become. A decomposition is a
 // handful of glyphs; a font declaring thousands is describing an attack, and
@@ -371,9 +385,11 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) ([]int, int,
 			n++
 		}
 		if matched {
-			comps := make([]int, n)
-			copy(comps, found[:n])
-			return comps, font.Be16(lig, 0), true
+			// Into the face's scratch, which formLigature is done with
+			// before another ligature is looked for (runScratch).
+			s := sh.f.runScratch()
+			s.comps = append(s.comps[:0], found[:n]...)
+			return s.comps, font.Be16(lig, 0), true
 		}
 	}
 	return nil, 0, false

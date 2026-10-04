@@ -405,7 +405,7 @@ func newCutScan(s string) *cutScan {
 			c.lastKept = i
 		}
 	}
-	cont := graphemeContinues(runes)
+	cont := graphemeContinues(nil, runes)
 	c.starts = make([]int, len(runes))
 	c.dropFrom = make([]int, len(runes))
 	for k, r := range runes {
@@ -557,6 +557,11 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 		// every character of it treated as strong left-to-right, and HarfBuzz
 		// sets a top-to-bottom run in the order it is written, mirroring
 		// nothing. See Features.Vertical.
+		return f.shapeDirection(s, scriptBehind(ctx.before), scriptAhead(ctx.after), false, extra, ctx)
+	}
+	// Left to right throughout, as most text is, without asking for the runs
+	// to be listed. See bidi.NeedsAlgorithm.
+	if !bidiNeedsAlgorithm(s) {
 		return f.shapeDirection(s, scriptBehind(ctx.before), scriptAhead(ctx.after), false, extra, ctx)
 	}
 	runs := bidiVisualRuns(s)
@@ -731,7 +736,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// mirrors it, and the substitution is on the character, before the font is
 	// asked for a glyph at all. Where the font has no glyph for the mirror the
 	// character is kept, and its own glyph is what 'rtlm' is asked about.
-	runes, offsets := bidiRunCharacters(s, rtl)
+	scratch := f.runScratch()
+	scratch.runes, scratch.offsets = bidiRunCharsInto(scratch.runes, scratch.offsets, s, rtl)
+	runes, offsets := scratch.runes, scratch.offsets
 	if rtl {
 		f.keepUnmirrorable(s, runes, offsets)
 	}
@@ -782,7 +789,8 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// rule may name one, and some are not stepped over. See ignorable.go.
 	f.runWork.size(len(runes))
 	ignorables := ignorableKinds(runes)
-	continues := graphemeContinues(runes)
+	scratch.continues = graphemeContinues(scratch.continues, runes)
+	continues := scratch.continues
 	if len(runes) == 0 {
 		return nil, 0
 	}
@@ -866,9 +874,11 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	}
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.
-	sh := shaper{f: f, l: l, rtl: rtl, ligIDs: new(int), morx: morx, keptAhead: ctx.keptAhead(rtl),
+	// The run's two counters are the face's, started again (runScratch).
+	scratch.ligIDs, scratch.ops = 0, lookupAllowance(len(buf))
+	sh := shaper{f: f, l: l, rtl: rtl, ligIDs: &scratch.ligIDs, morx: morx, keptAhead: ctx.keptAhead(rtl),
 		zeroMarks: model.zeroMarks(), features: ctx.features, lang: lang,
-		ops: lookupBudget(len(buf))}
+		ops: &scratch.ops}
 	// What the run applies, and in which stages: see plan.go. It covers every
 	// entry point — the features a document turned off or asked for, and the
 	// ones a caller named by tag, are requests to the same plan and not passes

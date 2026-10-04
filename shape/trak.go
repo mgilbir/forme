@@ -187,8 +187,11 @@ func (sh shaper) applyTrak(buf []Glyph) {
 // regional indicators, a zero width joiner and the pictograph after it, a tag
 // character, and the two halfwidth katakana sound marks continue the grapheme
 // before them.
-func graphemeContinues(runes []rune) []bool {
-	out := make([]bool, len(runes))
+//
+// The answer is written into dst's array where it has room, as the run's
+// shaping keeps one on the face (runScratch); nil makes a new one.
+func graphemeContinues(dst []bool, runes []rune) []bool {
+	out := reuse(dst, len(runes))
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
 		switch {

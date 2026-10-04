@@ -60,10 +60,18 @@ func (rb *runBuf) product(n int) []Glyph {
 
 // newRunBuf starts a pass over buf at a position, which is settled up to there.
 func newRunBuf(buf []Glyph, at int) *runBuf {
+	rb := &runBuf{}
+	rb.start(buf, at)
+	return rb
+}
+
+// start makes rb a new pass over buf at a position, as newRunBuf does, keeping
+// the scratch the last pass built its products in.
+func (rb *runBuf) start(buf []Glyph, at int) {
 	if at > len(buf) {
 		at = len(buf)
 	}
-	return &runBuf{a: buf, w: at, r: at}
+	*rb = runBuf{a: buf, w: at, r: at, scratch: rb.scratch}
 }
 
 // pending is what the pass has still to look at. Lookup positions index it.
@@ -142,4 +150,61 @@ func (rb *runBuf) flatten() []Glyph {
 	rb.r = rb.w
 	rb.a = rb.a[:rb.w+n]
 	return rb.a
+}
+
+// runScratch is the working memory a run is shaped in that does not outlive
+// it, kept on the face (Face.scratch) so that shaping one run after another
+// allocates it once rather than once a run.
+//
+// One of each is enough because nothing that holds a piece shapes another run
+// on the face. The one run shaped inside another is the neighbour a boundary
+// kern pair is found by (boundaryGlyphs), which is shaped once the run is
+// positioned and nothing below is read again: what is left of the run, the
+// pair across the boundary and the stretching, reads only its glyphs.
+type runScratch struct {
+	// runes and offsets are the run's characters and where each came from,
+	// until its glyphs are made of them.
+	runes   []rune
+	offsets []int
+	// normRunes and normOffsets are what normalize writes them out as.
+	normRunes   []rune
+	normOffsets []int
+	// continues is graphemeContinues's answer, while the glyphs of a run are
+	// being made from its characters.
+	continues []bool
+	// drop is which glyphs dropGlyphsIf is taking out.
+	drop []bool
+	// gpos is the record a positioning pass keeps beside the run, and sums
+	// the advances propagate measures attachments with. See shaper.position.
+	gpos gposPass
+	sums []float64
+	// run is the pass applyLookups edits the run in, one lookup after
+	// another, and the scratch its substitutions build their products in;
+	// step is how much the substitution at its front changed the run's length.
+	run  runBuf
+	step int
+	// comps is where ligatureAt reports the glyphs a ligature is made of, to
+	// formLigature.
+	comps []int
+	// ligIDs and ops are the run's shaper's counters: see shaper.ligIDs and
+	// lookupBudget.
+	ligIDs, ops int
+}
+
+// runScratch is f's, made the first time it is asked for.
+func (f *Face) runScratch() *runScratch {
+	if f.scratch == nil {
+		f.scratch = &runScratch{}
+	}
+	return f.scratch
+}
+
+// reuse is s cleared and n long, s's own array where it has room for n.
+func reuse[T any](s []T, n int) []T {
+	if cap(s) < n {
+		return make([]T, n)
+	}
+	s = s[:n]
+	clear(s)
+	return s
 }

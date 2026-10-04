@@ -51,18 +51,22 @@ func (sh shaper) applyStage(buf []Glyph, stage []planLookup) []Glyph {
 func (sh shaper) applyLookups(buf []Glyph, lookups []planLookup, from, to, floor, ceil int,
 	h recordHooks) ([]Glyph, int, int) {
 
-	total, step, first := 0, 0, -1
+	// Every lookup's pass is the face's one, started again, and so is the
+	// count of what one substitution changed (runScratch).
+	scratch := sh.f.runScratch()
+	rb, step := &scratch.run, &scratch.step
+	total, first := 0, -1
 	sh.onResize = func(at, d int) {
 		if h.resize != nil {
 			h.resize(at, d)
 		}
-		step += d
+		*step += d
 	}
 	sh.onDelete = func(at int) {
 		if h.remove != nil {
 			h.remove(at)
 		}
-		step--
+		*step--
 	}
 	sh.joinerAt = h.joiner
 	sh.floor = floor
@@ -85,11 +89,11 @@ func (sh shaper) applyLookups(buf []Glyph, lookups []planLookup, from, to, floor
 		// The walk is always at the front of what is left: what it has passed
 		// is settled, and a lookup that changes the run's length gives its room
 		// back to the gap between the two rather than closing it. See runBuf.
-		rb := newRunBuf(buf, from)
+		rb.start(buf, from)
 		sh.run = rb
 		for rb.w < to && len(rb.pending()) > 0 {
 			work.spend(1)
-			step = 0
+			*step = 0
 			// The far edge, as it stands now. It moves: a lookup that takes a
 			// glyph apart makes the window longer, and the next position has to
 			// be allowed to see what it produced.
@@ -99,9 +103,9 @@ func (sh shaper) applyLookups(buf []Glyph, lookups []planLookup, from, to, floor
 				continue
 			}
 			consumed, _ := sh.applyGSUBAt(lk.index, rb.pending(), 0, 0)
-			to += step
-			ceil += step
-			total += step
+			to += *step
+			ceil += *step
+			total += *step
 			if consumed > 0 {
 				if first < 0 || rb.w < first {
 					first = rb.w
@@ -111,12 +115,14 @@ func (sh shaper) applyLookups(buf []Glyph, lookups []planLookup, from, to, floor
 			}
 			// A lookup that consumed nothing and shortened the run took a glyph
 			// out; what followed it is now here and has not been looked at.
-			if step >= 0 {
+			if *step >= 0 {
 				rb.settle(1)
 			}
 		}
 		buf = rb.flatten()
 	}
+	// The run is the caller's now, and the face does not hold on to it.
+	rb.a = nil
 	return buf, total, first
 }
 
