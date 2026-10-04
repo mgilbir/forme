@@ -216,3 +216,96 @@ func TestAFaceKeptPastItsScopeIsUnbounded(t *testing.T) {
 		t.Fatal("the kept face shaped nothing")
 	}
 }
+
+// A face the caller owns shapes a bounded run as it shapes an unbounded one,
+// records its glyphs as ShapeGlyphs does, and leaves no budget on the face.
+func TestABoundedRunOnAnOwnedFace(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := RunInput{Text: "office אבג", Before: "a", After: "b", Kerns: true}
+	plain := f.Clone()
+	want, m := plain.ShapeGlyphsMerged(in.Text, in.Before, in.After, "", "", true, in.Features)
+	owned := f.Clone()
+	result, err := owned.ShapeGlyphsBounded(context.Background(), in, RunLimits{})
+	if err != nil || result.Missing != m || !reflect.DeepEqual(result.Glyphs, want) || result.Work <= 0 {
+		t.Fatalf("shaping differs: %v, %d/%d, work %d", err, result.Missing, m, result.Work)
+	}
+	if !reflect.DeepEqual(owned.Used(), plain.Used()) {
+		t.Fatalf("recorded %v, ShapeGlyphs records %v", owned.Used(), plain.Used())
+	}
+	if owned.runWork != nil || owned.spareWork.ctx != nil {
+		t.Fatal("the budget, or the caller's context, is left on the face")
+	}
+
+	// A run that fails leaves the next one a whole budget.
+	if _, err := owned.ShapeGlyphsBounded(context.Background(), in, RunLimits{MaxWork: 1}); !errors.Is(err, ErrRunLimit) {
+		t.Fatalf("a run over its work limit: %v", err)
+	}
+	if owned.runWork != nil {
+		t.Fatal("a failed run leaves its budget on the face")
+	}
+	again, err := owned.ShapeGlyphsBounded(context.Background(), in, RunLimits{})
+	if err != nil || !reflect.DeepEqual(again.Glyphs, want) || again.Work != result.Work {
+		t.Fatalf("the run after a failure: %v, work %d, want %d", err, again.Work, result.Work)
+	}
+}
+
+// Bounding a run on an owned face costs no allocation ShapeGlyphs does not
+// make: no clone, no budget and no list of layouts.
+func TestABoundedRunOnAnOwnedFaceAllocatesAsAnUnboundedOne(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := RunInput{Text: "Quarterly revenue, office 001234", Kerns: true}
+	plain, owned := f.Clone(), f.Clone()
+	ctx := context.Background()
+	unbounded := testing.AllocsPerRun(50, func() {
+		plain.ShapeGlyphsMerged(in.Text, "", "", "", "", true, in.Features)
+	})
+	bounded := testing.AllocsPerRun(50, func() {
+		if _, err := owned.ShapeGlyphsBounded(ctx, in, RunLimits{}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if bounded > unbounded {
+		t.Fatalf("a bounded run allocates %v times, an unbounded one %v", bounded, unbounded)
+	}
+}
+
+// The face a scope hands out is already under the scope's budget, which a run
+// of its own would replace.
+func TestABoundedRunIsRefusedInsideAScope(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WithShapingLimits(context.Background(), RunLimits{}, func(f *Face) error {
+		_, err := f.ShapeGlyphsBounded(context.Background(), RunInput{Text: "a"}, RunLimits{})
+		return err
+	})
+	if err == nil {
+		t.Fatal("a bounded run inside a scope was accepted")
+	}
+}
+
+// The context is asked at every boundary between phases, however few charges
+// came before: a scope cancelled after its last run is refused.
+func TestAScopeCancelledAfterItsLastRunIsRefused(t *testing.T) {
+	f, err := NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err = f.WithShapingLimits(ctx, RunLimits{}, func(f *Face) error {
+		f.ShapeGlyphs("a")
+		cancel()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a scope cancelled after its last run: %v", err)
+	}
+}

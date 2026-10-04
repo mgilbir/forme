@@ -9,7 +9,7 @@ import (
 // ErrRunLimit identifies a rejected input, glyph expansion or shaping work limit.
 var ErrRunLimit = errors.New("shape: run limit exceeded")
 
-// RunLimits bounds one ShapeGlyphsContext call. Zero fields select defaults;
+// RunLimits bounds one ShapeGlyphsContext or ShapeGlyphsBounded call. Zero fields select defaults;
 // negative fields are invalid. MaxWork counts conservative lookup work units,
 // including subtable bytes and the glyphs a lookup can inspect. It does not
 // replace the font parser's own budgets or interrupt an individual font read.
@@ -45,6 +45,9 @@ type runWork struct {
 	// layouts are the ones this call shaped through, whose limits are the
 	// call's own. See layoutLimits.
 	layouts []*layout
+	// untilCtx counts down the charges to the next ask of ctx; see ctxEvery.
+	// Zero, as a new budget has it, asks at the first.
+	untilCtx int
 }
 type runAbort struct{ err error }
 
@@ -64,9 +67,26 @@ func (w *runWork) size(n int) {
 	}
 }
 
+// ctxEvery is how many charges pass between asks of the context. Asking is a
+// call through an interface, and for a cancellable context a lock, at every
+// lookup step: about as much again as the step it guards, on a short run.
+// Sixty-four steps are microseconds, which is as soon as a cancellation needs
+// noticing.
+const ctxEvery = 64
+
+// checkCtx asks the context now, at a boundary between phases, rather than
+// when the count next comes round.
+func (w *runWork) checkCtx() {
+	w.untilCtx = 0
+	w.charge(0)
+}
+
 func (w *runWork) charge(n int64) {
-	if err := w.ctx.Err(); err != nil {
-		panic(runAbort{err})
+	if w.untilCtx--; w.untilCtx <= 0 {
+		w.untilCtx = ctxEvery
+		if err := w.ctx.Err(); err != nil {
+			panic(runAbort{err})
+		}
 	}
 	if n < 0 || n > w.left {
 		panic(runAbort{fmt.Errorf("%w: lookup work", ErrRunLimit)})
@@ -149,29 +169,77 @@ func (limits RunLimits) withDefaults() (RunLimits, error) {
 // private clone shares the receiver's locked font caches. Font programs must remain
 // immutable during calls. Cancellation is checked between shaping phases and
 // lookup steps; font parsing and Unicode preprocessing use their own bounds.
-func (f *Face) ShapeGlyphsContext(ctx context.Context, in RunInput, limits RunLimits) (result RunResult, err error) {
+//
+// It clones the face on every call. A caller shaping many runs, which keeps
+// clones of its own already, saves that with ShapeGlyphsBounded.
+func (f *Face) ShapeGlyphsContext(ctx context.Context, in RunInput, limits RunLimits) (RunResult, error) {
 	if ctx == nil || f == nil {
 		return RunResult{}, errors.New("shape: nil context or face")
 	}
-	limits, err = limits.withDefaults()
-	if err != nil {
+	if err := f.checkRun(ctx, in, &limits); err != nil {
 		return RunResult{}, err
 	}
+	return f.Clone().shapeBounded(ctx, in, limits)
+}
+
+// ShapeGlyphsBounded is ShapeGlyphsContext on the receiver itself, for a caller
+// that owns the face: one of its own clones, used on one goroutine at a time,
+// as ShapeGlyphs is. It shapes under the same limits and fails the same ways,
+// but makes no clone, and reuses its budget from one call to the next, so a run
+// costs what ShapeGlyphs costs it and the charging of work.
+//
+// The glyphs it shapes are recorded on the receiver as ShapeGlyphs records
+// them, for the caller to merge as it does theirs. A run that fails may have
+// recorded some before it stopped. It is an error to call it on a face that is
+// already shaping under a budget, such as the one WithShapingLimits hands out.
+func (f *Face) ShapeGlyphsBounded(ctx context.Context, in RunInput, limits RunLimits) (RunResult, error) {
+	if ctx == nil || f == nil {
+		return RunResult{}, errors.New("shape: nil context or face")
+	}
+	if f.runWork != nil {
+		return RunResult{}, errors.New("shape: face is already shaping under a budget")
+	}
+	if err := f.checkRun(ctx, in, &limits); err != nil {
+		return RunResult{}, err
+	}
+	return f.shapeBounded(ctx, in, limits)
+}
+
+// checkRun settles the limits' defaults and refuses, before any shaping, a run
+// whose input is over them or whose context is already done.
+func (f *Face) checkRun(ctx context.Context, in RunInput, limits *RunLimits) error {
+	settled, err := limits.withDefaults()
+	if err != nil {
+		return err
+	}
+	*limits = settled
 	left := limits.MaxInputBytes
 	for _, s := range []string{in.Text, in.Before, in.After, in.MergeBefore, in.MergeAfter, in.Features.Tags, in.Features.TagsOff, in.Features.Language, f.settingsOn, f.settingsOff} {
 		if len(s) > left {
-			return RunResult{}, fmt.Errorf("%w: input bytes", ErrRunLimit)
+			return fmt.Errorf("%w: input bytes", ErrRunLimit)
 		}
 		left -= len(s)
 	}
-	if err := ctx.Err(); err != nil {
-		return RunResult{}, err
+	return ctx.Err()
+}
+
+// shapeBounded shapes one run on f under the limits, which checkRun has
+// settled. The budget is f's spare one, reset, and is off the face again when
+// the call returns, whether it shaped or stopped.
+func (f *Face) shapeBounded(ctx context.Context, in RunInput, limits RunLimits) (result RunResult, err error) {
+	w := f.spareWork
+	if w == nil {
+		w = &runWork{}
+		f.spareWork = w
 	}
-	clone := f.Clone()
-	clone.runWork = &runWork{ctx: ctx, glyphs: limits.MaxGlyphs, left: limits.MaxWork}
+	*w = runWork{ctx: ctx, glyphs: limits.MaxGlyphs, left: limits.MaxWork, layouts: w.layouts[:0]}
+	f.runWork = w
 	// Only the private bounded-work signal is caught. Programming errors retain
 	// their ordinary panic behaviour, including those in the legacy entry points.
 	defer func() {
+		f.runWork = nil
+		// The context is the caller's, and is not kept past its call.
+		w.ctx = nil
 		if p := recover(); p != nil {
 			if stop, ok := p.(runAbort); ok {
 				result = RunResult{}
@@ -181,12 +249,12 @@ func (f *Face) ShapeGlyphsContext(ctx context.Context, in RunInput, limits RunLi
 			}
 		}
 	}()
-	result.Glyphs, result.Missing = clone.ShapeGlyphsMerged(in.Text, in.Before, in.After, in.MergeBefore, in.MergeAfter, in.Kerns, in.Features)
-	clone.runWork.size(len(result.Glyphs))
-	if findings := clone.runWork.layoutLimits(clone); len(findings) != 0 {
+	result.Glyphs, result.Missing = f.ShapeGlyphsMerged(in.Text, in.Before, in.After, in.MergeBefore, in.MergeAfter, in.Kerns, in.Features)
+	w.size(len(result.Glyphs))
+	if findings := w.layoutLimits(f); len(findings) != 0 {
 		return RunResult{}, fmt.Errorf("%w: font layout: %v", ErrRunLimit, findings)
 	}
-	result.Work = limits.MaxWork - clone.runWork.left
+	result.Work = limits.MaxWork - w.left
 	return result, nil
 }
 
@@ -230,7 +298,7 @@ func (f *Face) WithShapingLimits(ctx context.Context, limits RunLimits, fn func(
 	if err = fn(clone); err != nil {
 		return 0, err
 	}
-	clone.runWork.spend(0)
+	clone.runWork.checkCtx()
 	if findings := clone.runWork.layoutLimits(clone); len(findings) != 0 {
 		return 0, fmt.Errorf("%w: font layout: %v", ErrRunLimit, findings)
 	}
@@ -241,7 +309,7 @@ func (w *runWork) checkInput(f *Face, s string, extra []string, ctx shapeContext
 	if w == nil || w.input == 0 {
 		return
 	}
-	w.spend(0)
+	w.checkCtx()
 	left := w.input
 	check := func(s string) {
 		if len(s) > left {

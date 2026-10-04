@@ -255,6 +255,13 @@ bounds and are not interrupted inside an individual phase. This API does not
 change the legacy shaping entry points or make their mutable usage records
 concurrent.
 
+`ShapeGlyphsContext` clones the face on every call. A caller that already keeps
+clones of its own, one per goroutine, calls `Face.ShapeGlyphsBounded` on one
+instead: the same limits and failures, on the clone itself, with its budget
+reused from call to call. The glyphs it shapes are recorded on that clone, as
+`ShapeGlyphs` records them, and a bounded run allocates what an unbounded one
+does.
+
 `Face.WithShapingLimits` shares a budget across synchronous measurement/shaping
 calls through a private face, for integrations such as paragraph breaking. The
 callback must bound its own other work, use the supplied face on one goroutine
