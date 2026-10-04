@@ -70,10 +70,11 @@ func programSize(data []byte, tables map[string][]byte) int {
 	return n
 }
 
-// LoadCollection loads one face of a font collection, by its index from zero.
-// Its tables are read from data where they are and not copied, so data must
-// not be modified while the face is in use; Program copies them out into a
-// font of their own for embedding.
+// LoadCollection loads one face of a font collection, by its index from zero:
+// a .ttc or .otc, or one wrapped as WOFF 2, which is unwrapped first.
+// Its tables are read from the collection where they are and not copied — for
+// a .ttc or .otc, from data, which must not be modified while the face is in
+// use; Program copies them out into a font of their own for embedding.
 //
 // A single font, which is a collection of one, loads as Load loads it at index
 // zero. A face of a collection loads at its default instance, as Load loads a
@@ -113,6 +114,10 @@ func LoadCollectionInstance(data []byte, index int, coords map[string]float64) (
 // collectionFaceTables is the tables of a face of a collection, and nil and no
 // error for data that is a single font, whose only face is index zero.
 func collectionFaceTables(data []byte, index int) (map[string][]byte, error) {
+	data, err := unwrapWOFF(data)
+	if err != nil {
+		return nil, err
+	}
 	offsets := font.CollectionOffsets(data)
 	if offsets == nil {
 		if index != 0 {
@@ -128,6 +133,15 @@ func collectionFaceTables(data []byte, index int) (map[string][]byte, error) {
 		return nil, fmt.Errorf("fonts: font %d of the collection has a table directory that cannot be read", index)
 	}
 	return tables, nil
+}
+
+// unwrapWOFF is a WOFF or WOFF 2 file's font, or font collection, unwrapped,
+// and any other data as it is.
+func unwrapWOFF(data []byte) ([]byte, error) {
+	if font.IsWOFF(data) || font.IsWOFF2(data) {
+		return font.DecodeWOFF(data)
+	}
+	return data, nil
 }
 
 // CollectionFace describes one face of a font file, as the face describes
@@ -149,6 +163,10 @@ type CollectionFace struct {
 // as a collection of one. A face whose table directory cannot be read is
 // described with its index only; LoadCollection says what is wrong with it.
 func CollectionFaces(data []byte) ([]CollectionFace, error) {
+	data, err := unwrapWOFF(data)
+	if err != nil {
+		return nil, err
+	}
 	offsets := font.CollectionOffsets(data)
 	if offsets == nil {
 		tables := font.SFNTTables(data)

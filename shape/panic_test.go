@@ -298,6 +298,9 @@ func FuzzLoadAndUse(f *testing.F) {
 	cff2, err2 := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", "CFF2Blend.otf"))
 	if err1 == nil && err2 == nil {
 		f.Add(buildCollection(vc, cff2))
+		// And the same, wrapped as WOFF 2, whose collection directory is a
+		// second account of which tables are whose.
+		f.Add(woff2Collection(vc, cff2))
 	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
