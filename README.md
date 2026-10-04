@@ -135,6 +135,13 @@ the metrics a layout engine has to ask for —
 including what the fourteen standard PDF faces state, which is not the same
 question.
 
+**Glyphs, drawn.** A glyph's outline (`Face.GlyphOutline`), and its colour
+(`Face.PaintGlyph`): a COLR glyph's layers or paint graph, coloured from a CPAL
+palette, and a CBDT or sbix glyph's PNG image at the strike for the size drawn,
+handed to a `Painter` call for call as HarfBuzz's `hb_font_paint_glyph` hands
+them out. `Face.GlyphColour` says which a glyph is painted from, so a caller
+can fall back.
+
 Glyphs come back in **visual order** — the order a pen draws them, left to right —
 whatever scripts the string mixes, so a caller can draw them as they are.
 

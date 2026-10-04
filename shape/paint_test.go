@@ -1,0 +1,369 @@
+package shape
+
+import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// The tests here hold Face.PaintGlyph to HarfBuzz's hb_font_paint_glyph, call
+// for call, over every glyph of the colour faces in testdata/harfbuzz: the
+// fills of ColourPaint.ttf in three palettes and at three weights, every paint
+// format and every thing painting does to a box in ColourInk.ttf, and the
+// bitmaps of BitmapInk.ttf and SbixInk.ttf at sizes on, between and past their
+// strikes. The answers are checked in as paint.expected.txt; see paint.py.
+
+// recordingPainter writes each call as paint.py writes HarfBuzz's.
+type recordingPainter struct{ lines []string }
+
+func num(v float64) string { return strconv.FormatFloat(v, 'g', -1, 64) }
+
+func colourText(c Color, foreground bool) string {
+	fg := 0
+	if foreground {
+		fg = 1
+	}
+	return fmt.Sprintf("%d %d %d %d %d", c.R, c.G, c.B, c.A, fg)
+}
+
+var extendNames = map[Extend]string{ExtendPad: "pad", ExtendRepeat: "repeat", ExtendReflect: "reflect"}
+
+func lineText(l ColorLine, geometry ...float64) string {
+	var b strings.Builder
+	b.WriteString(extendNames[l.Extend])
+	for _, v := range geometry {
+		b.WriteString(" " + num(v))
+	}
+	b.WriteString(" |")
+	for i, s := range l.Stops {
+		if i > 0 {
+			b.WriteString(" |")
+		}
+		b.WriteString(" " + num(s.Offset) + " " + colourText(s.Color, s.Foreground))
+	}
+	return b.String()
+}
+
+func (r *recordingPainter) add(f string, a ...any) { r.lines = append(r.lines, fmt.Sprintf(f, a...)) }
+
+func (r *recordingPainter) PushTransform(t Transform) {
+	r.add("T %s %s %s %s %s %s", num(t.XX), num(t.YX), num(t.XY), num(t.YY), num(t.X0), num(t.Y0))
+}
+func (r *recordingPainter) PopTransform()       { r.add("t") }
+func (r *recordingPainter) PushClipGlyph(g int) { r.add("CG %d", g) }
+func (r *recordingPainter) PushClipRect(b Rect) {
+	r.add("CR %s %s %s %s", num(b.XMin), num(b.YMin), num(b.XMax), num(b.YMax))
+}
+func (r *recordingPainter) PopClip()                    { r.add("c") }
+func (r *recordingPainter) PushGroup()                  { r.add("G") }
+func (r *recordingPainter) PopGroup(mode CompositeMode) { r.add("g %d", mode) }
+func (r *recordingPainter) Solid(c Color, fg bool)      { r.add("S %s", colourText(c, fg)) }
+func (r *recordingPainter) LinearGradient(g LinearGradient) {
+	r.add("L %s", lineText(g.Line, g.P0.X, g.P0.Y, g.P1.X, g.P1.Y, g.P2.X, g.P2.Y))
+}
+func (r *recordingPainter) RadialGradient(g RadialGradient) {
+	r.add("R %s", lineText(g.Line, g.C0.X, g.C0.Y, g.R0, g.C1.X, g.C1.Y, g.R1))
+}
+func (r *recordingPainter) SweepGradient(g SweepGradient) {
+	r.add("W %s", lineText(g.Line, g.Center.X, g.Center.Y, g.StartAngle, g.EndAngle))
+}
+func (r *recordingPainter) Image(img Image) {
+	if img.Format != ImagePNG {
+		r.add("I unknown format %d", img.Format)
+		return
+	}
+	sum := sha256.Sum256(img.Data)
+	r.add("I %d %d png 0.0 %s %s %s %s %d %s", img.Width, img.Height,
+		num(img.Box.XMin), num(img.Box.YMax), num(img.Box.XMax-img.Box.XMin), num(img.Box.YMin-img.Box.YMax),
+		len(img.Data), hex.EncodeToString(sum[:])[:16])
+}
+
+// paintCase is one face of paint.expected.txt, as it was painted, and each
+// glyph's calls.
+type paintCase struct {
+	name, sum string
+	weight    int
+	opts      PaintOptions
+	glyphs    [][]string
+}
+
+func readPaintGolden(t *testing.T) []*paintCase {
+	t.Helper()
+	path := filepath.Join(harfbuzzDir, "paint.expected.txt")
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("%v; run `make hbpaint` to generate it", err)
+	}
+	defer file.Close()
+	var cases []*paintCase
+	var c *paintCase
+	sc := bufio.NewScanner(file)
+	sc.Buffer(nil, 1<<20)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		f := strings.Fields(line)
+		switch {
+		case f[0] == "face" && len(f) == 7:
+			c = &paintCase{name: f[1], sum: f[6]}
+			if name, w, ok := strings.Cut(f[1], "@wght="); ok {
+				c.name = name
+				if c.weight, err = strconv.Atoi(w); err != nil {
+					t.Fatalf("%s: %v", line, err)
+				}
+			}
+			p, err1 := strconv.Atoi(f[3])
+			ppem, err2 := strconv.Atoi(f[5])
+			if err1 != nil || err2 != nil {
+				t.Fatalf("%s: a palette and a ppem", line)
+			}
+			c.opts = PaintOptions{Palette: p, PPEM: ppem, Foreground: Color{0x33, 0x66, 0x99, 0xCC}}
+			cases = append(cases, c)
+		case c == nil:
+			t.Fatalf("%q before any face", line)
+		case f[0] == "G" && len(f) == 2:
+			if gid, err := strconv.Atoi(f[1]); err != nil || gid != len(c.glyphs) {
+				t.Fatalf("%s: glyphs are in order from 0", line)
+			}
+			c.glyphs = append(c.glyphs, nil)
+		case len(c.glyphs) == 0:
+			t.Fatalf("%q before any glyph", line)
+		default:
+			c.glyphs[len(c.glyphs)-1] = append(c.glyphs[len(c.glyphs)-1], line)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return cases
+}
+
+// sameCall compares a call as HarfBuzz made it and as PaintGlyph did, token by
+// token, the numbers as numbers: HarfBuzz's are single precision written by
+// Python, and these the same values written by Go.
+func sameCall(want, got string) bool {
+	w, g := strings.Fields(want), strings.Fields(got)
+	if len(w) != len(g) {
+		return false
+	}
+	for i := range w {
+		if w[i] == g[i] {
+			continue
+		}
+		a, err1 := strconv.ParseFloat(w[i], 64)
+		b, err2 := strconv.ParseFloat(g[i], 64)
+		if err1 != nil || err2 != nil || a != b {
+			return false
+		}
+	}
+	return true
+}
+
+func TestPaintGlyphAgreesWithHarfBuzz(t *testing.T) {
+	cases := readPaintGolden(t)
+	if len(cases) < 20 {
+		t.Fatalf("paint.expected.txt holds %d faces; run `make hbpaint`", len(cases))
+	}
+	for _, c := range cases {
+		label := fmt.Sprintf("%s@%d palette %d ppem %d", c.name, c.weight, c.opts.Palette, c.opts.PPEM)
+		data := harfbuzzFont(t, c.name)
+		sum := sha256.Sum256(data)
+		if got := hex.EncodeToString(sum[:]); got != c.sum {
+			t.Fatalf("the expectations were generated against %s %s and this one is %s.\n"+
+				"Run `make hbpaint` to regenerate them.", c.name, c.sum, got)
+		}
+		var f *Face
+		var err error
+		if c.weight != 0 {
+			f, err = LoadInstance(data, map[string]float64{"wght": float64(c.weight)})
+		} else {
+			f, err = Load(data)
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if f.NumGlyphs() != len(c.glyphs) {
+			t.Fatalf("%s: %d glyphs, and HarfBuzz painted %d", label, f.NumGlyphs(), len(c.glyphs))
+		}
+		for gid, want := range c.glyphs {
+			r := &recordingPainter{}
+			if err := f.PaintGlyph(gid, c.opts, r); err != nil {
+				t.Errorf("%s glyph %d: %v", label, gid, err)
+				continue
+			}
+			for i := 0; i < max(len(want), len(r.lines)); i++ {
+				var w, g string
+				if i < len(want) {
+					w = want[i]
+				}
+				if i < len(r.lines) {
+					g = r.lines[i]
+				}
+				if !sameCall(w, g) {
+					t.Errorf("%s glyph %d, call %d:\n  HarfBuzz %q\n  forme    %q", label, gid, i, w, g)
+					break
+				}
+			}
+		}
+	}
+}
+
+// TestGlyphColourSaysWhatIsPainted holds GlyphColour to what PaintGlyph paints:
+// a COLRv1 glyph's first call is never a bare fill, a COLRv0 glyph is fills of
+// outlines, a bitmap is one image, and a glyph with no colour is its own
+// outline in the foreground.
+func TestGlyphColourSaysWhatIsPainted(t *testing.T) {
+	seen := map[GlyphColour]bool{}
+	for _, c := range readPaintGolden(t) {
+		f, err := Load(harfbuzzFont(t, c.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for gid := range f.NumGlyphs() {
+			r := &recordingPainter{}
+			if err := f.PaintGlyph(gid, c.opts, r); err != nil {
+				t.Fatal(err)
+			}
+			kind := f.GlyphColour(gid, c.opts.PPEM)
+			seen[kind] = true
+			plain := len(r.lines) == 3 && r.lines[0] == fmt.Sprintf("CG %d", gid) &&
+				strings.HasSuffix(r.lines[1], " 1") && r.lines[2] == "c"
+			image := len(r.lines) == 1 && strings.HasPrefix(r.lines[0], "I ")
+			var ok bool
+			switch kind {
+			case ColourNone:
+				ok = plain
+			case ColourBitmap:
+				ok = image
+			case ColourLayers:
+				ok = !image && len(r.lines)%3 == 0
+			case ColourPaint:
+				ok = !image && !plain
+			}
+			if !ok {
+				t.Errorf("%s glyph %d is %d and was painted as %q", c.name, gid, kind, r.lines)
+			}
+		}
+	}
+	for _, kind := range []GlyphColour{ColourNone, ColourPaint, ColourLayers, ColourBitmap} {
+		if !seen[kind] {
+			t.Errorf("no glyph is %d, so this test does not reach it", kind)
+		}
+	}
+}
+
+// countingPainter counts the calls it is handed.
+type countingPainter struct{ calls int }
+
+func (c *countingPainter) PushTransform(Transform)       { c.calls++ }
+func (c *countingPainter) PopTransform()                 { c.calls++ }
+func (c *countingPainter) PushClipGlyph(int)             { c.calls++ }
+func (c *countingPainter) PushClipRect(Rect)             { c.calls++ }
+func (c *countingPainter) PopClip()                      { c.calls++ }
+func (c *countingPainter) PushGroup()                    { c.calls++ }
+func (c *countingPainter) PopGroup(CompositeMode)        { c.calls++ }
+func (c *countingPainter) Solid(Color, bool)             { c.calls++ }
+func (c *countingPainter) LinearGradient(LinearGradient) { c.calls++ }
+func (c *countingPainter) RadialGradient(RadialGradient) { c.calls++ }
+func (c *countingPainter) SweepGradient(SweepGradient)   { c.calls++ }
+func (c *countingPainter) Image(Image)                   { c.calls++ }
+
+// TestAGlyphPastItsBoundsIsRefusedWhole paints every COLR glyph of the two
+// faces under a budget too small for some and enough for others, and requires
+// that each is either painted as it is with the whole budget or refused with
+// nothing handed to the painter: never painted in part.
+func TestAGlyphPastItsBoundsIsRefusedWhole(t *testing.T) {
+	refused, painted := 0, 0
+	for _, name := range []string{"ColourPaint.ttf", "ColourInk.ttf"} {
+		f, err := Load(harfbuzzFont(t, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fg := Color{A: 255}
+		for gid := range f.NumGlyphs() {
+			whole := &recordingPainter{}
+			if ok, err := f.paintCOLR(f.colrTable(), gid, 0, fg, whole, paintWork); !ok || err != nil {
+				continue
+			}
+			short := &recordingPainter{}
+			_, err := f.paintCOLR(f.colrTable(), gid, 0, fg, short, 6)
+			switch {
+			case errors.Is(err, ErrPaintLimit):
+				refused++
+				if len(short.lines) != 0 {
+					t.Errorf("%s glyph %d was refused after %d calls", name, gid, len(short.lines))
+				}
+			case err != nil:
+				t.Errorf("%s glyph %d: %v", name, gid, err)
+			default:
+				painted++
+				if strings.Join(short.lines, "\n") != strings.Join(whole.lines, "\n") {
+					t.Errorf("%s glyph %d painted differently within a budget it fits in", name, gid)
+				}
+			}
+		}
+	}
+	if refused == 0 || painted == 0 {
+		t.Fatalf("%d refused and %d painted: the budget does not divide the glyphs, so this test measures nothing", refused, painted)
+	}
+}
+
+// TestPaintingSpendsNothingOfTheFace paints every glyph of ColourInk many
+// times and requires that measuring's budget, the face's, is not touched.
+func TestPaintingSpendsNothingOfTheFace(t *testing.T) {
+	f, err := Load(harfbuzzFont(t, "ColourInk.ttf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.glyphExtents(0)
+	before := f.colr.budget.Spent()
+	for range 20 {
+		for gid := range f.NumGlyphs() {
+			if err := f.PaintGlyph(gid, PaintOptions{}, &countingPainter{}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if spent := f.colr.budget.Spent(); spent != before {
+		t.Errorf("painting spent %d of the face's measuring budget", spent-before)
+	}
+}
+
+func TestPaintGlyphRefusesWhatItCannotPaint(t *testing.T) {
+	f, err := Load(harfbuzzFont(t, "ColourPaint.ttf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gid := range []int{-1, f.NumGlyphs()} {
+		c := &countingPainter{}
+		if err := f.PaintGlyph(gid, PaintOptions{}, c); err == nil || c.calls != 0 {
+			t.Errorf("glyph %d: %v after %d calls", gid, err, c.calls)
+		}
+		if got := f.GlyphColour(gid, 0); got != ColourNone {
+			t.Errorf("glyph %d is %d", gid, got)
+		}
+	}
+	std, err := Standard("Helvetica")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := std.PaintGlyph(1, PaintOptions{}, &countingPainter{}); !errors.Is(err, ErrNoOutline) {
+		t.Errorf("a standard face: %v", err)
+	}
+}
+
+func TestColorIsAnImageColor(t *testing.T) {
+	r, g, b, a := Color{R: 255, G: 128, B: 0, A: 128}.RGBA()
+	if a != 0x8080 || r != 0x8080 || b != 0 || g != 0x4080 {
+		t.Errorf("RGBA is %#x %#x %#x %#x", r, g, b, a)
+	}
+}

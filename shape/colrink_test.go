@@ -243,7 +243,7 @@ func TestColourInkWorkIsBoundedAndReported(t *testing.T) {
 	}
 	const budget = 200
 	f.colr.once.Do(func() {
-		f.colr.t = readCOLR(f.colr.table, f.varCoords)
+		f.colr.t = readCOLR(f.colr.colr, f.varCoords)
 		f.colr.budget = font.NewBudget(budget)
 	})
 	fresh, err := Load(data)

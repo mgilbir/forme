@@ -1,4 +1,4 @@
-.PHONY: ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+.PHONY: hbpaint ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -186,7 +186,7 @@ hbenv:
 # indiccategories.expected.txt — are read from a source checkout of the same
 # release: HarfBuzz's own generators, and its own source; see
 # usecategories.py, usescripts.py and indiccategories.py.
-hboracles: hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried hblanguages varinstance
+hboracles: hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpaint hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried hblanguages varinstance
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
@@ -312,6 +312,40 @@ hbcolrink:
 		SbixInkRejected.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkRejected.ttf \
 		SbixInkOps.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkOps.ttf \
 		SbixInkOpsEdge.ttf=$(HARFBUZZ_DIR)/fonts/SbixInkOpsEdge.ttf
+
+# Colour glyphs painted by HarfBuzz, every callback hb_font_paint_glyph makes,
+# for what Face.PaintGlyph hands a Painter. ColourPaint.ttf (paint_fixture.py)
+# is the fills: palettes, the foreground, every gradient and extend, and the
+# variable ones, at its default and at two weights. ColourInk.ttf is every paint
+# format and every thing painting does to a box (colrink_fixture.py, built by
+# hbcolrink). The bitmap faces are asked at sizes on, between and past their
+# strikes, which is how the strike is chosen. See paint.py.
+HBFONTS := $(HARFBUZZ_DIR)/fonts
+hbpaint:
+	$(PYTHON) $(HARFBUZZ_DIR)/paint_fixture.py $(HBFONTS)
+	$(PYTHON) $(HARFBUZZ_DIR)/paint.py $(HARFBUZZ_DIR)/paint.expected.txt \
+		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf \
+		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf:palette=1 \
+		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf:palette=5 \
+		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf@wght=900 \
+		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf@wght=250:palette=1 \
+		ColourInk.ttf=$(HBFONTS)/ColourInk.ttf \
+		ColourInk.ttf=$(HBFONTS)/ColourInk.ttf@wght=650 \
+		ColourInkStatic.ttf=$(HBFONTS)/ColourInkStatic.ttf \
+		BitmapInk.ttf=$(HBFONTS)/BitmapInk.ttf:bitmap=1 \
+		BitmapInk.ttf=$(HBFONTS)/BitmapInk.ttf:bitmap=1:ppem=20 \
+		BitmapInk.ttf=$(HBFONTS)/BitmapInk.ttf:bitmap=1:ppem=21 \
+		BitmapInk.ttf=$(HBFONTS)/BitmapInk.ttf:bitmap=1:ppem=130 \
+		BitmapInk.ttf=$(HBFONTS)/BitmapInk.ttf:bitmap=1:ppem=500 \
+		SbixInk.ttf=$(HBFONTS)/SbixInk.ttf:bitmap=1 \
+		SbixInk.ttf=$(HBFONTS)/SbixInk.ttf:bitmap=1:ppem=1 \
+		SbixInk.ttf=$(HBFONTS)/SbixInk.ttf:bitmap=1:ppem=8 \
+		SbixInk.ttf=$(HBFONTS)/SbixInk.ttf:bitmap=1:ppem=10 \
+		SbixInk.ttf=$(HBFONTS)/SbixInk.ttf:bitmap=1:ppem=12 \
+		SbixInk.ttf=$(HBFONTS)/SbixInk.ttf:bitmap=1:ppem=16 \
+		SbixInk.ttf=$(HBFONTS)/SbixInk.ttf:bitmap=1:ppem=100 \
+		SbixInkLarge.ttf=$(HBFONTS)/SbixInkLarge.ttf:bitmap=1 \
+		SbixInkRejected.ttf=$(HBFONTS)/SbixInkRejected.ttf:bitmap=1
 
 # Variable composites (VARC): a face built here (see varc_fixture.py), its
 # ink and outlines asked of HarfBuzz at its default and six locations, and its

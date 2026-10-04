@@ -22,9 +22,9 @@ import (
 // What is read is sbix::accelerator_t::get_extents at the release the oracle is
 // pinned to, number for number:
 //
-//   - The strike is the one choose_strike picks when asked at no size, as this
-//     package always asks: the largest ppem, the first of equals, starting from
-//     the first strike even where that one is null.
+//   - The strike is the one choose_strike picks when asked at no size, as
+//     measuring asks: the largest ppem, the first of equals, starting from the
+//     first strike even where that one is null.
 //   - A glyph's record is found as get_glyph_blob finds it, with a 'dupe'
 //     followed to the glyph it names eight times at most, and a record that
 //     does not hold more than its eight-byte header is no image.
@@ -41,13 +41,11 @@ import (
 //     strike, or its glyph offsets, not inside the table, or more checking of
 //     them than the sanitizer allows a table that size.
 //
-// # What is not here
+// # Painting
 //
-// Drawing. A backend draws a glyph from the font program, and an sbix image is
-// not in it: this reads where the image is and how large, which is what the
-// marks placed on it and a line set upright need, and nothing hands the image
-// itself to a backend — as nothing hands it a CBDT one. A face whose glyphs
-// are sbix images is drawn by their outlines.
+// Face.PaintGlyph hands the image itself to a caller that draws (paint.go), as
+// it hands out a CBDT one, from the strike choose_strike picks for the size
+// the glyph is drawn at, which strikeFor is. Measuring still asks at no size.
 
 // sbixInk is what a face with an sbix table keeps to measure its bitmap
 // glyphs: the table and the strike HarfBuzz reads, chosen once.
@@ -87,9 +85,22 @@ func newSbixInk(tables map[string][]byte, numGlyphs, upem int) *sbixInk {
 		return nil
 	}
 	s := &sbixInk{table: t, numGlyphs: numGlyphs, upem: upem}
+	s.strike, s.ppem = s.strikeFor(0)
+	return s
+}
+
+// strikeFor is choose_strike: the strike for a size in pixels per em, and its
+// own size, which is zero for none and for a null strike. Asked at no size,
+// which it takes as 2^30, it is the largest; asked at one, the smallest at
+// least that large, or failing any the largest.
+func (s *sbixInk) strikeFor(requested int) (strike, ppem int) {
+	t := s.table
 	count := int(font.Be32(t, 4))
 	if count == 0 {
-		return s
+		return 0, 0
+	}
+	if requested <= 0 {
+		requested = 1 << 30
 	}
 	ppemOf := func(i int) int {
 		off := int(font.Be32(t, 8+4*i))
@@ -98,8 +109,6 @@ func newSbixInk(tables map[string][]byte, numGlyphs, upem int) *sbixInk {
 		}
 		return font.Be16(t, off)
 	}
-	// choose_strike with no size asked for, which it takes as 2^30.
-	const requested = 1 << 30
 	best, bestPPEM := 0, ppemOf(0)
 	for i := 1; i < count; i++ {
 		ppem := ppemOf(i)
@@ -107,8 +116,7 @@ func newSbixInk(tables map[string][]byte, numGlyphs, upem int) *sbixInk {
 			best, bestPPEM = i, ppem
 		}
 	}
-	s.strike, s.ppem = int(font.Be32(t, 8+4*best)), bestPPEM
-	return s
+	return int(font.Be32(t, 8+4*best)), bestPPEM
 }
 
 // sbixSane is sbix::sanitize: a header, a version of at least one, and every
@@ -146,30 +154,25 @@ func sbixSane(t []byte, numGlyphs int) bool {
 // extents is a glyph's sbix ink in font units, and false where the strike
 // holds no PNG HarfBuzz reads a box from.
 func (s *sbixInk) extents(gid int) (extents, bool) {
-	if s.ppem == 0 {
-		return extents{}, false
-	}
-	x, y, data, ok := s.image(gid)
+	return s.extentsIn(gid, s.strike, s.ppem)
+}
+
+// extentsIn is extents in a strike strikeFor chose, of the size it gave.
+func (s *sbixInk) extentsIn(gid, strike, ppem int) (extents, bool) {
+	x, y, width, height, _, ok := s.pngIn(gid, strike, ppem)
 	if !ok {
 		return extents{}, false
 	}
-	var width, height uint32
-	if len(data) >= pngHeaderSize {
-		width, height = uint32(font.Be32(data, 16)), uint32(font.Be32(data, 20))
-	}
-	if width >= 65536 || height >= 65536 {
-		return extents{}, false
-	}
-	scale := float32(s.upem) / float32(s.ppem)
+	scale := float32(s.upem) / float32(ppem)
 	conv := func(v int) int {
 		r := float32(float32(v) * scale)
 		return int(clampToInt32(math.Floor(float64(float32(r + 0.5)))))
 	}
 	return scaledExtents(extents{
 		xBearing: conv(x),
-		yBearing: conv(int(height) + y),
-		width:    conv(int(width)),
-		height:   conv(-int(height)),
+		yBearing: conv(height + y),
+		width:    conv(width),
+		height:   conv(-height),
 	}), true
 }
 
@@ -193,23 +196,45 @@ func scaledExtents(e extents) extents {
 	}
 }
 
-// image is SBIXStrike::get_glyph_blob for a PNG: the offsets in front of a
-// glyph's image and the image, following duplicates.
-func (s *sbixInk) image(gid int) (x, y int, data []byte, ok bool) {
+// pngIn is get_png_extents unscaled, and the image: a glyph's PNG in a
+// strike, its offsets, and the width and height its IHDR states, in pixels.
+// It is false where the strike is null or holds no PNG for the glyph, and for
+// a PNG stating a side of 65,536 pixels or more.
+func (s *sbixInk) pngIn(gid, strike, ppem int) (x, y, width, height int, data []byte, ok bool) {
+	if ppem == 0 {
+		return 0, 0, 0, 0, nil, false
+	}
+	x, y, data, ok = s.imageIn(gid, strike)
+	if !ok {
+		return 0, 0, 0, 0, nil, false
+	}
+	var w, h uint32
+	if len(data) >= pngHeaderSize {
+		w, h = uint32(font.Be32(data, 16)), uint32(font.Be32(data, 20))
+	}
+	if w >= 65536 || h >= 65536 {
+		return 0, 0, 0, 0, nil, false
+	}
+	return x, y, int(w), int(h), data, true
+}
+
+// imageIn is SBIXStrike::get_glyph_blob for a PNG: the offsets in front of a
+// glyph's image in a strike and the image, following duplicates.
+func (s *sbixInk) imageIn(gid, strike int) (x, y int, data []byte, ok bool) {
 	t := s.table
 	// How much of the table lies past the strike's start, which every offset
 	// in it is measured from.
-	room := int64(len(t) - s.strike)
+	room := int64(len(t) - strike)
 	for retries := sbixDupeRetries; ; retries-- {
 		if gid < 0 || gid >= s.numGlyphs {
 			return 0, 0, nil, false
 		}
-		at := s.strike + 4 + 4*gid
+		at := strike + 4 + 4*gid
 		lo, hi := int64(font.Be32(t, at)), int64(font.Be32(t, at+4))
 		if hi <= lo || hi-lo <= sbixGlyphHeader || hi > room {
 			return 0, 0, nil, false
 		}
-		rec := t[int64(s.strike)+lo : int64(s.strike)+hi]
+		rec := t[int64(strike)+lo : int64(strike)+hi]
 		data = rec[sbixGlyphHeader:]
 		switch string(rec[4:8]) {
 		case "dupe":

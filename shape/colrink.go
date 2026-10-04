@@ -66,7 +66,8 @@ import (
 // once it has one. It is shared by the face's clones, as cffInk is.
 type colrInk struct {
 	f         *Face
-	table     []byte
+	colr      []byte
+	cpal      []byte
 	glyf      []byte
 	loca      []byte
 	longLoca  bool
@@ -90,7 +91,7 @@ type colrAnswer struct {
 }
 
 func newCOLRInk(f *Face, tables map[string][]byte, numGlyphs int) *colrInk {
-	c := &colrInk{f: f, table: tables["COLR"], numGlyphs: numGlyphs}
+	c := &colrInk{f: f, colr: tables["COLR"], cpal: tables["CPAL"], numGlyphs: numGlyphs}
 	head := tables["head"]
 	if glyf, loca := tables["glyf"], tables["loca"]; len(glyf) > 0 && len(loca) > 0 && len(head) >= 54 {
 		c.glyf, c.loca = glyf, loca
@@ -111,17 +112,13 @@ func newCOLRInk(f *Face, tables map[string][]byte, numGlyphs int) *colrInk {
 // every glyph of any of them does not reach; what does is a table built to
 // have each glyph reach HarfBuzz's 16,384 edges.
 func colrInkWork(c *colrInk) int {
-	return max(maxFontWork, 64*(len(c.table)+len(c.glyf)))
+	return max(maxFontWork, 64*(len(c.colr)+len(c.glyf)))
 }
 
 // extents is a glyph's colour ink, and whether the table paints the glyph; a
 // glyph it does not paint is measured by its outline instead.
 func (c *colrInk) extents(gid int) (extents, bool) {
-	c.once.Do(func() {
-		c.t = readCOLR(c.table, c.f.varCoords)
-		c.budget = font.NewBudget(colrInkWork(c))
-	})
-	if c.t == nil {
+	if c.table() == nil {
 		return extents{}, false
 	}
 	c.mu.Lock()
@@ -135,6 +132,16 @@ func (c *colrInk) extents(gid int) (extents, bool) {
 	}
 	c.answers[gid] = colrAnswer{ext, painted}
 	return ext, painted
+}
+
+// table is the COLR table, read the first time it is asked for, and nil for
+// one HarfBuzz reads as having nothing in it.
+func (c *colrInk) table() *colrTable {
+	c.once.Do(func() {
+		c.t = readCOLR(c.colr, c.f.varCoords)
+		c.budget = font.NewBudget(colrInkWork(c))
+	})
+	return c.t
 }
 
 // charge spends budget on painting, and reports whether there was any.
@@ -178,8 +185,17 @@ func (c *colrInk) measure(gid int) (extents, bool) {
 // HarfBuzz uses it, and a glyph with none is first painted with the bounded
 // functions to learn whether painting it can be bounded at all.
 func (c *colrInk) paintGlyph(gid int, funcs painter, clip bool) bool {
+	painted, _ := c.paintGlyphWith(gid, funcs, clip, nil)
+	return painted
+}
+
+// paintGlyphWith is paintGlyph charged to own, a budget of the caller's, where
+// it is not nil, rather than to the face's: what Face.PaintGlyph paints with.
+// refused says whether painting stopped short at a bound: the nesting, the
+// edges, or the budget.
+func (c *colrInk) paintGlyphWith(gid int, funcs painter, clip bool, own *font.Budget) (painted, refused bool) {
 	t := c.t
-	p := &paintContext{c: c, funcs: funcs, depthLeft: maxPaintDepth, edges: maxPaintEdges}
+	p := &paintContext{c: c, funcs: funcs, depthLeft: maxPaintDepth, edges: maxPaintEdges, own: own}
 	p.glyphs.enter()
 	defer p.glyphs.leave()
 	p.glyphs.visit(gid)
@@ -191,7 +207,8 @@ func (c *colrInk) paintGlyph(gid int, funcs painter, clip bool) bool {
 				if box, clip = t.clipBox(gid); !clip {
 					bounded = false
 					b := &boundedPainter{bounded: true}
-					c.paintGlyph(gid, b, false)
+					_, inner := c.paintGlyphWith(gid, b, false, own)
+					p.refused = p.refused || inner
 					bounded = b.bounded
 				}
 			}
@@ -206,21 +223,23 @@ func (c *colrInk) paintGlyph(gid int, funcs painter, clip bool) bool {
 				funcs.popClip()
 			}
 			funcs.popTransform()
-			return true
+			return true, p.refused
 		}
 	}
 	if first, n, ok := t.baseGlyphRecord(gid); ok {
 		for i := first; i < first+n && i < t.numLayers; i++ {
-			if !c.charge(1) {
+			if !p.charge(1) {
+				p.refused = true
 				break
 			}
-			funcs.pushClipGlyph(t.u16(t.layers + 4*i))
-			funcs.paint()
+			layer := t.layers + 4*i
+			funcs.pushClipGlyph(t.u16(layer))
+			funcs.paint(paintFill{at: -1, index: t.u16(layer + 2)})
 			funcs.popClip()
 		}
-		return true
+		return true, p.refused
 	}
-	return false
+	return false, false
 }
 
 // HarfBuzz's bounds on one glyph's painting: HB_MAX_NESTING_LEVEL and
@@ -239,10 +258,23 @@ type paintContext struct {
 	layers    decycler
 	depthLeft int
 	edges     int
+	// own is the budget painting is charged to, where it is not the face's;
+	// refused records that a bound stopped it. See paintGlyphWith.
+	own     *font.Budget
+	refused bool
+}
+
+// charge spends n of the budget painting is charged to.
+func (p *paintContext) charge(n int) bool {
+	if p.own != nil {
+		return p.own.Charge(n, "painting a colour glyph")
+	}
+	return p.c.charge(n)
 }
 
 func (p *paintContext) recurse(paint int) {
-	if p.depthLeft <= 0 || p.edges <= 0 || !p.c.charge(1) {
+	if p.depthLeft <= 0 || p.edges <= 0 || !p.charge(1) {
+		p.refused = true
 		return
 	}
 	p.depthLeft--
@@ -287,7 +319,7 @@ func (p *paintContext) dispatch(at int) {
 			p.recurse(t.layerPaint(i))
 		}
 	case 2, 3, 4, 5, 6, 7, 8, 9: // the solid fill and the gradients
-		f.paint()
+		f.paint(paintFill{at: at})
 	case 10: // PaintGlyph
 		child, gid := sub(1), t.u16(at+4)
 		if p.depthLeft > 0 && p.edges > 0 && (t.u8(child) == 2 || t.u8(child) == 3) {
@@ -296,7 +328,7 @@ func (p *paintContext) dispatch(at int) {
 			p.edges--
 			f.pushTransform(identity32)
 			f.pushClipGlyph(gid)
-			f.paint()
+			f.paint(paintFill{at: child})
 			f.popClip()
 			f.popTransform()
 			return
@@ -433,8 +465,10 @@ func skewingAroundCenter(skewX, skewY, cx, cy float32) xform32 {
 	return t
 }
 
-// painter is the part of hb_paint_funcs_t the two painters here implement:
-// HarfBuzz's extents functions and its bounded functions.
+// painter is the part of hb_paint_funcs_t the painters here implement:
+// HarfBuzz's extents functions and its bounded functions, and the two
+// Face.PaintGlyph paints through, one counting and one handing each call out
+// (paint.go).
 type painter interface {
 	pushTransform(t xform32)
 	popTransform()
@@ -443,7 +477,15 @@ type painter interface {
 	popClip()
 	pushGroup()
 	popGroup(mode int)
-	paint()
+	paint(fill paintFill)
+}
+
+// paintFill is what a fill paints with, for a painter that hands it out: the
+// Paint table of a solid fill or a gradient, at its offset in COLR, or, where
+// at is negative, a COLRv0 layer's colour, a palette index at full alpha. The
+// painters that measure read nothing of it.
+type paintFill struct {
+	at, index int
 }
 
 // box32 is hb_extents_t<float>: a box in floats, void when xMin is past xMax,
@@ -653,7 +695,7 @@ func (e *extentsPainter) popGroup(mode int) {
 	}
 }
 
-func (e *extentsPainter) paint() { e.groups[len(e.groups)-1].union(e.clips[len(e.clips)-1]) }
+func (e *extentsPainter) paint(paintFill) { e.groups[len(e.groups)-1].union(e.clips[len(e.clips)-1]) }
 
 // boundedPainter is HarfBuzz's hb_paint_bounded_context_t: whether anything
 // is filled with no clip around it.
@@ -699,7 +741,7 @@ func (b *boundedPainter) popGroup(mode int) {
 	}
 }
 
-func (b *boundedPainter) paint() {
+func (b *boundedPainter) paint(paintFill) {
 	if b.clips == 0 {
 		b.bounded = false
 	}
@@ -791,6 +833,12 @@ func (t *colrTable) f2dot14(at int, delta float32) float32 {
 func (t *colrTable) delta(at, v int) float32 {
 	var base int
 	switch t.u8(at) {
+	case 3: // PaintVarSolid
+		base = at + 5
+	case 5, 7: // PaintVarLinearGradient, PaintVarRadialGradient
+		base = at + 16
+	case 9: // PaintVarSweepGradient
+		base = at + 12
 	case 15:
 		base = at + 8
 	case 17:

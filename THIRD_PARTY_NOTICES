@@ -2114,6 +2114,21 @@ images placeholders. They are listed here because every font the repository keep
 is, and for where they came from; no third party's work is in them.
 
 ============================================================================
+Font built for the colour paint oracle
+============================================================================
+
+Files:   testdata/harfbuzz/fonts/ColourPaint.ttf
+Source:  testdata/harfbuzz/paint_fixture.py, in this repository, which builds
+         it with fontTools
+Licence: the licence in LICENSE; it is not anyone else's work
+
+A small face made from nothing by the script named above, whose COLR glyphs
+fill with what a fill can be: two palettes, the foreground, every gradient
+under every extend, and the variable ones. It is listed here because every
+font the repository keeps is, and for where it came from; no third party's
+work is in it.
+
+============================================================================
 Fonts built for the matched components oracle
 ============================================================================
 

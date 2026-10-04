@@ -186,13 +186,24 @@ type extents struct {
 // so. For a CFF face it is the box the glyph's charstring draws, measured as
 // HarfBuzz measures it (see cffink.go). A face with neither cannot answer.
 func (f *Face) glyphExtents(gid int) (extents, bool) {
+	return f.glyphExtentsAt(gid, 0)
+}
+
+// glyphExtentsAt is glyphExtents with a bitmap glyph measured in the strike
+// for a size in pixels per em, as HarfBuzz measures one at the ppem a font is
+// set to; at none, the largest, as glyphExtents measures it.
+func (f *Face) glyphExtentsAt(gid, ppem int) (extents, bool) {
 	if f.sbix != nil {
-		if e, ok := f.sbix.extents(gid); ok {
+		strike, sppem := f.sbix.strike, f.sbix.ppem
+		if ppem > 0 {
+			strike, sppem = f.sbix.strikeFor(ppem)
+		}
+		if e, ok := f.sbix.extentsIn(gid, strike, sppem); ok {
 			return e, true
 		}
 	}
 	if f.bitmap != nil {
-		if e, ok := f.bitmap.extents(gid); ok {
+		if e, ok := f.bitmap.extentsAt(gid, ppem); ok {
 			return e, true
 		}
 	}
