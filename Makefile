@@ -51,6 +51,7 @@ CORPUS_ENV = \
 	NOTO_FONTS="$(abspath $(NOTO_DIR))" \
 	NOTO_CJK="$(abspath $(CJK_DIR))" \
 	CFF_FONTS="$(abspath $(CFF_DIR))" \
+	EMOJI_FONTS="$(abspath $(EMOJI_DIR))" \
 	CSS_PARSING_TESTS="$(abspath $(CSS_TESTS_DIR))" \
 	UNICODE_BIDI_TESTS="$(abspath $(BIDI_DIR))" \
 	UNICODE_GRAPHEME_TESTS="$(abspath $(GRAPHEME_DIR))" \
@@ -60,7 +61,7 @@ CORPUS_ENV = \
 # The inputs of every generated table are corpora too: cmd/regenerate_test.go
 # regenerates each table from them and compares, and with TABLE_INPUTS=required
 # above, a table whose inputs are not here is a failure rather than a skip.
-CORPORA = wpt noto-fonts notocjk cff-fonts ucd css-tests bidi-tests grapheme-tests \
+CORPORA = wpt noto-fonts notocjk cff-fonts emoji-fonts ucd css-tests bidi-tests grapheme-tests \
 	normalization-tests $(HTML_ENTITIES) $(TABLE_SOURCES) notice-sources
 
 test-corpora:
@@ -319,7 +320,9 @@ hbcolrink:
 # variable ones, at its default and at two weights. ColourInk.ttf is every paint
 # format and every thing painting does to a box (colrink_fixture.py, built by
 # hbcolrink). The bitmap faces are asked at sizes on, between and past their
-# strikes, which is how the strike is chosen. See paint.py.
+# strikes, which is how the strike is chosen. Noto Color Emoji's COLRv1 build,
+# from `make emoji-fonts`, is painted for a few glyphs: three flags with coats of
+# arms of thousands of paints each, and two ordinary emoji. See paint.py.
 HBFONTS := $(HARFBUZZ_DIR)/fonts
 hbpaint:
 	$(PYTHON) $(HARFBUZZ_DIR)/paint_fixture.py $(HBFONTS)
@@ -345,7 +348,8 @@ hbpaint:
 		SbixInk.ttf=$(HBFONTS)/SbixInk.ttf:bitmap=1:ppem=16 \
 		SbixInk.ttf=$(HBFONTS)/SbixInk.ttf:bitmap=1:ppem=100 \
 		SbixInkLarge.ttf=$(HBFONTS)/SbixInkLarge.ttf:bitmap=1 \
-		SbixInkRejected.ttf=$(HBFONTS)/SbixInkRejected.ttf:bitmap=1
+		SbixInkRejected.ttf=$(HBFONTS)/SbixInkRejected.ttf:bitmap=1 \
+		Noto-COLRv1.ttf=$(EMOJI_DIR)/Noto-COLRv1.ttf:glyphs=3827,3830,3979,100,1500
 
 # Variable composites (VARC): a face built here (see varc_fixture.py), its
 # ink and outlines asked of HarfBuzz at its default and six locations, and its
@@ -1076,6 +1080,39 @@ $(CFF_STAMP):
 
 clean-cff-fonts:
 	rm -rf $(CFF_DIR)
+
+# Noto Color Emoji, the colour font a renderer is likeliest to bundle, in its
+# two builds: COLRv1, every emoji a paint graph, which shape/paint_test.go
+# paints whole, flags with coats of arms of three thousand paints included;
+# and CBDT, every emoji a PNG at one strike and no outlines at all. Held to
+# their SHA-256 at one commit, with the licence beside them; the SIL Open Font
+# License 1.1. They are read by the tests and not redistributed.
+#
+#	<name here>=<sha256>=<URL>
+NOTO_EMOJI_COMMIT := e20cbc2bbec1926686be9f9bee7d1d2cfa1fea0e
+NOTO_EMOJI_URL := https://raw.githubusercontent.com/googlefonts/noto-emoji/$(NOTO_EMOJI_COMMIT)/2D/fonts
+EMOJI_DIR := testdata/emoji-fonts
+EMOJI_FILES := \
+	Noto-COLRv1.ttf=b8e25ea68db82f9e4d0aee921f4420be2be39887bd5c893a2ad98710531f9d0c=$(NOTO_EMOJI_URL)/Noto-COLRv1.ttf \
+	NotoColorEmoji.ttf=15671215ab769fdc7162a045d56fd7d7e477c51b04e6b3c761d914d8fdd6cc44=$(NOTO_EMOJI_URL)/NotoColorEmoji.ttf \
+	NotoEmoji-LICENSE=6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2=$(NOTO_EMOJI_URL)/LICENSE
+EMOJI_STAMP := $(call stamp,$(EMOJI_DIR),$(EMOJI_FILES))
+
+.PHONY: emoji-fonts clean-emoji-fonts
+
+emoji-fonts: $(EMOJI_STAMP)
+
+$(EMOJI_STAMP):
+	mkdir -p $(EMOJI_DIR)
+	for e in $(foreach f,$(EMOJI_FILES),'$(f)'); do \
+	  name=$${e%%=*}; rest=$${e#*=}; sum=$${rest%%=*}; url=$${rest#*=}; \
+	  $(call pinned,$(EMOJI_DIR)/$$name,$$url,$$sum) || exit 1; \
+	done
+	for f in $(EMOJI_DIR)/*.ttf; do $(call sfnt,$$f); done
+	touch $@
+
+clean-emoji-fonts:
+	rm -rf $(EMOJI_DIR)
 
 fontsweep:
 	go run ./cmd/fontsweep $(GF_DIR)/ofl $(CJK_DIR)
