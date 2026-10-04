@@ -223,6 +223,15 @@ type PaintOptions struct {
 	// a CBDT or sbix glyph's strike: the smallest at least that large, or
 	// failing any the largest. Zero picks the largest.
 	PPEM int
+	// PaletteOverrides replaces entries of the palette, by index, as CSS
+	// font-palette's override-colors does: a COLR paint, a colour stop or a
+	// COLRv0 layer naming an index here takes its colour from here rather than
+	// from the font, its alpha multiplied by the paint's as a palette entry's
+	// is. An index past the end of the palette may be given, and is used. The
+	// foreground's index, 0xFFFF, is not a palette entry and is not
+	// overridden: Foreground is what colours it. It is HarfBuzz's
+	// custom_palette_color.
+	PaletteOverrides map[int]Color
 }
 
 // GlyphColour is which of its representations PaintGlyph paints a glyph from.
@@ -284,12 +293,12 @@ func (f *Face) PaintGlyph(gid int, opts PaintOptions, p Painter) error {
 	if gid < 0 || gid >= f.prog.NumGlyphs {
 		return fmt.Errorf("shape: glyph %d is not one of the face's %d glyphs", gid, f.prog.NumGlyphs)
 	}
-	fg := opts.Foreground
-	if fg == (Color{}) {
-		fg = Color{A: 255}
+	if opts.Foreground == (Color{}) {
+		opts.Foreground = Color{A: 255}
 	}
+	fg := opts.Foreground
 	if t := f.colrTable(); t != nil {
-		if painted, err := f.paintCOLR(t, gid, opts.Palette, fg, p, paintWork); painted || err != nil {
+		if painted, err := f.paintCOLR(t, gid, opts, p, paintWork); painted || err != nil {
 			return err
 		}
 	}
@@ -326,7 +335,7 @@ const paintWork = maxFontWork
 // paintCOLR paints a COLR glyph within a budget of work, and reports whether
 // the table has it. It is walked twice: once counting, which is where a glyph
 // that runs past its bounds is refused, and once painting, which then cannot.
-func (f *Face) paintCOLR(t *colrTable, gid, palette int, fg Color, p Painter, work int) (bool, error) {
+func (f *Face) paintCOLR(t *colrTable, gid int, opts PaintOptions, p Painter, work int) (bool, error) {
 	c := f.colr
 	counter := &paintCounter{t: t, budget: font.NewBudget(work)}
 	painted, refused := c.paintGlyphWith(gid, counter, true, counter.budget)
@@ -336,7 +345,7 @@ func (f *Face) paintCOLR(t *colrTable, gid, palette int, fg Color, p Painter, wo
 	if refused || counter.budget.Err() != nil {
 		return true, fmt.Errorf("%w: glyph %d", ErrPaintLimit, gid)
 	}
-	a := &paintAdapter{t: t, p: p, palette: c.palette(palette), fg: fg}
+	a := &paintAdapter{t: t, p: p, palette: c.palette(opts.Palette), fg: opts.Foreground, overrides: opts.PaletteOverrides}
 	c.paintGlyphWith(gid, a, true, font.NewBudget(work))
 	return true, nil
 }
@@ -378,6 +387,9 @@ type paintAdapter struct {
 	p       Painter
 	palette cpalPalette
 	fg      Color
+	// overrides are the caller's colours for palette entries, which win over
+	// the palette's. See PaintOptions.PaletteOverrides.
+	overrides map[int]Color
 	// pushed records, for each transform pushed and not yet popped, whether
 	// it was handed on.
 	pushed []bool
@@ -491,13 +503,17 @@ func (a *paintAdapter) line(at int) ColorLine {
 	return line
 }
 
-// colour is hb_paint_context_t::get_color: a palette entry, or the foreground
-// for 0xFFFF, its alpha multiplied by the paint's, which is held between zero
-// and one.
+// colour is hb_paint_context_t::get_color: the caller's override of a palette
+// entry, or the entry, or the foreground for 0xFFFF, its alpha multiplied by
+// the paint's, which is held between zero and one.
 func (a *paintAdapter) colour(index int, alpha float32) (Color, bool) {
 	c, fg := a.fg, true
 	if index != foregroundIndex {
-		c, fg = a.palette.colour(index), false
+		var overridden bool
+		if c, overridden = a.overrides[index]; !overridden {
+			c = a.palette.colour(index)
+		}
+		fg = false
 	}
 	alpha = min(max(alpha, 0), 1)
 	c.A = uint8(math.Round(float64(float32(float32(c.A) * alpha))))

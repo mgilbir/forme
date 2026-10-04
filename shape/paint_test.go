@@ -140,8 +140,8 @@ func readPaintGolden(t *testing.T) []*paintCase {
 		}
 		f := strings.Fields(line)
 		switch {
-		case f[0] == "face" && len(f) == 7:
-			c = &paintCase{name: f[1], sum: f[6]}
+		case f[0] == "face" && len(f) == 9:
+			c = &paintCase{name: f[1], sum: f[8]}
 			if name, w, ok := strings.Cut(f[1], "@wght="); ok {
 				c.name = name
 				if c.weight, err = strconv.Atoi(w); err != nil {
@@ -154,6 +154,18 @@ func readPaintGolden(t *testing.T) []*paintCase {
 				t.Fatalf("%s: a palette and a ppem", line)
 			}
 			c.opts = PaintOptions{Palette: p, PPEM: ppem, Foreground: Color{0x33, 0x66, 0x99, 0xCC}}
+			if f[7] != "-" {
+				c.opts.PaletteOverrides = map[int]Color{}
+				for _, o := range strings.Split(f[7], "+") {
+					index, rgba, ok := strings.Cut(o, "/")
+					i, err1 := strconv.Atoi(index)
+					v, err2 := strconv.ParseUint(rgba, 16, 32)
+					if !ok || err1 != nil || err2 != nil || len(rgba) != 8 {
+						t.Fatalf("%s: an override is index/RRGGBBAA", line)
+					}
+					c.opts.PaletteOverrides[i] = Color{uint8(v >> 24), uint8(v >> 16), uint8(v >> 8), uint8(v)}
+				}
+			}
 			cases = append(cases, c)
 		case c == nil:
 			t.Fatalf("%q before any face", line)
@@ -331,14 +343,14 @@ func TestAGlyphPastItsBoundsIsRefusedWhole(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		fg := Color{A: 255}
+		opts := PaintOptions{Foreground: Color{A: 255}}
 		for gid := range f.NumGlyphs() {
 			whole := &recordingPainter{}
-			if ok, err := f.paintCOLR(f.colrTable(), gid, 0, fg, whole, paintWork); !ok || err != nil {
+			if ok, err := f.paintCOLR(f.colrTable(), gid, opts, whole, paintWork); !ok || err != nil {
 				continue
 			}
 			short := &recordingPainter{}
-			_, err := f.paintCOLR(f.colrTable(), gid, 0, fg, short, 6)
+			_, err := f.paintCOLR(f.colrTable(), gid, opts, short, 6)
 			switch {
 			case errors.Is(err, ErrPaintLimit):
 				refused++

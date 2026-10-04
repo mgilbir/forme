@@ -317,7 +317,9 @@ hbcolrink:
 # Colour glyphs painted by HarfBuzz, every callback hb_font_paint_glyph makes,
 # for what Face.PaintGlyph hands a Painter. ColourPaint.ttf (paint_fixture.py)
 # is the fills: palettes, the foreground, every gradient and extend, and the
-# variable ones, at its default and at two weights. ColourInk.ttf is every paint
+# variable ones, at its default and at two weights, and with palette entries
+# overridden, one past the palette's end and the foreground's index among them
+# (which nothing overrides). ColourInk.ttf is every paint
 # format and every thing painting does to a box (colrink_fixture.py, built by
 # hbcolrink). The bitmap faces are asked at sizes on, between and past their
 # strikes, which is how the strike is chosen. Noto Color Emoji's COLRv1 build,
@@ -334,6 +336,8 @@ hbpaint:
 		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf:palette=5 \
 		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf@wght=900 \
 		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf@wght=250:palette=1 \
+		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf:overrides=1/00ff0080+7/12345678+65535/ffffffff \
+		ColourPaint.ttf=$(HBFONTS)/ColourPaint.ttf:palette=1:overrides=0/abcdef00+2/0000ffff \
 		ColourInk.ttf=$(HBFONTS)/ColourInk.ttf \
 		ColourInk.ttf=$(HBFONTS)/ColourInk.ttf@wght=650 \
 		ColourInkStatic.ttf=$(HBFONTS)/ColourInkStatic.ttf \
