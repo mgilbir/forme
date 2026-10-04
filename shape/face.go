@@ -1031,9 +1031,17 @@ func (f *Face) codeForGID(gid int) int {
 // Shaping records every glyph it returns and Encode every code it writes, so
 // text is here however it is set. A glyph drawn by its index is not text and
 // reaches neither: it is here because whoever drew it said so, with Use.
+//
+// A glyph the font does not have is not here. A substitution may name one —
+// a GSUB or morx lookup's glyph past the end of the font, which shaping hands
+// back as it is, as HarfBuzz does — and no subset can keep it, nor /CIDSet say
+// the program has it.
 func (f *Face) Used() []int {
 	out := make([]int, 0, len(f.used))
 	for gid := range f.used {
+		if f.prog != nil && (gid < 0 || gid >= f.prog.NumGlyphs) {
+			continue
+		}
 		out = append(out, gid)
 	}
 	sort.Ints(out)
