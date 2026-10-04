@@ -2250,6 +2250,27 @@ listed here because every font the repository keeps is, and for where they
 came from; no third party's work is in them.
 
 ============================================================================
+Font collections encoded as WOFF 2 by google/woff2
+============================================================================
+
+Files:   font/testdata/woff2-collections/shared.ttc
+         font/testdata/woff2-collections/shared.woff2
+         font/testdata/woff2-collections/distinct.ttc
+         font/testdata/woff2-collections/distinct.woff2
+         font/testdata/woff2-collections/mixed.ttc
+         font/testdata/woff2-collections/mixed.woff2
+Source:  font/testdata/woff2-collections/make.py, in this repository, which
+         collects faces of testdata/harfbuzz/fonts with fontTools and wraps
+         each collection with google/woff2's woff2_compress at the commit it
+         names
+Licence: the licence in LICENSE; they are not anyone else's work
+
+Collections of faces this repository builds itself, and those collections as
+google/woff2's encoder writes them: the encoder is a tool run on them, and
+none of its code is in what it wrote. They are listed here because every font
+the repository keeps is, and for where they came from.
+
+============================================================================
 Fonts built for the matched components oracle
 ============================================================================
 

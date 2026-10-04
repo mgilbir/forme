@@ -12,11 +12,13 @@ import (
 	"github.com/mgilbir/forme/fonttest"
 )
 
-// WOFF 2 font collections (woff2collection.go). No compressor at hand writes
-// one — fontTools does not, and the fonts on the web are single — so the
-// container is the fixture builder's; but the transforms in it are a real
-// encoder's: a WOFF 2 fontTools made, its glyf, loca and hmtx as transformed,
-// lifted into a collection whole.
+// WOFF 2 font collections (woff2collection.go), from two sides. fontTools
+// writes no WOFF 2 collection, so the tests that take one apart to malform it
+// build the container with the fixture builder, around transforms a real
+// encoder made: a WOFF 2 fontTools made, its glyf, loca and hmtx as
+// transformed, lifted into a collection whole. And google/woff2's own encoder
+// does write them: testdata/woff2-collections holds three it made, and what its
+// own decoder makes of each (see make.py there).
 
 // liftWOFF2 is a WOFF 2's tables as the fixture builder takes them: each
 // table's rebuilt bytes, and for a transformed one the transformed bytes the
