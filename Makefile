@@ -355,11 +355,11 @@ hbpaint:
 		NotoColorEmoji.ttf=$(EMOJI_DIR)/NotoColorEmoji.ttf:bitmap=1:glyphs=0,1,5,1494,1714,1978,2032,2325,4045 \
 		NotoColorEmoji.ttf=$(EMOJI_DIR)/NotoColorEmoji.ttf:bitmap=1:ppem=20:glyphs=5,1714,2032
 
-# AAT morx, set by HarfBuzz: the text-rendering tests' morx suite (aat/, as
-# HarfBuzz keeps it at HARFBUZZ_VERSION), every case of which HarfBuzz sets as
-# the suite expects, and strings in faces built here (morx_fixture.py) for
-# what the suite does not reach and for the features a caller asks for. See
-# morx.py.
+# AAT morx and mort, set by HarfBuzz: the text-rendering tests' morx suite
+# (aat/, as HarfBuzz keeps it at HARFBUZZ_VERSION), every case of which
+# HarfBuzz sets as the suite expects, and strings in faces built here
+# (morx_fixture.py) for what the suite does not reach, for the features a
+# caller asks for, and for a mort. See morx.py.
 hbmorx:
 	$(PYTHON) $(HARFBUZZ_DIR)/morx_fixture.py $(HARFBUZZ_DIR)/fonts
 	$(PYTHON) $(HARFBUZZ_DIR)/morx.py $(HARFBUZZ_DIR)/morx.expected.txt

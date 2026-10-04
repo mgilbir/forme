@@ -1,6 +1,6 @@
 # Shapes every case of the text-rendering tests' AAT morx suite with HarfBuzz,
 # and strings in the faces morx_fixture.py builds, and writes what it
-# produces, so that shape/morx_test.go can hold the morx reader
+# produces, so that shape/morx_test.go can hold the morx and mort reader
 # (shape/morx.go) and the features it takes (shape/aatfeatures.go) to it.
 #
 #   make hbmorx
@@ -58,7 +58,13 @@ FEATURE_SETS = [".", "-calt", "+calt", "+liga", "-liga", "+smcp", "+aalt", "+lnu
 for face in ("MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFeat.ttf"):
     FIXTURE += [(face, "GHIJKLMNO", f) for f in FEATURE_SETS]
 
-FIXTURE_FONTS = {"MorxCases.ttf", "MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFeat.ttf"}
+# MortCases.ttf: each subtable on its own letters, together, and where a
+# state machine starts and does not finish.
+FIXTURE += [("MortCases.ttf", t, ".") for t in
+            ["GHI", "JK", "LM", "O", "P", "GHIJKLMOP", "LML", "JJK", "KJ", "GH", "HI", "LLM", "OO"]]
+
+FIXTURE_FONTS = {"MorxCases.ttf", "MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFeat.ttf",
+                 "MortCases.ttf"}
 
 
 def cases():

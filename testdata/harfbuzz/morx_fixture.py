@@ -234,6 +234,159 @@ def build_features(directory):
          {"morx": feature_chain()})
 
 
+# MortCases.ttf: a mort, the morx's predecessor, which HarfBuzz reads where a
+# face has no morx: sixteen-bit fields, a class table of a first glyph and a
+# byte a glyph, state cells of a byte, and states, actions, components,
+# ligatures and substitutions named by their byte offsets from the state
+# table. One chain, a subtable of each kind, each on letters of its own:
+#
+#   G H I      rearranged: G marks the first, I the last, and AxD => DxA
+#   J K        contextual: J is marked; at K, the mark becomes Z and K
+#              becomes Y
+#   L M        a ligature, N
+#   O          X inserted after it
+#   P          noncontextual, P becomes Y
+MORT_GLYPHS = [".notdef", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "X", "Y", "Z"]
+MGID = {name: i for i, name in enumerate(MORT_GLYPHS)}
+
+
+def obsolete_table(first, classes, rows, entry_bytes, extra_count, extra_blobs):
+    """An obsolete state table's body: its header of nClasses and the three
+    offsets, then extra_count offsets of its own tables; the class table, a
+    first glyph and a class a byte; the state array, a byte a cell; the
+    entries; then the extra tables. rows are each state's entry indices, and
+    entry_bytes a function of the state array's offset, since an entry names
+    its next state by the byte offset of its row."""
+    n_classes = len(rows[0])
+    head = 8 + 2 * extra_count
+    class_table = struct.pack(">HH", first, len(classes)) + bytes(classes)
+    if len(class_table) % 2:
+        class_table += b"\0"
+    state_at = head + len(class_table)
+    state_array = b"".join(bytes(r) for r in rows)
+    while len(state_array) % 2:
+        state_array += b"\0"
+    entries_at = state_at + len(state_array)
+    entries = entry_bytes(state_at, n_classes)
+    at = entries_at + len(entries)
+    offsets, blobs = [], b""
+    for blob in extra_blobs:
+        offsets.append(at + len(blobs))
+        blobs += blob
+        while len(blobs) % 2:
+            blobs += b"\0"
+    body = struct.pack(">HHHH", n_classes, head, state_at, entries_at)
+    body += b"".join(struct.pack(">H", o) for o in offsets)
+    return body + class_table + state_array + entries + blobs
+
+
+def mort_subtable(kind, flags, body):
+    return struct.pack(">HHI", 8 + len(body), kind, flags) + body
+
+
+def mort():
+    FIRST = MGID["G"]
+
+    def classes(mapping):
+        """Classes for G to P: each glyph named in mapping, the rest out of
+        bounds."""
+        return [mapping.get(g, 1) for g in range(FIRST, MGID["P"] + 1)]
+
+    def row_state(state_at, n_classes, row):
+        return state_at + row * n_classes
+
+    # Rearrangement: classes 4 = G, 5 = H, 6 = I.
+    def rearrangement_entries(state_at, n):
+        mark_first, mark_last, verb = 0x8000, 0x2000, 3
+        return b"".join(struct.pack(">HH", row_state(state_at, n, r), f) for r, f in [
+            (0, 0),  # 0: nothing, to the start
+            (2, mark_first),  # 1: G marks the first, into state 2
+            (2, 0),  # 2: stay in state 2
+            (0, mark_last | verb),  # 3: I marks the last and rearranges
+        ])
+    rows = [[0, 0, 0, 0, 1, 0, 0], [0, 0, 0, 0, 1, 0, 0], [0, 0, 0, 0, 1, 2, 3]]
+    rearrangement = mort_subtable(0, 1, obsolete_table(
+        FIRST, classes({MGID["G"]: 4, MGID["H"]: 5, MGID["I"]: 6}), rows, rearrangement_entries, 0, []))
+
+    # Contextual: classes 4 = J, 5 = K. A substitution is the glyph at twice
+    # (index + glyph) bytes from the state table: the table below is laid out
+    # so that index 0 at J is Z and index 1 at K is Y, past its first word.
+    def contextual_entries(state_at, n):
+        sub_at = contextual_entries.sub_at
+        mark = sub_at // 2 - MGID["J"]
+        current = sub_at // 2 + 1 - MGID["K"]
+        return b"".join(struct.pack(">HHhh", row_state(state_at, n, r), f, m, c) for r, f, m, c in [
+            (0, 0, 0, 0),
+            (2, 0x8000, 0, 0),  # J: marked, into state 2
+            (0, 0, mark, current),  # K: the mark and K substituted
+        ])
+    subs = struct.pack(">HH", MGID["Z"], MGID["Y"])
+    rows = [[0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 1, 2]]
+    # The offsets depend on the table's own layout: build it once to learn
+    # where the substitutions land, then again with them.
+    contextual_entries.sub_at = 0
+    probe = obsolete_table(FIRST, classes({MGID["J"]: 4, MGID["K"]: 5}), rows, contextual_entries, 1, [subs])
+    contextual_entries.sub_at = struct.unpack(">H", probe[8:10])[0]
+    contextual = mort_subtable(1, 1, obsolete_table(
+        FIRST, classes({MGID["J"]: 4, MGID["K"]: 5}), rows, contextual_entries, 1, [subs]))
+
+    # Ligature: classes 4 = L, 5 = M. L pushes itself; M pushes itself and runs
+    # the actions at the offset its flags hold: pop M, then pop L and store the
+    # ligature the two components' values sum to — the byte offset of N in the
+    # ligature table.
+    def ligature_entries(actions_at):
+        def entries(state_at, n):
+            return b"".join(struct.pack(">HH", row_state(state_at, n, r), f) for r, f in [
+                (0, 0),
+                (2, 0x8000),  # L: a component, into state 2
+                (0, 0x8000 | actions_at),  # M: a component, and the actions
+            ])
+        return entries
+
+    rows = [[0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 1, 2]]
+    lig_classes = classes({MGID["L"]: 4, MGID["M"]: 5})
+    # Laid out once with the three tables at their sizes, to learn where they
+    # land, since what they hold is their offsets.
+    probe = obsolete_table(FIRST, lig_classes, rows, ligature_entries(0), 3,
+                           [b"\0" * 8, b"\0" * 4, b"\0" * 2])
+    actions_at, components_at, ligatures_at = struct.unpack(">HHH", probe[8:14])
+
+    def component_offset(glyph, index):
+        """The action's offset that names the index-th word of the component
+        table at a glyph: a word offset from the state table, less the glyph."""
+        return components_at // 2 + index - glyph
+
+    actions = struct.pack(">II", component_offset(MGID["M"], 0) & 0x3FFFFFFF,
+                          0xC0000000 | (component_offset(MGID["L"], 1) & 0x3FFFFFFF))
+    components = struct.pack(">HH", 0, ligatures_at)
+    ligatures = struct.pack(">H", MGID["N"])
+    ligature = mort_subtable(2, 1, obsolete_table(FIRST, lig_classes, rows, ligature_entries(actions_at), 3,
+                                                  [actions, components, ligatures]))
+
+    # Insertion: class 4 = O, after which X is inserted.
+    def insertion_entries(state_at, n):
+        current_count = 1 << 5
+        return b"".join(struct.pack(">HHHH", row_state(state_at, n, r), f, c, m) for r, f, c, m in [
+            (0, 0, FFFF, FFFF),
+            (0, current_count, 0, FFFF),  # O: X after it
+        ])
+    rows = [[0, 0, 0, 0, 1], [0, 0, 0, 0, 1]]
+    insertion = mort_subtable(5, 1, obsolete_table(
+        FIRST, classes({MGID["O"]: 4}), rows, insertion_entries, 1, [struct.pack(">H", MGID["X"])]))
+
+    noncontextual = mort_subtable(4, 1, single_lookup([(MGID["P"], MGID["Y"])]))
+
+    subtables = [rearrangement, contextual, ligature, insertion, noncontextual]
+    body = b"".join(subtables)
+    chain = struct.pack(">IIHH", 1, 12 + len(body), 0, len(subtables)) + body
+    return struct.pack(">HHI", 1, 0, 1) + chain
+
+
+def build_mort(directory):
+    save(os.path.join(directory, "MortCases.ttf"), "MortCases", MORT_GLYPHS, "GHIJKLMNOP", {"mort": mort()})
+
+
 if __name__ == "__main__":
     build(os.path.join(sys.argv[1], "MorxCases.ttf"))
     build_features(sys.argv[1])
+    build_mort(sys.argv[1])

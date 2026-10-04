@@ -2177,6 +2177,7 @@ Files:   testdata/harfbuzz/fonts/MorxCases.ttf
          testdata/harfbuzz/fonts/MorxFeatures.ttf
          testdata/harfbuzz/fonts/MorxFeaturesDeprecated.ttf
          testdata/harfbuzz/fonts/MorxFeaturesNoFeat.ttf
+         testdata/harfbuzz/fonts/MortCases.ttf
 Source:  testdata/harfbuzz/morx_fixture.py, in this repository, which builds
          them with fontTools
 Licence: the licence in LICENSE; they are not anyone else's work
@@ -2184,10 +2185,11 @@ Licence: the licence in LICENSE; they are not anyone else's work
 Small faces made from nothing by the script named above: one whose morx
 states what the suite above does not reach — a chain's flags, a subtable
 nothing in the run can start, and a substitution at the end of the text with
-nothing marked; and three whose morx chain names features, with a feat table
+nothing marked; three whose morx chain names features, with a feat table
 offering them, one offering small capitals under their deprecated type, and
-none. They are listed here because every font the repository keeps is, and
-for where they came from; no third party's work is in them.
+none; and one with a mort, the morx's predecessor. They are listed here
+because every font the repository keeps is, and for where they came from; no
+third party's work is in them.
 
 ============================================================================
 Font built for the colour paint oracle

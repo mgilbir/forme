@@ -13,14 +13,14 @@ import (
 	"testing"
 )
 
-// The morx reader (morx.go) held to HarfBuzz over the text-rendering tests'
-// morx suite, every case of which HarfBuzz sets as the suite expects: the
-// rearrangement, contextual, ligature, noncontextual and insertion subtables,
-// chains and their flags, the subtables that walk the run backwards, glyphs
-// deleted and inserted, and state machines that loop. And over the faces
-// morx_fixture.py builds: what the suite does not reach, and the features a
-// caller asks for (aatfeatures.go). The answers are checked in as
-// morx.expected.txt; see morx.py.
+// The morx and mort reader (morx.go) held to HarfBuzz over the text-rendering
+// tests' morx suite, every case of which HarfBuzz sets as the suite expects:
+// the rearrangement, contextual, ligature, noncontextual and insertion
+// subtables, chains and their flags, the subtables that walk the run
+// backwards, glyphs deleted and inserted, and state machines that loop. And
+// over the faces morx_fixture.py builds: what the suite does not reach, the
+// features a caller asks for (aatfeatures.go), and a mort. The answers are
+// checked in as morx.expected.txt; see morx.py.
 
 // morxCase is one case of morx.expected.txt.
 type morxCase struct {
@@ -36,7 +36,7 @@ type morxCase struct {
 
 // morxFixtures are the faces of morx.expected.txt that morx_fixture.py builds
 // into testdata/harfbuzz/fonts; the rest are the suite's, in aat/fonts.
-var morxFixtures = []string{"MorxCases.ttf", "MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFeat.ttf"}
+var morxFixtures = []string{"MorxCases.ttf", "MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFeat.ttf", "MortCases.ttf"}
 
 func readMorxGolden(t *testing.T) []morxCase {
 	t.Helper()
@@ -138,7 +138,7 @@ func TestMorxAgreesWithHarfBuzz(t *testing.T) {
 				t.Fatalf("%s: %v", c.font, err)
 			}
 			if f.morx == nil {
-				t.Fatalf("%s has no morx read", c.font)
+				t.Fatalf("%s has no morx or mort read", c.font)
 			}
 			faces[c.font] = f
 		}
