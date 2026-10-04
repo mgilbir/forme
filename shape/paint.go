@@ -348,7 +348,13 @@ func (*paintCounter) pushGroup()            {}
 func (*paintCounter) popGroup(int)          {}
 
 func (c *paintCounter) paint(fill paintFill) {
-	if fill.at >= 0 {
+	if fill.at < 0 {
+		return
+	}
+	// Only a gradient has a colour line. A solid fill's bytes past its
+	// format are a colour index and an alpha, which read as an offset name
+	// a colour line that is not there.
+	if f := c.t.u8(fill.at); f >= 4 && f <= 9 {
 		if _, n, _ := c.t.colorLine(fill.at); n > 0 {
 			c.budget.Charge(n, "painting a colour glyph")
 		}

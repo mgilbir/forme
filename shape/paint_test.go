@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/font"
 )
 
 // The tests here hold Face.PaintGlyph to HarfBuzz's hb_font_paint_glyph, call
@@ -85,13 +87,38 @@ func (r *recordingPainter) Image(img Image) {
 		len(img.Data), hex.EncodeToString(sum[:])[:16])
 }
 
-// paintCase is one face of paint.expected.txt, as it was painted, and each
-// glyph's calls.
+// paintCase is one face of paint.expected.txt, as it was painted, and the
+// calls of each glyph painted: every glyph of a face in the tree, and some of
+// a corpus face's.
 type paintCase struct {
 	name, sum string
 	weight    int
 	opts      PaintOptions
+	gids      []int
 	glyphs    [][]string
+}
+
+// paintFaces are the corpus faces paint.expected.txt paints, by the variable
+// naming the directory each is fetched to; every other face is in the tree.
+var paintFaces = map[string]string{"Noto-COLRv1.ttf": "EMOJI_FONTS"}
+
+// paintFont is a face of paint.expected.txt, and nil for a corpus face that has
+// not been fetched.
+func paintFont(t *testing.T, name string) []byte {
+	t.Helper()
+	env, corpus := paintFaces[name]
+	if !corpus {
+		return harfbuzzFont(t, name)
+	}
+	dir := os.Getenv(env)
+	if dir == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatalf("%s names %s, which it does not hold: %v", env, name, err)
+	}
+	return data
 }
 
 func readPaintGolden(t *testing.T) []*paintCase {
@@ -131,9 +158,11 @@ func readPaintGolden(t *testing.T) []*paintCase {
 		case c == nil:
 			t.Fatalf("%q before any face", line)
 		case f[0] == "G" && len(f) == 2:
-			if gid, err := strconv.Atoi(f[1]); err != nil || gid != len(c.glyphs) {
-				t.Fatalf("%s: glyphs are in order from 0", line)
+			gid, err := strconv.Atoi(f[1])
+			if err != nil {
+				t.Fatalf("%s: %v", line, err)
 			}
+			c.gids = append(c.gids, gid)
 			c.glyphs = append(c.glyphs, nil)
 		case len(c.glyphs) == 0:
 			t.Fatalf("%q before any glyph", line)
@@ -175,7 +204,11 @@ func TestPaintGlyphAgreesWithHarfBuzz(t *testing.T) {
 	}
 	for _, c := range cases {
 		label := fmt.Sprintf("%s@%d palette %d ppem %d", c.name, c.weight, c.opts.Palette, c.opts.PPEM)
-		data := harfbuzzFont(t, c.name)
+		data := paintFont(t, c.name)
+		if data == nil {
+			t.Logf("%s: %s is not set, so it is not painted", label, paintFaces[c.name])
+			continue
+		}
 		sum := sha256.Sum256(data)
 		if got := hex.EncodeToString(sum[:]); got != c.sum {
 			t.Fatalf("the expectations were generated against %s %s and this one is %s.\n"+
@@ -191,10 +224,11 @@ func TestPaintGlyphAgreesWithHarfBuzz(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", label, err)
 		}
-		if f.NumGlyphs() != len(c.glyphs) {
+		if _, corpus := paintFaces[c.name]; !corpus && f.NumGlyphs() != len(c.glyphs) {
 			t.Fatalf("%s: %d glyphs, and HarfBuzz painted %d", label, f.NumGlyphs(), len(c.glyphs))
 		}
-		for gid, want := range c.glyphs {
+		for i, want := range c.glyphs {
+			gid := c.gids[i]
 			r := &recordingPainter{}
 			if err := f.PaintGlyph(gid, c.opts, r); err != nil {
 				t.Errorf("%s glyph %d: %v", label, gid, err)
@@ -224,7 +258,11 @@ func TestPaintGlyphAgreesWithHarfBuzz(t *testing.T) {
 func TestGlyphColourSaysWhatIsPainted(t *testing.T) {
 	seen := map[GlyphColour]bool{}
 	for _, c := range readPaintGolden(t) {
-		f, err := Load(harfbuzzFont(t, c.name))
+		data := paintFont(t, c.name)
+		if data == nil {
+			continue
+		}
+		f, err := Load(data)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -365,5 +403,85 @@ func TestColorIsAnImageColor(t *testing.T) {
 	r, g, b, a := Color{R: 255, G: 128, B: 0, A: 128}.RGBA()
 	if a != 0x8080 || r != 0x8080 || b != 0 || g != 0x4080 {
 		t.Errorf("RGBA is %#x %#x %#x %#x", r, g, b, a)
+	}
+}
+
+// quietPainter paints nothing and charges nothing: the walk alone.
+type quietPainter struct{}
+
+func (quietPainter) pushTransform(xform32) {}
+func (quietPainter) popTransform()         {}
+func (quietPainter) pushClipGlyph(int)     {}
+func (quietPainter) pushClipRect(box32)    {}
+func (quietPainter) popClip()              {}
+func (quietPainter) pushGroup()            {}
+func (quietPainter) popGroup(int)          {}
+func (quietPainter) paint(paintFill)       {}
+
+// stopCounter counts the colour stops PaintGlyph hands out.
+type stopCounter struct {
+	countingPainter
+	stops int
+}
+
+func (s *stopCounter) LinearGradient(g LinearGradient) { s.stops += len(g.Line.Stops) }
+func (s *stopCounter) RadialGradient(g RadialGradient) { s.stops += len(g.Line.Stops) }
+func (s *stopCounter) SweepGradient(g SweepGradient)   { s.stops += len(g.Line.Stops) }
+
+// TestPaintingIsChargedForTheStopsItHandsOut is #886: the counting walk
+// charged a solid fill for a colour line it does not have, reading its colour
+// index and alpha as an offset to one, and refused three of Noto Color Emoji's
+// flags — a thousand solid fills each and more — that HarfBuzz paints whole.
+// What the walk charges beyond the walk itself is the stops handed out, to the
+// stop, for every glyph of the colour faces.
+func TestPaintingIsChargedForTheStopsItHandsOut(t *testing.T) {
+	for _, name := range []string{"ColourPaint.ttf", "ColourInk.ttf"} {
+		f, err := Load(harfbuzzFont(t, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tb := f.colrTable()
+		for gid := range f.NumGlyphs() {
+			counter := &paintCounter{t: tb, budget: font.NewBudget(paintWork)}
+			if painted, _ := f.colr.paintGlyphWith(gid, counter, true, counter.budget); !painted {
+				continue
+			}
+			walk := font.NewBudget(paintWork)
+			f.colr.paintGlyphWith(gid, quietPainter{}, true, walk)
+			handed := &stopCounter{}
+			if err := f.PaintGlyph(gid, PaintOptions{}, handed); err != nil {
+				t.Fatalf("%s glyph %d: %v", name, gid, err)
+			}
+			if got := counter.budget.Spent() - walk.Spent(); got != handed.stops {
+				t.Errorf("%s glyph %d was charged %d for stops and handed out %d", name, gid, got, handed.stops)
+			}
+		}
+	}
+}
+
+// TestEveryNotoColorEmojiGlyphPaints paints every glyph of Noto Color Emoji's
+// COLRv1 build (EMOJI_FONTS), none of which reaches HarfBuzz's bounds, and
+// requires that none is refused.
+func TestEveryNotoColorEmojiGlyphPaints(t *testing.T) {
+	data := paintFont(t, "Noto-COLRv1.ttf")
+	if data == nil {
+		t.Skip("EMOJI_FONTS is not set; run `make emoji-fonts`")
+	}
+	f, err := Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	painted := 0
+	for gid := range f.NumGlyphs() {
+		if f.GlyphColour(gid, 0) != ColourPaint {
+			continue
+		}
+		painted++
+		if err := f.PaintGlyph(gid, PaintOptions{}, &countingPainter{}); err != nil {
+			t.Errorf("glyph %d: %v", gid, err)
+		}
+	}
+	if painted < 4000 {
+		t.Errorf("%d COLRv1 glyphs, where the font has over four thousand", painted)
 	}
 }

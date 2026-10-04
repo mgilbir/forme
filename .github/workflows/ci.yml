@@ -89,6 +89,7 @@ jobs:
             testdata/unicode-normalization
             testdata/notocjk
             testdata/cff-fonts
+            testdata/emoji-fonts
             testdata/ucd
             testdata/html
             testdata/icu-dictionaries
@@ -101,7 +102,7 @@ jobs:
           key: corpora-4-${{ hashFiles('Makefile') }}
 
       - name: Fetch whatever the cache did not have
-        run: make wpt noto-fonts css-tests bidi-tests grapheme-tests normalization-tests notocjk cff-fonts ucd
+        run: make wpt noto-fonts css-tests bidi-tests grapheme-tests normalization-tests notocjk cff-fonts emoji-fonts ucd
 
       # Before anything is measured, because a corpus that did not arrive is not
       # a result about the engine. unifoundry.com has answered 200 with an error
@@ -202,6 +203,7 @@ jobs:
             testdata/unicode-grapheme
             testdata/notocjk
             testdata/cff-fonts
+            testdata/emoji-fonts
             testdata/ucd
             testdata/html
             testdata/icu-dictionaries
