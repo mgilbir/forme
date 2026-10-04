@@ -3,6 +3,7 @@ package shape
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -517,6 +518,8 @@ func useFace(face *Face) {
 		_, _, _ = face.HalfWidthTrim(gid)
 		_, _, _, _, _ = face.GlyphExtents(gid)
 		_ = face.GlyphOutline(gid, func(Segment) bool { return true })
+		_ = face.GlyphColour(gid, 0)
+		paintBalanced(face, gid, PaintOptions{})
 	}
 	// And the ink of the first few dozen glyphs, which is read from whichever
 	// table answers for each — a bitmap's strike, a colour glyph's paint, a
@@ -529,6 +532,10 @@ func useFace(face *Face) {
 		// and a stop after the first segment as well as a full one.
 		_ = face.GlyphOutline(gid, func(Segment) bool { return true })
 		_ = face.GlyphOutline(gid, func(Segment) bool { return false })
+		// And painted, in another palette and at a size between strikes,
+		// through a painter that panics on a pop with nothing pushed.
+		_ = face.GlyphColour(gid, 20)
+		paintBalanced(face, gid, PaintOptions{Palette: 1, PPEM: 20})
 	}
 	_, _, _ = face.ScriptOffsets()
 	// The MATH table, where the font has one: every question, for glyphs in
@@ -874,5 +881,49 @@ func TestTheFuzzTargetReachesEveryEntryPoint(t *testing.T) {
 	if found < 40 {
 		t.Errorf("only %d entry points were found in the package; the pattern "+
 			"that reads them off is not matching what it should", found)
+	}
+}
+
+// balancedPainter panics on a pop with nothing pushed, and paintBalanced on a
+// push left without its pop: the fuzz target paints through it.
+type balancedPainter struct{ transforms, clips, groups int }
+
+func (b *balancedPainter) PushTransform(Transform) { b.transforms++ }
+func (b *balancedPainter) PopTransform()           { b.transforms = pop(b.transforms, "transform") }
+func (b *balancedPainter) PushClipGlyph(int)       { b.clips++ }
+func (b *balancedPainter) PushClipRect(Rect)       { b.clips++ }
+func (b *balancedPainter) PopClip()                { b.clips = pop(b.clips, "clip") }
+func (b *balancedPainter) PushGroup()              { b.groups++ }
+func (b *balancedPainter) PopGroup(m CompositeMode) {
+	if m > CompositeHSLLuminosity {
+		panic(fmt.Sprintf("composite mode %d", m))
+	}
+	b.groups = pop(b.groups, "group")
+}
+func (b *balancedPainter) Solid(Color, bool)             {}
+func (b *balancedPainter) LinearGradient(LinearGradient) {}
+func (b *balancedPainter) RadialGradient(RadialGradient) {}
+func (b *balancedPainter) SweepGradient(SweepGradient)   {}
+func (b *balancedPainter) Image(img Image) {
+	if len(img.Data) == 0 {
+		panic("an image with no data")
+	}
+}
+
+func pop(n int, what string) int {
+	if n == 0 {
+		panic("a " + what + " popped with none pushed")
+	}
+	return n - 1
+}
+
+func paintBalanced(f *Face, gid int, opts PaintOptions) {
+	b := &balancedPainter{}
+	if err := f.PaintGlyph(gid, opts, b); err != nil {
+		return
+	}
+	if b.transforms != 0 || b.clips != 0 || b.groups != 0 {
+		panic(fmt.Sprintf("glyph %d left %d transforms, %d clips and %d groups pushed",
+			gid, b.transforms, b.clips, b.groups))
 	}
 }
