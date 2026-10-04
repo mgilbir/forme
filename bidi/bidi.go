@@ -307,8 +307,9 @@ func (p *Paragraph) fillRemoved() {
 // initiator matches -1 and is an ordinary neutral.
 func matchPDI(classes []Class) (pdi, initiator []int) {
 	n := len(classes)
-	pdi = make([]int, n)
-	initiator = make([]int, n)
+	// One array for the two.
+	both := make([]int, 2*n)
+	pdi, initiator = both[:n:n], both[n:]
 	for i := 0; i < n; i++ {
 		pdi[i] = n
 		initiator[i] = -1
@@ -513,12 +514,23 @@ func sequences(retained []int, levels []int, classes []Class, pdi, initiator []i
 		runs = append(runs, run{i, j})
 		i = j
 	}
-	// Which run each position starts, so that a PDI can be found from the
-	// initiator that matches it.
-	startsRun := make(map[int]int, len(runs))
+	// Which run each position starts, or -1, so that a PDI can be found from
+	// the initiator that matches it; and where in retained each retained
+	// position is, for sos and eos below. Indexed by position, in one array.
+	byPos := make([]int, 2*len(classes))
+	startsRun, position := byPos[:len(classes):len(classes)], byPos[len(classes):]
+	for i := range startsRun {
+		startsRun[i] = -1
+	}
 	for k, r := range runs {
 		startsRun[retained[r.from]] = k
 	}
+	for i, p := range retained {
+		position[p] = i
+	}
+	// Every retained position is in exactly one sequence, and each sequence
+	// is built whole before the next is begun, so they share one array.
+	all := make([]int, 0, len(retained))
 
 	used := make([]bool, len(runs))
 	var out []sequence
@@ -532,24 +544,25 @@ func sequences(retained []int, levels []int, classes []Class, pdi, initiator []i
 			continue
 		}
 		seq := sequence{level: levels[retained[r.from]]}
+		start := len(all)
 		for cur := k; ; {
 			used[cur] = true
-			for i := runs[cur].from; i < runs[cur].to; i++ {
-				seq.pos = append(seq.pos, retained[i])
-			}
+			all = append(all, retained[runs[cur].from:runs[cur].to]...)
 			// A run that ends in an isolate initiator continues at the PDI that
 			// closes it, and the text between the two — which is the isolate —
-			// is a sequence of its own.
-			last := seq.pos[len(seq.pos)-1]
-			if !isIsolateInitiator(classes[last]) {
+			// is a sequence of its own. An initiator nothing closes has its PDI
+			// past the end of the text.
+			last := all[len(all)-1]
+			if !isIsolateInitiator(classes[last]) || pdi[last] >= len(startsRun) {
 				break
 			}
-			next, ok := startsRun[pdi[last]]
-			if !ok || used[next] {
+			next := startsRun[pdi[last]]
+			if next < 0 || used[next] {
 				break
 			}
 			cur = next
 		}
+		seq.pos = all[start:len(all):len(all)]
 		out = append(out, seq)
 	}
 
@@ -557,10 +570,6 @@ func sequences(retained []int, levels []int, classes []Class, pdi, initiator []i
 	// level of the text it adjoins — which is the paragraph's where there is no
 	// adjoining text, and also where the sequence ends in an isolate that was
 	// never closed, because what follows such an isolate is outside it.
-	position := make(map[int]int, len(retained))
-	for i, p := range retained {
-		position[p] = i
-	}
 	for si := range out {
 		seq := &out[si]
 		first, last := seq.pos[0], seq.pos[len(seq.pos)-1]
@@ -1137,8 +1146,20 @@ func MirrorRunes(runes []rune) []rune {
 // maps back to what the caller wrote, and rule L4 changes what is drawn without
 // changing what the text says.
 func RunCharacters(s string, rtl bool) (runes []rune, offsets []int) {
-	runes = make([]rune, 0, len(s))
-	offsets = make([]int, 0, len(s))
+	return RunCharactersInto(nil, nil, s, rtl)
+}
+
+// RunCharactersInto is RunCharacters writing into the arrays of runes and
+// offsets where they have room, for a caller that sets one run after another
+// and keeps the two from run to run. What they held is overwritten.
+func RunCharactersInto(runes []rune, offsets []int, s string, rtl bool) ([]rune, []int) {
+	if cap(runes) < len(s) {
+		runes = make([]rune, 0, len(s))
+	}
+	if cap(offsets) < len(s) {
+		offsets = make([]int, 0, len(s))
+	}
+	runes, offsets = runes[:0], offsets[:0]
 	for i, r := range s {
 		runes = append(runes, r)
 		offsets = append(offsets, i)
