@@ -75,12 +75,17 @@ type WOFF2Options struct {
 }
 
 // WOFF2Collection is the collection directory of a synthetic WOFF 2 font
-// collection (W3C WOFF 2.0 §5.3).
+// collection (W3C WOFF 2.0 (2024) §4.2).
 type WOFF2Collection struct {
 	Version uint32 // 0x00010000 if zero
 	Fonts   []WOFF2CollectionFont
 	// StatedNumFonts overrides the count of fonts the directory states.
 	StatedNumFonts *int
+	// Spell255 writes each 255UInt16 of the directory — the count of fonts,
+	// each font's count of tables and each index — where it is not nil, in
+	// place of the shortest spelling. The format has more than one spelling
+	// for most values, and a decoder must read every one (W3C WOFF 2.0 (2024) §3.1).
+	Spell255 func(dst []byte, v int) []byte
 }
 
 // WOFF2CollectionFont is one font of a collection directory.
@@ -157,20 +162,24 @@ func WOFF2(opts WOFF2Options) []byte {
 		if c.StatedNumFonts != nil {
 			n = *c.StatedNumFonts
 		}
-		dir = append255(dir, n)
+		spell := c.Spell255
+		if spell == nil {
+			spell = append255
+		}
+		dir = spell(dir, n)
 		for _, f := range c.Fonts {
 			n := len(f.Tables)
 			if f.StatedNumTables != nil {
 				n = *f.StatedNumTables
 			}
-			dir = append255(dir, n)
+			dir = spell(dir, n)
 			fl := f.Flavor
 			if fl == 0 {
 				fl = 0x00010000
 			}
 			dir = binary.BigEndian.AppendUint32(dir, fl)
 			for _, i := range f.Tables {
-				dir = append255(dir, i)
+				dir = spell(dir, i)
 			}
 		}
 	}
@@ -200,6 +209,17 @@ func WOFF2(opts WOFF2Options) []byte {
 	// refuses a font whose figure is even four bytes short — which is what a
 	// total that forgets the padding between tables is.
 	total := 12 + 16*len(tables)
+	if c := opts.Collection; c != nil {
+		// A collection rebuilds to its header, the offset of each font's
+		// directory, and each font's directory, with each table once.
+		total = 12 + 4*len(c.Fonts)
+		if c.Version == 0x00020000 {
+			total += 12
+		}
+		for _, f := range c.Fonts {
+			total += 12 + 16*len(f.Tables)
+		}
+	}
 	for _, t := range tables {
 		total += (len(t.Data) + 3) &^ 3
 	}
@@ -236,7 +256,7 @@ var woff2Known = [63]string{
 	"trak", "Zapf", "Silf", "Glat", "Gloc", "Feat", "Sill",
 }
 
-// append255 writes a 255UInt16 (W3C WOFF 2.0 §4.1), in its shortest spelling.
+// append255 writes a 255UInt16 (W3C WOFF 2.0 (2024) §3.1), in its shortest spelling.
 func append255(dst []byte, v int) []byte {
 	switch {
 	case v < 253:

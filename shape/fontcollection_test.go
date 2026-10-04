@@ -27,6 +27,21 @@ func woff2Collection(fonts ...[]byte) []byte {
 			tags = append(tags, tag)
 		}
 		sort.Strings(tags)
+		// loca right after glyf, where a collection has to have it (W3C WOFF
+		// 2.0 (2024) §5.5).
+		if _, ok := tables["loca"]; ok {
+			var ordered []string
+			for _, tag := range tags {
+				switch tag {
+				case "loca":
+				case "glyf":
+					ordered = append(ordered, "glyf", "loca")
+				default:
+					ordered = append(ordered, tag)
+				}
+			}
+			tags = ordered
+		}
 		var f fonttest.WOFF2CollectionFont
 		f.Flavor = binary.BigEndian.Uint32(data)
 		for _, tag := range tags {

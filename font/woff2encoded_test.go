@@ -195,21 +195,65 @@ func glyphs(t *testing.T, tabs map[string][]byte) [][]byte {
 	return out
 }
 
-// sameGlyph says two glyphs are the same glyph: a composite the same bytes,
-// padding aside, as the transform keeps a composite whole; a simple glyph the
-// same box, contours, instructions and points, each point where it is and on
-// or off the curve, whichever way the two spell their flags and coordinates.
+// sameGlyph says two glyphs are the same glyph: a composite the same
+// components and instructions, as the transform keeps a composite whole; a
+// simple glyph the same box, contours, instructions and points, each point
+// where it is and on or off the curve, whichever way the two spell their flags
+// and coordinates. Each is read to its own end, so that what pads it out to a
+// loca boundary is not read as the glyph — and nothing of the glyph is taken
+// for padding, as trimming its trailing zeros took the last coordinate where
+// it was zero.
 func sameGlyph(a, b []byte) bool {
-	a, b = bytes.TrimRight(a, "\x00"), bytes.TrimRight(b, "\x00")
 	if len(a) < 10 || len(b) < 10 {
-		return len(a) == 0 && len(b) == 0
+		return len(bytes.Trim(a, "\x00")) == 0 && len(bytes.Trim(b, "\x00")) == 0
 	}
 	if int16(binary.BigEndian.Uint16(a)) < 0 {
-		return bytes.Equal(a, b)
+		ea, oka := compositeEnd(a)
+		eb, okb := compositeEnd(b)
+		return oka && okb && bytes.Equal(a[:ea], b[:eb])
 	}
 	pa, oka := simpleGlyph(a)
 	pb, okb := simpleGlyph(b)
 	return oka && okb && bytes.Equal(a[:10], b[:10]) && pa == pb
+}
+
+// compositeEnd is where a composite glyph ends: after its last component, and
+// its instructions where it has them.
+func compositeEnd(g []byte) (int, bool) {
+	at := 10
+	for {
+		if len(g) < at+4 {
+			return 0, false
+		}
+		flags := binary.BigEndian.Uint16(g[at:])
+		at += 4
+		if flags&0x0001 != 0 {
+			at += 4
+		} else {
+			at += 2
+		}
+		switch {
+		case flags&0x0008 != 0:
+			at += 2
+		case flags&0x0040 != 0:
+			at += 4
+		case flags&0x0080 != 0:
+			at += 8
+		}
+		if flags&0x0020 != 0 {
+			continue
+		}
+		if flags&0x0100 != 0 {
+			if len(g) < at+2 {
+				return 0, false
+			}
+			at += 2 + int(binary.BigEndian.Uint16(g[at:]))
+		}
+		if at > len(g) {
+			return 0, false
+		}
+		return at, true
+	}
 }
 
 // simpleGlyph reads a simple glyph into a comparable string: its end points,

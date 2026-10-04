@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/font"
 )
 
 // encodedWOFF2Collections is each WOFF 2 collection google/woff2's encoder
@@ -84,5 +86,53 @@ func TestAFaceOfAnEncodedWOFF2CollectionIsTheFaceItWasMadeFrom(t *testing.T) {
 				t.Errorf("%s face %d does not subset: %v", name, d.Index, err)
 			}
 		}
+	}
+}
+
+// TestAWOFF2CollectionVariantLoadsFaceByFace loads every face of each WOFF 2
+// collection variant the font package's test builds (font/
+// woff2variants_test.go): the forms the format allows and google/woff2's
+// encoder does not write, and the forms it forbids. A variant the decoder
+// accepts is described and loaded face by face, and each face shapes; one it
+// refuses is refused here too.
+func TestAWOFF2CollectionVariantLoadsFaceByFace(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "font", "testdata", "woff2-collections", "variants", "*.woff2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) < 10 {
+		t.Fatalf("%d variants; the font package's test writes them", len(files))
+	}
+	loaded := 0
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := filepath.Base(f)
+		_, decodeErr := font.DecodeWOFF2(data)
+		faces, err := CollectionFaces(data)
+		if (err != nil) != (decodeErr != nil) {
+			t.Errorf("%s: described with %v, decoded with %v", name, err, decodeErr)
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		for _, d := range faces {
+			face, err := LoadCollection(data, d.Index)
+			if err != nil {
+				t.Errorf("%s face %d: %v", name, d.Index, err)
+				continue
+			}
+			if face.Name() != d.Name {
+				t.Errorf("%s face %d is named %q and described as %q", name, d.Index, face.Name(), d.Name)
+			}
+			face.ShapeGlyphs("A")
+			loaded++
+		}
+	}
+	if loaded == 0 {
+		t.Fatal("no face of any variant loaded, so this test measures nothing")
 	}
 }
