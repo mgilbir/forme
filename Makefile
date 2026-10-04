@@ -1,4 +1,4 @@
-.PHONY: hbpaint ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+.PHONY: hbpaint hbmorx ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -187,7 +187,7 @@ hbenv:
 # indiccategories.expected.txt — are read from a source checkout of the same
 # release: HarfBuzz's own generators, and its own source; see
 # usecategories.py, usescripts.py and indiccategories.py.
-hboracles: hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpaint hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried hblanguages varinstance
+hboracles: hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpaint hbmorx hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried hblanguages varinstance
 
 hbshaping:
 	$(PYTHON) $(HARFBUZZ_DIR)/corpus.py
@@ -354,6 +354,14 @@ hbpaint:
 		Noto-COLRv1.ttf=$(EMOJI_DIR)/Noto-COLRv1.ttf:glyphs=3827,3830,3979,100,1500 \
 		NotoColorEmoji.ttf=$(EMOJI_DIR)/NotoColorEmoji.ttf:bitmap=1:glyphs=0,1,5,1494,1714,1978,2032,2325,4045 \
 		NotoColorEmoji.ttf=$(EMOJI_DIR)/NotoColorEmoji.ttf:bitmap=1:ppem=20:glyphs=5,1714,2032
+
+# AAT morx, set by HarfBuzz: the text-rendering tests' morx suite (aat/, as
+# HarfBuzz keeps it at HARFBUZZ_VERSION), every case of which HarfBuzz sets as
+# the suite expects, and strings in a face built here for what the suite does
+# not reach (morx_fixture.py). See morx.py.
+hbmorx:
+	$(PYTHON) $(HARFBUZZ_DIR)/morx_fixture.py $(HARFBUZZ_DIR)/fonts
+	$(PYTHON) $(HARFBUZZ_DIR)/morx.py $(HARFBUZZ_DIR)/morx.expected.txt
 
 # Variable composites (VARC): a face built here (see varc_fixture.py), its
 # ink and outlines asked of HarfBuzz at its default and six locations, and its

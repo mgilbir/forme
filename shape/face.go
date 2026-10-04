@@ -237,6 +237,9 @@ type Face struct {
 	// WithFeatureSettings.
 	settingsOn, settingsOff string
 
+	// morx is the face's AAT substitutions, where it has them. See morx.go.
+	morx *morxTable
+
 	// bitmapOnly is a face whose glyphs are only bitmaps, with no outlines at
 	// all. See BitmapOnly.
 	bitmapOnly bool
@@ -538,6 +541,7 @@ func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face,
 		f.glyfOut = newCOLRInk(f, tables, prog.NumGlyphs)
 	}
 	f.outlines = newOutlineCache(programSize(data, tables), tables)
+	f.morx = readMorx(tables, prog.NumGlyphs)
 	f.bitmap = newCBDTInk(tables, f.unitsPerEm)
 	f.sbix = newSbixInk(tables, prog.NumGlyphs, f.unitsPerEm)
 	f.varc = newVARCFace(f, tables, prog.NumGlyphs)

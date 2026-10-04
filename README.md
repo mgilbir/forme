@@ -125,7 +125,9 @@ seventy more — Javanese, Balinese, Tibetan, Buginese, Tai Tham and the rest �
 a table derived from Unicode's own properties rather than from per-script
 knowledge. Cursive joining for Arabic and its relatives, and the mark ordering of
 UTR #53. OpenType layout: GSUB 1–6 and GPOS 1–8, mark attachment, cursive
-attachment, contextual and chained-contextual rules, mark filtering sets.
+attachment, contextual and chained-contextual rules, mark filtering sets. AAT's
+`morx`, where a font has one, as HarfBuzz and CoreText apply it: Apple Color
+Emoji's sequences are its ligatures.
 
 **Fonts.** sfnt and CFF, Type 1, the WOFF and WOFF 2 wrappers a web font
 arrives in, a face of a TrueType or OpenType collection (`LoadCollection`), and

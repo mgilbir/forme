@@ -267,9 +267,19 @@ func FuzzLoadAndUse(f *testing.F) {
 		"PointMatchPhantom.ttf", // components placed by matching points, instanced
 		"PointMatch.ttf",        // and matched as an instance keeps them
 		"VarComposite.ttf",      // variable composites (VARC), measured, drawn, instanced
+		"MorxCases.ttf",         // AAT morx: chains, insertion, context at the end
 	} {
 		if data, err := os.ReadFile(filepath.Join("..", "testdata", "harfbuzz", "fonts", name)); err == nil {
 			f.Add(data)
+		}
+	}
+	// The morx suite's fonts: every kind of morx subtable, state machines
+	// that loop, and tables built to stress the reader.
+	if names, err := filepath.Glob(filepath.Join("..", "testdata", "harfbuzz", "aat", "fonts", "*.ttf")); err == nil {
+		for _, name := range names {
+			if data, err := os.ReadFile(name); err == nil {
+				f.Add(data)
+			}
 		}
 	}
 	// A collection, its two fonts sharing the tables they have in common: a

@@ -139,6 +139,10 @@ type Glyph struct {
 	// dropUnsubstituted.
 	substituted bool
 
+	// aatDeleted says a morx subtable deleted the glyph: it is taken out of
+	// the run, its cluster merged, once the morx has run. See morx.go.
+	aatDeleted bool
+
 	// multiplied says the glyph is one of several a multiple substitution
 	// made from one, and was not ligated since: HarfBuzz's MULTIPLIED glyph
 	// property. A mark goes on the first of them and steps over the rest —
@@ -575,6 +579,14 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	chosen := f.chosenScriptTag(script, lang)
 	vertical := ctx.features.Vertical
 	model := categorize(script, chosen, vertical)
+	// A face with a morx is set by it, as HarfBuzz and CoreText set it, in
+	// a run across the page whatever else it has, and down the page where it
+	// has no GSUB; and a script with a model of its own is set by the dumber
+	// one, since the morx does what the model would. See morx.go.
+	morx := f.morx != nil && (!vertical || len(f.layoutTables["GSUB"]) == 0)
+	if morx && model != modelDefault {
+		model = modelDumber
+	}
 	// Rule L4: a bracket in a right-to-left run is drawn as the bracket that
 	// mirrors it, and the substitution is on the character, before the font is
 	// asked for a glyph at all. Where the font has no glyph for the mirror the
@@ -696,7 +708,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	}
 	// The run's script decides which of the font's rules apply, and everything
 	// below reads the tables through it.
-	sh := shaper{f: f, l: l, rtl: rtl, ligIDs: new(int),
+	sh := shaper{f: f, l: l, rtl: rtl, ligIDs: new(int), morx: morx,
 		zeroMarks: model.zeroMarks(), features: ctx.features, lang: lang,
 		ops: lookupBudget(len(buf))}
 	// What the run applies, and in which stages: see plan.go. It covers every
@@ -719,7 +731,10 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// has to be the substitutions. No script both joins cursively and reorders,
 	// which is why these are alternatives rather than stages.
 	before, after := ctx.runes()
-	if model.syllabic() {
+	if morx {
+		buf = sh.applyMorx(buf, rtl, vertical)
+		buf = dropIgnorables(buf)
+	} else if model.syllabic() {
 		buf = sh.shapeSyllabic(buf, runes, script, p, before, after)
 	} else {
 		// Which form each letter takes is decided now, while the glyphs still

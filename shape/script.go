@@ -683,6 +683,11 @@ type shaper struct {
 	f *Face
 	l *layout
 
+	// morx says the run's substitutions are the face's morx and not its GSUB
+	// (morx.go), which positioning has one thing to know about: see
+	// positioningFor.
+	morx bool
+
 	// rtl says the run will be drawn right to left.
 	//
 	// Positioning needs it because it states where a glyph sits relative to the

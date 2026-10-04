@@ -193,6 +193,12 @@ func (sh shaper) positioningFor(p *plan, model shaperModel) positioning {
 	if sh.rtl {
 		out.adjust = false
 	}
+	// A run set by morx moves no mark with its cancelled advance, after the
+	// fallback has been decided: Apple Color Emoji builds its sequences
+	// expecting it not to (HarfBuzz's issue 2967).
+	if sh.morx {
+		out.adjust = false
+	}
 	return out
 }
 
