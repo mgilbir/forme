@@ -214,10 +214,10 @@ type MathTable struct {
 // It reads the table directory each time it is asked, so a caller asking about
 // many glyphs should keep the answer.
 func (f *Face) MathTable() (*MathTable, error) {
-	if f == nil || f.data == nil {
+	if f == nil || f.sfntTables() == nil {
 		return nil, nil
 	}
-	tables := font.SFNTTables(f.data)
+	tables := f.sfntTables()
 	data, ok := tables["MATH"]
 	if !ok {
 		return nil, nil
@@ -900,10 +900,10 @@ func (m *MathTable) validAssembly(a MathGlyphAssembly) bool {
 // OS/2 table long enough to say. MathML Core §5.1 falls back to them for
 // subscriptShiftDown and superscriptShiftUp where a font has no MATH table.
 func (f *Face) ScriptOffsets() (sub, super int, ok bool) {
-	if f == nil || f.data == nil {
+	if f == nil || f.sfntTables() == nil {
 		return 0, 0, false
 	}
-	os2 := font.SFNTTables(f.data)["OS/2"]
+	os2 := f.sfntTables()["OS/2"]
 	if len(os2) < 26 {
 		return 0, 0, false
 	}

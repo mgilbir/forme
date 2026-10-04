@@ -106,7 +106,7 @@ func (f *Face) subset() ([]byte, []int, error) {
 	if f.cff {
 		return f.subsetOpenTypeCFF()
 	}
-	tables := font.SFNTTables(f.data)
+	tables := f.sfntTables()
 	if tables == nil {
 		return nil, nil, errors.New("fonts: the font program is no longer an sfnt")
 	}

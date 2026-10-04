@@ -3,8 +3,6 @@ package shape
 import (
 	"encoding/binary"
 	"fmt"
-
-	"github.com/mgilbir/forme/font"
 )
 
 // VARC glyphs in a subset.
@@ -53,7 +51,7 @@ func (f *Face) flattenKeptVARC(keep []bool, offsets []uint32, glyf []byte) (map[
 	out := map[int][]byte{}
 	// A subset's own share of work, as much as the face's, so that measuring
 	// before it does not leave it none.
-	work := varcFaceWork(font.SFNTTables(f.data))
+	work := varcFaceWork(f.sfntTables())
 	for gid := 0; gid < n; gid++ {
 		if !keep[gid] || !covered(gid) {
 			continue

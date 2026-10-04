@@ -218,7 +218,13 @@ func ParseSFNT(data []byte, maxWork int) *Program {
 // caller asking a narrow question may be able to use it. One that cannot
 // refuses the font on the flags.
 func ParseSFNTWithin(data []byte, b *Budget) *Program {
-	tables := SFNTTables(data)
+	return ParseSFNTTablesWithin(SFNTTables(data), b)
+}
+
+// ParseSFNTTablesWithin is ParseSFNTWithin for a font already taken apart
+// into its tables, as SFNTTables or CollectionTables takes it: a face of a
+// collection, whose tables are not a font program of their own.
+func ParseSFNTTablesWithin(tables map[string][]byte, b *Budget) *Program {
 	if tables == nil {
 		return nil
 	}
@@ -2151,11 +2157,17 @@ func extractType1FontMatrix(data []byte) float64 {
 // tables to answer questions about the font; shape's subsetter rewrites them.
 // Beyond finding where a table is, they have nothing in common, and coupling
 // them further would make a subsetter's bug look like a reader's.
-func SFNTTables(data []byte) map[string][]byte {
-	if len(data) < 12 {
+func SFNTTables(data []byte) map[string][]byte { return sfntTablesAt(data, 0) }
+
+// sfntTablesAt is SFNTTables for a table directory at an offset into data:
+// a face of a collection, whose directory is where the collection's header
+// says and whose tables' offsets are from the start of the file, as a single
+// font's are.
+func sfntTablesAt(data []byte, at int) map[string][]byte {
+	if at < 0 || at > len(data) || len(data)-at < 12 {
 		return nil
 	}
-	switch Be32(data, 0) {
+	switch Be32(data, at) {
 	case 0x00010000, 0x74727565, 0x4F54544F: // 1.0, 'true', 'OTTO'
 	default:
 		return nil
@@ -2164,13 +2176,13 @@ func SFNTTables(data []byte) map[string][]byte {
 	// is refused before numTables sizes the map: the count is the file's, and
 	// sixty-five thousand of it made a map of several megabytes out of a
 	// twelve-byte header.
-	numTables := Be16(data, 4)
-	if 12+16*numTables > len(data) {
+	numTables := Be16(data, at+4)
+	if 12+16*numTables > len(data)-at {
 		return nil
 	}
 	tables := make(map[string][]byte, numTables)
 	for i := 0; i < numTables; i++ {
-		rec := 12 + 16*i
+		rec := at + 12 + 16*i
 		name := string(data[rec : rec+4])
 		off := uint64(Be32(data, rec+8))
 		end := off + uint64(Be32(data, rec+12))
@@ -2183,4 +2195,39 @@ func SFNTTables(data []byte) map[string][]byte {
 		tables[name] = data[off:end:end]
 	}
 	return tables
+}
+
+// A TrueType or OpenType collection — a .ttc or .otc — is several fonts in one
+// file, sharing the tables they have in common: a header, 'ttcf', with the
+// offset of each font's table directory, and the directories, whose tables'
+// offsets are from the start of the file.
+
+// CollectionOffsets is where each font of a collection has its table
+// directory, and nil for data that is not a collection or whose header states
+// more fonts than it has room for.
+func CollectionOffsets(data []byte) []int {
+	if len(data) < 12 || Be32(data, 0) != 0x74746366 { // 'ttcf'
+		return nil
+	}
+	n := uint64(Be32(data, 8))
+	if n == 0 || 12+4*n > uint64(len(data)) {
+		return nil
+	}
+	offsets := make([]int, n)
+	for i := range offsets {
+		offsets[i] = int(Be32(data, 12+4*i))
+	}
+	return offsets
+}
+
+// CollectionTables is SFNTTables for one font of a collection: its tables, each
+// a slice of data, so that the tables the fonts share are not copied. It is nil
+// for an index the collection does not have and for a directory SFNTTables
+// would refuse.
+func CollectionTables(data []byte, index int) map[string][]byte {
+	offsets := CollectionOffsets(data)
+	if index < 0 || index >= len(offsets) {
+		return nil
+	}
+	return sfntTablesAt(data, offsets[index])
 }

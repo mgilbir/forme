@@ -241,12 +241,25 @@ type Face struct {
 	// all. See BitmapOnly.
 	bitmapOnly bool
 
+	// collection is where a face of a collection keeps its tables, which are
+	// slices of the collection, for data is nil. See fontcollection.go.
+	collection *collectionFace
+
 	used    map[int]bool // glyph indices this face has encoded
 	runWork *runWork     // opt-in per-call budget, never shared by Clone
 	// spareWork is the budget ShapeGlyphsBounded reuses from call to call on
 	// this face, so that bounding a run costs no allocation. Not shared by
 	// Clone, for the reason used is not.
 	spareWork *runWork
+}
+
+// faceName is the face's PostScript name, and "Embedded" for a font that
+// states none.
+func faceName(name []byte) string {
+	if n := postScriptName(name); n != "" {
+		return n
+	}
+	return "Embedded"
 }
 
 // hasBitmaps reports whether a font has a table of bitmap glyphs: CBDT and
@@ -354,8 +367,20 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	}
 	tables := font.SFNTTables(data)
 	if tables == nil {
+		if font.CollectionOffsets(data) != nil {
+			return nil, errors.New("fonts: a font collection (.ttc or .otc) holds several fonts; " +
+				"LoadCollection loads one of them")
+		}
 		return nil, errors.New("fonts: not an sfnt font program (TrueType or OpenType)")
 	}
+	return loadTables(data, tables, coords)
+}
+
+// loadTables is loadFace for a font taken apart into its tables: data is the
+// font program they were taken from, or nil for a face of a collection, whose
+// tables are slices of the collection and not a program of their own (see
+// fontcollection.go).
+func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face, error) {
 	unitsPerEm, err := headUnitsPerEm(tables["head"])
 	if err != nil {
 		return nil, err
@@ -383,7 +408,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	// One budget for the whole font, shared by the sfnt and CFF readers, so
 	// that what is bounded is the font and not each of its parts.
 	budget := font.NewBudget(maxFontWork)
-	prog := font.ParseSFNTWithin(data, budget)
+	prog := font.ParseSFNTTablesWithin(tables, budget)
 	if prog == nil {
 		return nil, errors.New("fonts: the font program could not be parsed")
 	}
@@ -512,7 +537,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	if hasGlyf {
 		f.glyfOut = newCOLRInk(f, tables, prog.NumGlyphs)
 	}
-	f.outlines = newOutlineCache(len(data), tables)
+	f.outlines = newOutlineCache(programSize(data, tables), tables)
 	f.bitmap = newCBDTInk(tables, f.unitsPerEm)
 	f.sbix = newSbixInk(tables, prog.NumGlyphs, f.unitsPerEm)
 	f.varc = newVARCFace(f, tables, prog.NumGlyphs)
@@ -532,10 +557,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 	pos := readPositioning(f.layoutTables, nil, noRequiredFeature, coords)
 	f.cache = &layoutCache{positionings: map[string]*layout{selectionKey(nil): pos}}
 	f.layout = readLayout(f.layoutTables, nil, pos, coords)
-	f.name = postScriptName(tables["name"])
-	if f.name == "" {
-		f.name = "Embedded"
-	}
+	f.name = faceName(tables["name"])
 	// Flags (ISO 32000-2 9.8.2, Table 121). Symbolic is the honest answer for a
 	// font embedded with Identity-H: the codes are glyph indices, not
 	// characters in any standard encoding, so bit 3 (Symbolic) is set and bit 6

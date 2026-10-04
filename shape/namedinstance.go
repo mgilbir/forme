@@ -28,7 +28,7 @@ func (f *Face) NamedInstance(match func(name string) bool) (coords map[string]fl
 	if len(f.axes) == 0 || match == nil {
 		return nil, false
 	}
-	tables := font.SFNTTables(f.data)
+	tables := f.sfntTables()
 	fvar := tables["fvar"]
 	axes, err := parseFvar(fvar)
 	if err != nil {

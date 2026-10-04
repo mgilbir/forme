@@ -679,7 +679,7 @@ func cffPrivateRegion(data []byte, off, size int, budget *font.Budget) ([]byte, 
 
 // subsetOpenTypeCFF rebuilds an OpenType font around a subsetted CFF table.
 func (f *Face) subsetOpenTypeCFF() ([]byte, []int, error) {
-	tables := font.SFNTTables(f.data)
+	tables := f.sfntTables()
 	if tables == nil || tables["CFF "] == nil {
 		return nil, nil, errors.New("fonts: the font no longer carries a CFF table")
 	}

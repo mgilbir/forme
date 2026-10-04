@@ -328,6 +328,9 @@ func (f *Face) Program() []byte {
 	if f.cff2 != nil {
 		return f.cff2.programBytes()
 	}
+	if f.collection != nil {
+		return f.collection.program()
+	}
 	return f.data
 }
 
