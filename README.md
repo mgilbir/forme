@@ -133,13 +133,13 @@ font's `feat` offers: Apple Color Emoji's sequences are its ligatures; and its
 
 **Fonts.** sfnt and CFF, Type 1, the WOFF and WOFF 2 wrappers a web font
 arrives in, a face of a TrueType or OpenType collection, bare or wrapped as
-WOFF 2 (`LoadCollection`, and `LoadCollectionInstance` for a variable one), and fonts whose glyphs are
-only bitmaps, as bitmap emoji fonts are; variable fonts instanced at a named
-or arbitrary point in their design space — where CSS's font-weight, font-width, font-style,
-font-optical-sizing and font-variation-settings place them — subsetting, and
-the metrics a layout engine has to ask for —
-including what the fourteen standard PDF faces state, which is not the same
-question.
+WOFF 2 (`LoadCollection`, and `LoadCollectionInstance` for a variable one), and
+fonts whose glyphs are only bitmaps, as bitmap emoji fonts are; variable fonts
+instanced at a named or arbitrary point in their design space — where CSS's
+font-weight, font-width, font-style, font-optical-sizing and
+font-variation-settings place them — subsetting, and the metrics a layout
+engine has to ask for — including what the fourteen standard PDF faces state,
+which is not the same question.
 
 **Glyphs, drawn.** A glyph's outline (`Face.GlyphOutline`), and its colour
 (`Face.PaintGlyph`): a COLR glyph's layers or paint graph, coloured from a CPAL
@@ -148,6 +148,18 @@ SVG glyph's document, and a CBDT or sbix glyph's PNG image at the strike for
 the size drawn, handed to a `Painter` call for call as HarfBuzz's
 `hb_font_paint_glyph` hands them out. `Face.GlyphColour` says which a glyph is
 painted from, so a caller can fall back.
+
+**Untrusted text.** `Face.ShapeGlyphsContext` shapes one run under a context
+and `RunLimits` — input bytes, live glyphs and charged lookup work, by default
+4096, 32768 and 64 million — and returns no glyphs rather than some when it is
+cancelled or a limit is reached, or when reading the layout tables the run was
+shaped with ran into one of the font's own limits; `RunResult.Work` is what it
+charged, for a caller keeping a document-wide budget. It shapes through a clone
+of the face; a caller that keeps clones of its own, one per goroutine, calls
+`Face.ShapeGlyphsBounded` on one instead, which allocates what an unbounded run
+does. `Face.WithShapingLimits` shares one budget across the measuring and
+shaping a callback does, for paragraph breaking. Font parsing and Unicode
+preprocessing keep their own bounds and are not interrupted inside a phase.
 
 Glyphs come back in **visual order** — the order a pen draws them, left to right —
 whatever scripts the string mixes, so a caller can draw them as they are.
@@ -243,10 +255,14 @@ the properties the engine asks from the pinned release instead.
 
 ## Licence
 
-The code is under the licence in `LICENSE`. The fonts under `fonts/notosans/` and
-`testdata/harfbuzz/fonts/` are Google's Noto builds under the SIL Open Font
-License 1.1, with their notices beside them; they are test data and shipping this
-module does not embed them in anything.
+The code is under the licence in `LICENSE`. The fonts the repository keeps are
+test data, and shipping this module does not embed them in anything. Some are
+other people's — Google's Noto builds, Hasubi Mono and HarfBuzz's tracking test
+face under the SIL Open Font License 1.1, the Unicode text-rendering tests'
+fonts under the Apache License 2.0 — each kept with its licence beside it; the
+rest are built from nothing by scripts in this repository and are under the
+licence in `LICENSE`.
+`THIRD_PARTY_NOTICES` names every one of them, and a test keeps it so.
 
 Much of what `cmd/gen*` generates is generated from other people's data — the
 Unicode database, ICU's word lists, BudouX, the hyphenation patterns, Adobe's
@@ -254,33 +270,3 @@ metrics and glyph list, Brotli, the HTML and CSS standards, HarfBuzz.
 `THIRD_PARTY_NOTICES` lists every generated table and kept file that is somebody
 else's work, where and at which pin it was taken, its licence, and the notice
 the licence asks a copy to carry, each quoted from its source.
-
-For callers rendering untrusted runs, `shape.Face.ShapeGlyphsContext` accepts
-`shape.RunInput` and `shape.RunLimits`. It shapes through a private face clone,
-checks cancellation between phases and lookup steps, bounds input bytes, live
-glyphs and charged lookup work, and returns a zero result on failure. Defaults
-are 4096 input bytes, 32768 glyphs and 64 million work units; negative limits are
-invalid. `RunResult.Work` lets a caller deduct actual charged work from a larger
-document budget. A run is also refused when reading the layout tables it was
-shaped with ran into one of the font's own limits; limits other calls ran into
-on the same face, for other scripts or for glyphs this run does not draw, do
-not count against it. Font parsing and Unicode preprocessing have their own
-bounds and are not interrupted inside an individual phase. This API does not
-change the legacy shaping entry points or make their mutable usage records
-concurrent.
-
-`ShapeGlyphsContext` clones the face on every call. A caller that already keeps
-clones of its own, one per goroutine, calls `Face.ShapeGlyphsBounded` on one
-instead: the same limits and failures, on the clone itself, with its budget
-reused from call to call. The glyphs it shapes are recorded on that clone, as
-`ShapeGlyphs` records them, and a bounded run allocates what an unbounded one
-does.
-
-`Face.WithShapingLimits` shares a budget across synchronous measurement/shaping
-calls through a private face, for integrations such as paragraph breaking. The
-callback must bound its own other work, use the supplied face on one goroutine
-without cloning it, check cancellation between phases, and retain no face for
-later shaping: a face kept past the call shapes without limits. Each shaped run
-is checked against the input limit, and the scope is refused for its own
-layouts' limits as `ShapeGlyphsContext` is. Font parser and preprocessing
-bounds remain independent of charged lookup work.
