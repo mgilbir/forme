@@ -26,13 +26,10 @@ import (
 // of them was laid out in a substitute face. It is also, simply, the format:
 // a page that serves a webfont in 2026 serves it as WOFF 2.
 //
-// # What is not here
+// # Collections
 //
-// A collection — a .ttc wrapped as WOFF 2 — is refused by name. The format
-// allows it and nothing on the web does it: a collection shares tables between
-// fonts, which means per-font table lists, per-font offset tables and a shared
-// checksum map, for a case no corpus this is measured against contains. It is
-// refused rather than half-read, so a caller finds out.
+// A collection — a .ttc wrapped as WOFF 2 — comes out as the collection it was
+// made from, its shared tables written once: see woff2collection.go.
 //
 // # Untrusted input
 //
@@ -97,7 +94,8 @@ type woff2Table struct {
 	record    int // where its 16-byte directory record is
 }
 
-// DecodeWOFF2 unwraps a WOFF 2 font into the sfnt it was made from.
+// DecodeWOFF2 unwraps a WOFF 2 font into the sfnt it was made from, or a WOFF
+// 2 font collection into the collection.
 //
 // The result is an ordinary TrueType or OpenType font program. It is not the
 // file the WOFF 2 was made from byte for byte — nothing could be, since the
@@ -129,14 +127,20 @@ func DecodeWOFF2(data []byte) ([]byte, error) {
 		return nil, errors.New("fonts: the WOFF 2 declares more tables than an sfnt can address")
 	}
 	compressedLength := binary.BigEndian.Uint32(data[20:])
-	if flavor == tagTtcf {
-		return nil, errors.New("fonts: this is a WOFF 2 font collection, which this engine does not read")
-	}
 
 	r := &woff2Reader{b: data, at: woff2HeaderSize}
 	tables, err := readWOFF2Directory(r, numTables)
 	if err != nil {
 		return nil, err
+	}
+	// A collection's directory of fonts follows the table directory, and the
+	// font data follows it. See woff2collection.go.
+	var collection uint32
+	var fonts []woff2CollectionFont
+	if flavor == tagTtcf {
+		if collection, fonts, err = readWOFF2Collection(r, numTables); err != nil {
+			return nil, err
+		}
 	}
 
 	// Everything after the directory, for compressedLength bytes, is one
@@ -196,6 +200,9 @@ func DecodeWOFF2(data []byte) ([]byte, error) {
 		return nil, errors.New("fonts: the WOFF 2's font data decompressed to a different size than its tables come to")
 	}
 
+	if fonts != nil {
+		return rebuildCollection(collection, fonts, tables, body)
+	}
 	return rebuildSfnt(flavor, tables, body)
 }
 
@@ -439,70 +446,16 @@ func rebuildSfnt(flavor uint32, tables []woff2Table, body []byte) ([]byte, error
 
 	for i := range tables {
 		t := &tables[i]
-		if uint64(t.srcOffset)+uint64(t.srcLength) > uint64(len(body)) {
-			return nil, errors.New("fonts: a WOFF 2 table lies outside the decompressed font data")
-		}
-		src := body[t.srcOffset : t.srcOffset+t.srcLength]
-
-		if t.tag == tagHhea {
-			if len(src) < 36 {
-				return nil, errors.New("fonts: the WOFF 2's hhea table is too short to hold its metric count")
-			}
-			f.numHMetrics = binary.BigEndian.Uint16(src[34:])
-		}
-
 		var sum uint32
 		var err error
-		switch {
-		case !t.transformed:
-			t.dstOffset = uint32(len(out))
-			out = append(out, src...)
-			// The checksum in the head table is of the finished font and
-			// cannot be known yet, so it is zeroed, summed as zero, and filled
-			// in at the end — which is what makes the total come out right.
-			if t.tag == tagHead {
-				if len(src) < 12 {
-					return nil, errors.New("fonts: the WOFF 2's head table is too short")
-				}
-				binary.BigEndian.PutUint32(out[t.dstOffset+8:], 0)
-			}
-			sum = computeULongSum(out[t.dstOffset:])
-			t.dstLength = t.origLength
-		case t.tag == tagGlyf:
-			t.dstOffset = uint32(len(out))
-			out, sum, err = reconstructGlyf(out, src, t, &f)
-		case t.tag == tagLoca:
-			// glyf wrote it, along with everything needed to check it.
-			sum = f.locaChecksum
-		case t.tag == tagHmtx:
-			t.dstOffset = uint32(len(out))
-			out, sum, err = reconstructHmtx(out, src, &f)
-			t.dstLength = uint32(len(out)) - t.dstOffset
-			if t.dstLength != t.origLength {
-				return nil, errors.New("fonts: the WOFF 2's hmtx table rebuilt to a different size than it declared")
-			}
-		default:
-			return nil, errors.New("fonts: the WOFF 2 transforms a table this engine does not know how to rebuild")
-		}
-		if err != nil {
+		if out, sum, err = rebuildTable(out, t, body, &f); err != nil {
 			return nil, err
 		}
-
 		binary.BigEndian.PutUint32(out[t.record+4:], sum)
 		binary.BigEndian.PutUint32(out[t.record+8:], t.dstOffset)
 		binary.BigEndian.PutUint32(out[t.record+12:], t.dstLength)
 		checksum += sum
 		checksum += computeULongSum(out[t.record+4 : t.record+16])
-
-		for len(out)%4 != 0 {
-			out = append(out, 0)
-		}
-		if uint64(t.dstOffset)+uint64(t.dstLength) > uint64(len(out)) {
-			return nil, errors.New("fonts: a WOFF 2 table was rebuilt shorter than its record says")
-		}
-		if len(out) > maxWOFFSfntSize {
-			return nil, errors.New("fonts: the WOFF 2 rebuilt to more than this engine will hold")
-		}
 	}
 
 	// head's checkSumAdjustment: the number that makes the whole font sum to a
@@ -514,6 +467,86 @@ func rebuildSfnt(flavor uint32, tables []woff2Table, body []byte) ([]byte, error
 		binary.BigEndian.PutUint32(out[head.dstOffset+8:], 0xB1B0AFBA-checksum)
 	}
 	return out, nil
+}
+
+// readHhea takes the count of metrics hmtx's transform needs from a table, if
+// it is hhea, from the decompressed data. A collection's fonts may share an
+// hhea, so this is asked of every font that names one, whether or not the
+// table has been written yet.
+func readHhea(t *woff2Table, body []byte, f *woff2Font) error {
+	if t.tag != tagHhea {
+		return nil
+	}
+	if uint64(t.srcOffset)+uint64(t.srcLength) > uint64(len(body)) {
+		return errors.New("fonts: a WOFF 2 table lies outside the decompressed font data")
+	}
+	if t.srcLength < 36 {
+		return errors.New("fonts: the WOFF 2's hhea table is too short to hold its metric count")
+	}
+	f.numHMetrics = binary.BigEndian.Uint16(body[t.srcOffset+34:])
+	return nil
+}
+
+// rebuildTable writes one table of the directory onto the end of out, padded
+// to four bytes — copied, or rebuilt from its transform — and returns its
+// checksum. It sets where the table landed on t, and reads and writes what the
+// font's tables tell each other on f.
+func rebuildTable(out []byte, t *woff2Table, body []byte, f *woff2Font) ([]byte, uint32, error) {
+	if uint64(t.srcOffset)+uint64(t.srcLength) > uint64(len(body)) {
+		return nil, 0, errors.New("fonts: a WOFF 2 table lies outside the decompressed font data")
+	}
+	src := body[t.srcOffset : t.srcOffset+t.srcLength]
+	if err := readHhea(t, body, f); err != nil {
+		return nil, 0, err
+	}
+
+	var sum uint32
+	var err error
+	switch {
+	case !t.transformed:
+		t.dstOffset = uint32(len(out))
+		out = append(out, src...)
+		// The checksum in the head table is of the finished font and
+		// cannot be known yet, so it is zeroed, summed as zero, and filled
+		// in at the end — which is what makes the total come out right.
+		if t.tag == tagHead {
+			if len(src) < 12 {
+				return nil, 0, errors.New("fonts: the WOFF 2's head table is too short")
+			}
+			binary.BigEndian.PutUint32(out[t.dstOffset+8:], 0)
+		}
+		sum = computeULongSum(out[t.dstOffset:])
+		t.dstLength = t.origLength
+	case t.tag == tagGlyf:
+		t.dstOffset = uint32(len(out))
+		out, sum, err = reconstructGlyf(out, src, t, f)
+	case t.tag == tagLoca:
+		// glyf wrote it, along with everything needed to check it.
+		sum = f.locaChecksum
+	case t.tag == tagHmtx:
+		t.dstOffset = uint32(len(out))
+		out, sum, err = reconstructHmtx(out, src, f)
+		t.dstLength = uint32(len(out)) - t.dstOffset
+		if t.dstLength != t.origLength {
+			return nil, 0, errors.New("fonts: the WOFF 2's hmtx table rebuilt to a different size than it declared")
+		}
+	default:
+		return nil, 0, errors.New("fonts: the WOFF 2 transforms a table this engine does not know how to rebuild")
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+
+	for len(out)%4 != 0 {
+		out = append(out, 0)
+	}
+	if uint64(t.dstOffset)+uint64(t.dstLength) > uint64(len(out)) {
+		return nil, 0, errors.New("fonts: a WOFF 2 table was rebuilt shorter than its record says")
+	}
+	if len(out) > maxWOFFSfntSize {
+		return nil, 0, errors.New("fonts: the WOFF 2 rebuilt to more than this engine will hold")
+	}
+	return out, sum, nil
 }
 
 // round4 rounds up to the next four-byte boundary, which is where every block

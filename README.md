@@ -132,9 +132,10 @@ font's `feat` offers: Apple Color Emoji's sequences are its ligatures; and its
 `kerx` and `trak`, its kerning and its tracking by size.
 
 **Fonts.** sfnt and CFF, Type 1, the WOFF and WOFF 2 wrappers a web font
-arrives in, a face of a TrueType or OpenType collection (`LoadCollection`), and
-fonts whose glyphs are only bitmaps, as bitmap emoji fonts are; variable fonts instanced at a named or arbitrary point in their
-design space — where CSS's font-weight, font-width, font-style,
+arrives in, a face of a TrueType or OpenType collection, bare or wrapped as
+WOFF 2 (`LoadCollection`, and `LoadCollectionInstance` for a variable one), and fonts whose glyphs are
+only bitmaps, as bitmap emoji fonts are; variable fonts instanced at a named
+or arbitrary point in their design space — where CSS's font-weight, font-width, font-style,
 font-optical-sizing and font-variation-settings place them — subsetting, and
 the metrics a layout engine has to ask for —
 including what the fourteen standard PDF faces state, which is not the same

@@ -68,6 +68,27 @@ type WOFF2Options struct {
 	// compressor here — stored blocks are what a fixture needs — but a fixture
 	// that is going to be kept is worth making small, and a real stream is how.
 	Compressed []byte
+	// Collection makes the font a collection: its flavor 'ttcf', and the
+	// collection directory after the table directory, naming each font's
+	// tables by their index in Tables.
+	Collection *WOFF2Collection
+}
+
+// WOFF2Collection is the collection directory of a synthetic WOFF 2 font
+// collection (W3C WOFF 2.0 §5.3).
+type WOFF2Collection struct {
+	Version uint32 // 0x00010000 if zero
+	Fonts   []WOFF2CollectionFont
+	// StatedNumFonts overrides the count of fonts the directory states.
+	StatedNumFonts *int
+}
+
+// WOFF2CollectionFont is one font of a collection directory.
+type WOFF2CollectionFont struct {
+	Flavor uint32 // 0x00010000 if zero
+	Tables []int  // indices into WOFF2Options.Tables
+	// StatedNumTables overrides the count of tables the font states.
+	StatedNumTables *int
 }
 
 // WOFF2 builds a WOFF 2 font from the given tables.
@@ -75,6 +96,9 @@ func WOFF2(opts WOFF2Options) []byte {
 	flavor := opts.Flavor
 	if flavor == 0 {
 		flavor = 0x00010000
+	}
+	if opts.Collection != nil && opts.Flavor == 0 {
+		flavor = 0x74746366 // 'ttcf'
 	}
 	tables := append([]WOFF2Table(nil), opts.Tables...)
 
@@ -120,6 +144,34 @@ func WOFF2(opts WOFF2Options) []byte {
 		dir = appendBase128(dir, origLength)
 		if transformed {
 			dir = appendBase128(dir, uint32(len(body)))
+		}
+	}
+
+	if c := opts.Collection; c != nil {
+		version := c.Version
+		if version == 0 {
+			version = 0x00010000
+		}
+		dir = binary.BigEndian.AppendUint32(dir, version)
+		n := len(c.Fonts)
+		if c.StatedNumFonts != nil {
+			n = *c.StatedNumFonts
+		}
+		dir = append255(dir, n)
+		for _, f := range c.Fonts {
+			n := len(f.Tables)
+			if f.StatedNumTables != nil {
+				n = *f.StatedNumTables
+			}
+			dir = append255(dir, n)
+			fl := f.Flavor
+			if fl == 0 {
+				fl = 0x00010000
+			}
+			dir = binary.BigEndian.AppendUint32(dir, fl)
+			for _, i := range f.Tables {
+				dir = append255(dir, i)
+			}
 		}
 	}
 
@@ -182,6 +234,19 @@ var woff2Known = [63]string{
 	"bdat", "bloc", "bsln", "cvar", "fdsc", "feat", "fmtx", "fvar",
 	"gvar", "hsty", "just", "lcar", "mort", "morx", "opbd", "prop",
 	"trak", "Zapf", "Silf", "Glat", "Gloc", "Feat", "Sill",
+}
+
+// append255 writes a 255UInt16 (W3C WOFF 2.0 §4.1), in its shortest spelling.
+func append255(dst []byte, v int) []byte {
+	switch {
+	case v < 253:
+		return append(dst, byte(v))
+	case v < 506:
+		return append(dst, 255, byte(v-253))
+	case v < 762:
+		return append(dst, 254, byte(v-506))
+	}
+	return append(dst, 253, byte(v>>8), byte(v))
 }
 
 func woff2Tag(s string) uint32 {

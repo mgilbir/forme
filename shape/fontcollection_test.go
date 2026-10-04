@@ -4,12 +4,99 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"os"
 	"reflect"
 	"sort"
 	"testing"
 
 	"github.com/mgilbir/forme/font"
+	"github.com/mgilbir/forme/fonttest"
 )
+
+// woff2Collection wraps fonts as a WOFF 2 collection, a table two of them carry
+// with the same bytes stored once, none transformed.
+func woff2Collection(fonts ...[]byte) []byte {
+	var dir []fonttest.WOFF2Table
+	stored := map[string]int{}
+	c := &fonttest.WOFF2Collection{}
+	for _, data := range fonts {
+		tables := font.SFNTTables(data)
+		var tags []string
+		for tag := range tables {
+			tags = append(tags, tag)
+		}
+		sort.Strings(tags)
+		var f fonttest.WOFF2CollectionFont
+		f.Flavor = binary.BigEndian.Uint32(data)
+		for _, tag := range tags {
+			key := tag + string(tables[tag])
+			i, ok := stored[key]
+			if !ok {
+				i = len(dir)
+				stored[key] = i
+				dir = append(dir, fonttest.WOFF2Table{Tag: tag, Data: tables[tag]})
+			}
+			f.Tables = append(f.Tables, i)
+		}
+		c.Fonts = append(c.Fonts, f)
+	}
+	return fonttest.WOFF2(fonttest.WOFF2Options{Tables: dir, Collection: c, SpellOutTags: true})
+}
+
+// TestAFaceOfAWOFF2CollectionIsTheFontItWasMadeFrom wraps fixture faces — a
+// colour face, a bitmap face, a variable face — as a WOFF 2 collection, and
+// requires that each is loaded from it, described and cut as from the font it
+// was made from, and that Load says to load such a file face by face.
+func TestAFaceOfAWOFF2CollectionIsTheFontItWasMadeFrom(t *testing.T) {
+	sources := [][]byte{harfbuzzFont(t, "ColourPaint.ttf"), harfbuzzFont(t, "BitmapInk.ttf"), harfbuzzFont(t, "VarComposite.ttf")}
+	w := woff2Collection(sources...)
+	descs, err := CollectionFaces(w)
+	if err != nil || len(descs) != len(sources) {
+		t.Fatalf("CollectionFaces: %d, %v", len(descs), err)
+	}
+	if _, err := Load(w); err == nil || !bytes.Contains([]byte(err.Error()), []byte("LoadCollection")) {
+		t.Errorf("Load of a WOFF 2 collection: %v", err)
+	}
+	for i, src := range sources {
+		want, err := Load(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := LoadCollection(w, i)
+		if err != nil {
+			t.Fatalf("face %d: %v", i, err)
+		}
+		if descs[i].Name != want.Name() || got.Name() != want.Name() || got.Descriptor() != want.Descriptor() {
+			t.Errorf("face %d is %s %+v, alone %s %+v", i, got.Name(), got.Descriptor(), want.Name(), want.Descriptor())
+		}
+		for _, s := range []string{"AB", "office"} {
+			g1, _ := got.ShapeGlyphs(s)
+			g2, _ := want.ShapeGlyphs(s)
+			if !reflect.DeepEqual(g1, g2) {
+				t.Errorf("face %d shapes %q differently", i, s)
+			}
+		}
+		for gid := range want.NumGlyphs() {
+			a, b := &recordingPainter{}, &recordingPainter{}
+			_ = got.PaintGlyph(gid, PaintOptions{}, a)
+			_ = want.PaintGlyph(gid, PaintOptions{}, b)
+			if !reflect.DeepEqual(a.lines, b.lines) {
+				t.Errorf("face %d glyph %d paints differently", i, gid)
+			}
+		}
+	}
+	// The variable face, cut.
+	coords := map[string]float64{"wght": 700}
+	want, err := LoadInstance(sources[2], coords)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadCollectionInstance(w, 2, coords)
+	if err != nil || got.Descriptor() != want.Descriptor() {
+		t.Errorf("the variable face cut from the WOFF 2 collection: %v", err)
+	}
+}
 
 // buildCollection writes a TrueType collection of fonts, storing a table that
 // two of them carry with the same bytes once, as a collection's tools do: the
@@ -193,5 +280,87 @@ func TestACollectionIsAskedOnlyForTheFacesItHas(t *testing.T) {
 	}
 	if _, err := CollectionFaces([]byte("not a font")); !errors.Is(err, err) || err == nil {
 		t.Error("not a font was described")
+	}
+}
+
+// TestAnInstanceOfACollectionFaceIsTheInstanceOfItsFont builds a collection of
+// variable faces — glyf outlines with gvar, colour paints that vary, variable
+// composites and CFF2 — and requires that each face of it, cut at the ends of
+// its axes and between, is the face LoadInstance cuts from the font it was
+// made from: described the same, advancing, shaping, drawing and painting the
+// same.
+func TestAnInstanceOfACollectionFaceIsTheInstanceOfItsFont(t *testing.T) {
+	noto, err := os.ReadFile("../fonts/notosans/NotoSans-Variable.ttf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := [][]byte{noto, harfbuzzFont(t, "ColourInk.ttf"), harfbuzzFont(t, "VarComposite.ttf"), harfbuzzFont(t, "CFF2Blend.otf")}
+	coll := buildCollection(sources...)
+	cut := 0
+	for i, src := range sources {
+		def, err := Load(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		axes := def.Axes()
+		if len(axes) == 0 {
+			t.Fatalf("source %d does not vary", i)
+		}
+		for _, at := range []func(Axis) float64{
+			func(a Axis) float64 { return a.Min },
+			func(a Axis) float64 { return a.Max },
+			func(a Axis) float64 { return (a.Default + a.Max) / 2 },
+		} {
+			coords := map[string]float64{}
+			for _, a := range axes {
+				coords[a.Tag] = at(a)
+			}
+			want, werr := LoadInstance(src, coords)
+			got, gerr := LoadCollectionInstance(coll, i, coords)
+			if (werr == nil) != (gerr == nil) {
+				t.Fatalf("face %d at %v: %v alone and %v from the collection", i, coords, werr, gerr)
+			}
+			if werr != nil {
+				continue
+			}
+			cut++
+			label := fmt.Sprintf("face %d at %v", i, coords)
+			if got.Descriptor() != want.Descriptor() || got.Name() != want.Name() || got.NumGlyphs() != want.NumGlyphs() {
+				t.Fatalf("%s: %+v, and alone %+v", label, got.Descriptor(), want.Descriptor())
+			}
+			for _, s := range []string{"AB", "office", "Á"} {
+				g1, _ := got.ShapeGlyphs(s)
+				g2, _ := want.ShapeGlyphs(s)
+				if !reflect.DeepEqual(g1, g2) {
+					t.Errorf("%s shapes %q differently", label, s)
+				}
+			}
+			for gid := range min(want.NumGlyphs(), 120) {
+				if got.GlyphAdvance(gid) != want.GlyphAdvance(gid) {
+					t.Errorf("%s glyph %d advances %v, alone %v", label, gid, got.GlyphAdvance(gid), want.GlyphAdvance(gid))
+				}
+				var a, b []Segment
+				ea := got.GlyphOutline(gid, func(s Segment) bool { a = append(a, s); return true })
+				eb := want.GlyphOutline(gid, func(s Segment) bool { b = append(b, s); return true })
+				if (ea == nil) != (eb == nil) || !reflect.DeepEqual(a, b) {
+					t.Errorf("%s glyph %d draws differently", label, gid)
+				}
+				pa, pb := &recordingPainter{}, &recordingPainter{}
+				_ = got.PaintGlyph(gid, PaintOptions{}, pa)
+				_ = want.PaintGlyph(gid, PaintOptions{}, pb)
+				if !reflect.DeepEqual(pa.lines, pb.lines) {
+					t.Errorf("%s glyph %d paints differently", label, gid)
+				}
+			}
+		}
+	}
+	if cut < len(sources)*2 {
+		t.Fatalf("only %d instances were cut, so this test reaches too little", cut)
+	}
+	if _, err := LoadCollectionInstance(coll, len(sources), nil); err == nil {
+		t.Error("a face past the collection's was instanced")
+	}
+	if f, err := LoadCollectionInstance(sources[0], 0, map[string]float64{"wght": 700}); err != nil || f.Descriptor().Weight != 700 {
+		t.Errorf("a single font at 0: %v", err)
 	}
 }

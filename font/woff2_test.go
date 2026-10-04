@@ -409,7 +409,7 @@ func TestAMalformedWOFF2IsRefused(t *testing.T) {
 			fonttest.WOFF2Options{Garbage: []byte("this is not a Brotli stream at all")}},
 		{"font data that decompresses to nothing",
 			fonttest.WOFF2Options{Garbage: []byte{0x06}}}, // an empty stream
-		{"a font collection", fonttest.WOFF2Options{Flavor: 0x74746366}},
+		{"a collection flavor with no collection directory", fonttest.WOFF2Options{Flavor: 0x74746366}},
 	} {
 		built, _ := syntheticWOFF2(t, tc.opts)
 		if _, err := DecodeWOFF(built); err == nil {
@@ -626,6 +626,19 @@ func FuzzDecodeWOFF2(f *testing.F) {
 		list = append(list, fonttest.WOFF2Table{Tag: tag, Data: tabs[tag]})
 	}
 	f.Add(fonttest.WOFF2(fonttest.WOFF2Options{Tables: list}))
+	// And as a collection of two fonts sharing every table but the first,
+	// which the second has twice over.
+	all := make([]int, len(list))
+	for i := range all {
+		all[i] = i
+	}
+	second := append([]int{len(list)}, all[1:]...)
+	f.Add(fonttest.WOFF2(fonttest.WOFF2Options{
+		Tables: append(append([]fonttest.WOFF2Table(nil), list...), list[0]),
+		Collection: &fonttest.WOFF2Collection{Fonts: []fonttest.WOFF2CollectionFont{
+			{Tables: all}, {Tables: second},
+		}},
+	}))
 	f.Add([]byte("wOF2"))
 
 	f.Fuzz(func(t *testing.T, src []byte) {
@@ -641,20 +654,29 @@ func FuzzDecodeWOFF2(f *testing.F) {
 		}
 		// A rebuilt font that says it holds tables must hold them: every record
 		// has to address bytes that are there, or something downstream reads
-		// past the end of the slice.
+		// past the end of the slice. A collection's every font must.
 		if len(got) < 12 {
 			t.Fatalf("rebuilt a %d-byte font", len(got))
 		}
-		n := int(binary.BigEndian.Uint16(got[4:]))
-		if 12+16*n > len(got) {
-			t.Fatalf("%d records do not fit in %d bytes", n, len(got))
+		dirs := []int{0}
+		if fonts := CollectionOffsets(got); fonts != nil {
+			dirs = fonts
 		}
-		for i := 0; i < n; i++ {
-			rec := 12 + 16*i
-			off := uint64(binary.BigEndian.Uint32(got[rec+8:]))
-			length := uint64(binary.BigEndian.Uint32(got[rec+12:]))
-			if off+length > uint64(len(got)) {
-				t.Fatalf("record %d addresses %d..%d of %d bytes", i, off, off+length, len(got))
+		for _, d := range dirs {
+			if d+12 > len(got) {
+				t.Fatalf("a directory at %d of %d bytes", d, len(got))
+			}
+			n := int(binary.BigEndian.Uint16(got[d+4:]))
+			if d+12+16*n > len(got) {
+				t.Fatalf("%d records do not fit in %d bytes", n, len(got))
+			}
+			for i := 0; i < n; i++ {
+				rec := d + 12 + 16*i
+				off := uint64(binary.BigEndian.Uint32(got[rec+8:]))
+				length := uint64(binary.BigEndian.Uint32(got[rec+12:]))
+				if off+length > uint64(len(got)) {
+					t.Fatalf("record %d addresses %d..%d of %d bytes", i, off, off+length, len(got))
+				}
 			}
 		}
 		again, err := DecodeWOFF2(src)
