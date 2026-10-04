@@ -18,17 +18,28 @@ import (
 // reader sees at once, and a worse outcome than the honest refusal.
 //
 // The obvious source of those positions is the shaper: forme returns a
-// Glyph.Cluster per glyph, "the byte offset of the first character this glyph
-// came from", and a change in it looks like a boundary. It is not one. A shaping
-// cluster and a grapheme cluster answer different questions — one is "what did
-// the font draw together", the other is "what does a reader treat as a
-// character" — and this file is the measurement that settles it, because the
-// question is about a dependency's behaviour and not about a specification.
+// Glyph.Cluster per glyph, and a change in it looks like a boundary. It is not
+// one. A shaping cluster and a grapheme cluster answer different questions —
+// one is "what did the font draw together", the other is "what does a reader
+// treat as a character" — and this file is the measurement that settles it,
+// because the question is about a dependency's behaviour and not about a
+// specification.
 //
 // Each case below is a string whose grapheme cluster segmentation UAX #29 states
 // outright, shaped through the bundled face. The clusters that come back are
 // finer than the grapheme clusters in every one of them, so a break taken at a
 // cluster change would land inside a grapheme cluster.
+//
+// The clusters were once a character's each, and four cases showed it: a base
+// with two combining marks, a digit and an enclosing keycap, a regional
+// indicator pair and Thai SARA AM. Since the shaper forms clusters as
+// HarfBuzz does (shape/cluster.go), a letter's marks, a pair of regional
+// indicators and a Thai syllable's pieces are one cluster, and those four have
+// one cluster per grapheme cluster; they were taken out rather than their
+// expectations edited. Re-derived: the finding stands, because HarfBuzz forms
+// its clusters from marks, emoji modifiers, joiners and regional indicators
+// and not from UAX #29, and the two cases left show what it does not join — a
+// Prepend character, and Hangul jamo before a syllable.
 //
 // # What would be needed instead
 //
@@ -91,19 +102,14 @@ func TestShapingClustersAreFinerThanGraphemeClusters(t *testing.T) {
 		// boundary would have allowed.
 		rule string
 	}{{
-		// A base with two combining marks. The first composes into the base and
-		// the second cannot, so the shaper draws two glyphs and gives the second
-		// the offset of the mark it came from — a boundary between a letter and
-		// its own accent.
-		name: "base with two combining marks", text: "á̈b",
-		clusters: []int{0, 3, 5}, graphemes: []int{0, 5},
-		rule: "GB9, × Extend",
-	}, {
-		// A digit and a combining enclosing keycap, which is what a keycap emoji
-		// is made of. U+20E3 is Grapheme_Extend.
-		name: "combining enclosing keycap", text: "1⃣",
-		clusters: []int{0, 1}, graphemes: []int{0},
-		rule: "GB9, × Extend",
+		// U+0600 ARABIC NUMBER SIGN is GCB=Prepend: it is written before the
+		// digits it stands over, and is one grapheme cluster with the first of
+		// them. To a shaper it is a character like any other, and the digit
+		// after it begins a cluster of its own. HarfBuzz 14.5.0 gives the same
+		// two.
+		name: "a prepended number sign", text: "\u0600\u0661",
+		clusters: []int{0, 2}, graphemes: []int{0},
+		rule: "GB9b, Prepend ×",
 	}, {
 		// Hangul written as conjoining jamo, with a leading consonant written
 		// twice before its vowel. The three are one grapheme cluster, and the
@@ -125,20 +131,6 @@ func TestShapingClustersAreFinerThanGraphemeClusters(t *testing.T) {
 		name: "a leading jamo written twice", text: "ᄀ가",
 		clusters: []int{0, 3}, graphemes: []int{0},
 		rule: "GB6, L × L and L × V",
-	}, {
-		// A flag: two regional indicator symbols, one grapheme cluster. Nothing
-		// in shaping pairs them, so a break between them turns a flag into two
-		// letters in boxes.
-		name: "regional indicator pair", text: "\U0001F1EF\U0001F1F5",
-		clusters: []int{0, 4}, graphemes: []int{0},
-		rule: "GB12 and GB13, the regional indicator pair",
-	}, {
-		// U+0E33 THAI CHARACTER SARA AM is GCB=SpacingMark: it takes width of
-		// its own, so it is not a combining mark to a shaper, and it is still
-		// part of the cluster its consonant begins.
-		name: "Thai spacing mark", text: "กำ",
-		clusters: []int{0, 3}, graphemes: []int{0},
-		rule: "GB9a, × SpacingMark",
 	}}
 
 	for _, c := range cases {

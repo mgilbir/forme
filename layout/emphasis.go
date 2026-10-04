@@ -2,6 +2,7 @@ package layout
 
 import (
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/mgilbir/forme/css"
@@ -666,7 +667,11 @@ func (s *unitSpan) add(lo, hi style.Unit) {
 // A unit is a grapheme cluster, as for letter-spacing. A shaping cluster that
 // holds several — a ligature — is shared between them evenly, in the order
 // they are drawn; one unit drawn as several clusters — a Thai letter with its
-// marks — spans them all.
+// marks — spans them all. A unit nothing is drawn for takes no share: the
+// shaper merges a character it takes out into the cluster beside it, as
+// HarfBuzz does, so the override ShapedText puts before a right-to-left run
+// begins the cluster of the letter after it, and the letter's width is the
+// letter's.
 //
 // It is linear in the text and its glyphs: what each glyph asks — which unit
 // its cluster begins in, where the cluster ends, how many spacings fall inside
@@ -691,6 +696,8 @@ func unitSpans(v DrawText) []unitSpan {
 	bounds := segment.Boundaries(nil, text)
 	spans := make([]unitSpan, len(bounds)+1)
 	unitOf := make([]int, n)
+	// drawnBefore counts the units before one that something is drawn for.
+	drawnBefore := make([]int, len(spans)+1)
 	for k, start := 0, 0; k < len(spans); k++ {
 		end := n
 		if k < len(bounds) {
@@ -699,6 +706,10 @@ func unitSpans(v DrawText) []unitSpan {
 		spans[k].text = text[start:end]
 		for b := start; b < end; b++ {
 			unitOf[b] = k
+		}
+		drawnBefore[k+1] = drawnBefore[k]
+		if strings.IndexFunc(spans[k].text, func(r rune) bool { return !shape.DrawsNothing(r) }) >= 0 {
+			drawnBefore[k+1]++
 		}
 		start = end
 	}
@@ -744,17 +755,28 @@ func unitSpans(v DrawText) []unitSpan {
 		}
 		ce := endAfter[c]
 		first, last := unitOf[c], unitOf[ce-1]
-		units := last - first + 1
-		for k := 0; k < units; k++ {
-			// The k-th unit of the cluster in logical order is drawn k-th along
-			// the line, or k-th from its far end where the run reads right to
-			// left.
-			j := k
-			if v.RTL && !v.Upright {
-				j = units - 1 - k
+		// The units that share the glyph: those something is drawn for, or
+		// all of them where there is none.
+		drawn := func(k int) bool { return drawnBefore[k+1] > drawnBefore[k] }
+		units := drawnBefore[last+1] - drawnBefore[first]
+		if units == 0 {
+			units = last - first + 1
+			drawn = func(int) bool { return true }
+		}
+		for k, at := first, 0; k <= last; k++ {
+			if !drawn(k) {
+				continue
 			}
-			spans[first+k].add(pen.Add(adv.Mul(float64(j)/float64(units))),
+			// The at-th unit of the cluster in logical order is drawn at-th
+			// along the line, or at-th from its far end where the run reads
+			// right to left.
+			j := at
+			if v.RTL && !v.Upright {
+				j = units - 1 - at
+			}
+			spans[k].add(pen.Add(adv.Mul(float64(j)/float64(units))),
 				pen.Add(adv.Mul(float64(j+1)/float64(units))))
+			at++
 		}
 		pen = pen.Add(adv)
 		if spacedBefore != nil && (i == len(glyphs)-1 || glyphs[i+1].Cluster != c) {

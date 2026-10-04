@@ -208,6 +208,23 @@ func (f *Face) hangulPreprocess(runes []rune, offsets []int) ([]rune, []int) {
 	return out, off
 }
 
+// hangulJoins is, for formClusters, whether a character of a preprocessed
+// Hangul run continues the grapheme before it as HarfBuzz, which forms the
+// clusters before it preprocesses, sees it: a tone mark moved in front of its
+// syllable does not — it is already of the syllable's cluster — and a dotted
+// circle put beside a tone mark with nothing to sit on does, as the tone mark
+// it was made from did.
+func hangulJoins(runes []rune, offsets []int, i int) (join, decided bool) {
+	sameAs := func(j int) bool { return j >= 0 && j < len(runes) && offsets[j] == offsets[i] }
+	switch {
+	case runes[i] == dottedCircle && (sameAs(i-1) && isHangulTone(runes[i-1]) || sameAs(i+1) && isHangulTone(runes[i+1])):
+		return true, true
+	case isHangulTone(runes[i]) && sameAs(i+1) && runes[i+1] != dottedCircle:
+		return false, true
+	}
+	return false, false
+}
+
 // hangulFeatures is which jamo feature each character of a preprocessed run is
 // for: the leading, vowel and trailing jamo of every syllable the run spells as
 // jamo, and nothing for anything else.

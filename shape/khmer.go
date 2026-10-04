@@ -224,6 +224,9 @@ func (sh shaper) shapeKhmer(buf []Glyph, runes []rune, p *plan) []Glyph {
 			syllable, record = sh.insertGlyphAt(syllable, record, 0, dotted,
 				indicInfo{cat: catDottedCircle, pos: posBaseC})
 		}
+		// The syllables either side, which a merge of clusters reaches into.
+		sh := sh
+		sh.edges = &clusterEdges{before: out, after: buf[syl.end:]}
 		syllable = sh.shapeKhmerSyllable(syllable, &record, p)
 		sh.f.runWork.size(len(out) + len(syllable))
 		out = append(out, syllable...)
@@ -242,7 +245,7 @@ func (sh shaper) shapeKhmer(buf []Glyph, runes []rune, p *plan) []Glyph {
 
 	// The joiners have now done everything they are for. What is left is a
 	// character with no shape, which must not reach the page.
-	return dropUnsubstituted(buf, func(i int) bool {
+	return sh.dropUnsubstituted(buf, func(i int) bool {
 		return i < len(info) && (indicIsJoiner(info[i].cat) || info[i].ignorable)
 	})
 }
@@ -262,15 +265,13 @@ func (sh shaper) shapeKhmerSyllable(buf []Glyph, info *[]indicInfo, p *plan) []G
 	// place Khmer's order differs from the Indic model's. It can: nothing in the
 	// reordering asks the font a question, so there is nothing for those two
 	// features to have answered first.
-	khmerReorder(buf, *info, 0, len(buf))
+	khmerReorder(sh.edges, buf, *info, 0, len(buf))
 
 	// 'locl', 'ccmp' and the basic features, one stage held to the syllable. A
 	// masked feature is for the glyphs the reordering marked and starts nowhere
 	// else: 'pref' is written about a subscript Ro, and the base the Ro is
 	// written under is not what it is for.
 	apply(p.reorder, p.after)
-
-	oneCluster(buf, 0, len(buf))
 	return buf
 }
 
@@ -283,7 +284,10 @@ func (sh shaper) shapeKhmerSyllable(buf []Glyph, info *[]indicInfo, p *plan) []G
 // of the things that move here — a pre-base vowel sign and a subscript Ro — go
 // to the same place, the front of the syllable, whatever the font does with
 // them.
-func khmerReorder(buf []Glyph, info []indicInfo, start, end int) {
+//
+// What moves is merged into one cluster with what it moved past, as HarfBuzz
+// merges it; e is the syllables either side. See cluster.go.
+func khmerReorder(e *clusterEdges, buf []Glyph, info []indicInfo, start, end int) {
 	if start >= end {
 		return
 	}
@@ -309,6 +313,7 @@ func khmerReorder(buf []Glyph, info []indicInfo, start, end int) {
 			// to the front of the syllable and asked for the pre-base form.
 			buf[i].mask |= maskPref
 			buf[i+1].mask |= maskPref
+			mergeClusters(e, buf, start, i+2)
 			moveGlyphToFront(buf, info, start, i)
 			moveGlyphToFront(buf, info, start+1, i+1)
 			// What followed the Ro is drawn after it and is asked for the
@@ -324,6 +329,7 @@ func khmerReorder(buf []Glyph, info []indicInfo, start, end int) {
 
 		case info[i].cat == catVPre:
 			// A sign written to the left of the letter, drawn before it.
+			mergeClusters(e, buf, start, i+1)
 			moveGlyphToFront(buf, info, start, i)
 		}
 	}

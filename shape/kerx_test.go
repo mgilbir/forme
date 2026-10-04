@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -106,20 +105,9 @@ func TestAATPositioningAgreesWithHarfBuzz(t *testing.T) {
 		}
 		glyphs, _ := f.ShapeGlyphsInContext(c.text, "", "", Features{NoKerning: !c.kern, PointSize: c.size})
 		units := func(v float64) int { return int(math.Round(v * float64(f.unitsPerEm) / 1000)) }
-		// HarfBuzz merges the cluster of a character that continues a
-		// grapheme — a mark, a joined emoji, the second regional indicator —
-		// into the one before it (hb_form_clusters), and this package,
-		// everywhere it shapes, leaves it its own: a difference of clusters
-		// and not of positions, which is not this test's. Where the text has
-		// one, the clusters are not compared.
-		marks := slices.Contains(graphemeContinues([]rune(c.text)), true)
 		var got [][5]int
-		for i, g := range glyphs {
-			cluster := g.Cluster
-			if marks && i < len(c.glyphs) {
-				cluster = c.glyphs[i][1]
-			}
-			got = append(got, [5]int{g.GID, cluster, units(g.XAdvance), units(g.XOffset), units(g.YOffset)})
+		for _, g := range glyphs {
+			got = append(got, [5]int{g.GID, g.Cluster, units(g.XAdvance), units(g.XOffset), units(g.YOffset)})
 		}
 		label := c.font + " " + strconv.Quote(c.text) + " at " + strconv.FormatFloat(c.size, 'g', -1, 64)
 		if !c.kern {

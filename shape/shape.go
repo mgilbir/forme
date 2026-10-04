@@ -1,5 +1,7 @@
 package shape
 
+import "slices"
+
 // Measuring shaped text: the widths of what the ShapeGlyphs family draws, and
 // what a face offers to be asked for.
 
@@ -103,7 +105,7 @@ func (f *Face) MeasureShapedMergedSpan(s string, size float64,
 	outerBefore, outerAfter := GroupContext(before, after, mergeBefore, mergeAfter)
 	text := mergeBefore + s + mergeAfter
 	whole := f.ShapeGroup(text, outerBefore, outerAfter, kerns, off)
-	return GroupSpan(GroupAdvances(whole, len(text)),
+	return GroupSpan(GroupAdvances(whole, text),
 		len(mergeBefore), len(mergeBefore)+len(s), size)
 }
 
@@ -139,19 +141,65 @@ func GroupContext(before, after, mergeBefore, mergeAfter string) (outerBefore, o
 // search, so that a stretch is two lookups.
 //
 // The glyphs need not be in logical order: a right-to-left run comes back the
-// way the pen meets it, and each glyph is charged to its own cluster here, so
-// the order it arrived in does not matter.
-func GroupAdvances(whole []Glyph, bytes int) []float64 {
+// way the pen meets it, and each glyph is charged to its own character here
+// (see clusterOwners), so the order it arrived in does not matter. text is the
+// group's, the string the glyphs were shaped from.
+func GroupAdvances(whole []Glyph, text string) []float64 {
+	bytes := len(text)
 	cum := make([]float64, bytes+1)
-	for _, g := range whole {
-		if g.Cluster >= 0 && g.Cluster < bytes {
-			cum[g.Cluster+1] += g.XAdvance
+	owners := clusterOwners(whole, text)
+	for i, g := range whole {
+		if at := owners[i]; at >= 0 && at < bytes {
+			cum[at+1] += g.XAdvance
 		}
 	}
 	for i := 1; i <= bytes; i++ {
 		cum[i] += cum[i-1]
 	}
 	return cum
+}
+
+// clusterOwners is, for each glyph, the byte offset of the character it is
+// charged to where a run is cut out of the text it was shaped with: the first
+// character of its cluster that is not a default-ignorable one, or the
+// cluster's first where all of them are.
+//
+// A cluster's offset is its first character, and that is a cluster's owner
+// for every merge but one. A character nothing is drawn for is taken out, and
+// its cluster merged into the glyph beside it, as HarfBuzz merges one — so in
+// a right-to-left run a zero width non-joiner before a letter, set in an
+// element of its own, gives the letter after it its offset, and a run cut by
+// clusters charged the letter's width to the non-joiner's element and drew it
+// in neither (shaping-no-join-003). The letter is still the glyph's, and the
+// character it is charged to is the letter. A ligature is still its first
+// character's, and a letter and its marks their base's.
+func clusterOwners(glyphs []Glyph, text string) []int {
+	// Where each cluster ends is where the next begins: the starts, sorted
+	// once, so that a run of a thousand glyphs is not a million comparisons.
+	starts := make([]int, 0, len(glyphs))
+	for _, g := range glyphs {
+		starts = append(starts, g.Cluster)
+	}
+	slices.Sort(starts)
+	starts = slices.Compact(starts)
+	owners := make([]int, len(glyphs))
+	for i, g := range glyphs {
+		owners[i] = g.Cluster
+		if g.Cluster < 0 || g.Cluster >= len(text) {
+			continue
+		}
+		end := len(text)
+		if j, _ := slices.BinarySearch(starts, g.Cluster+1); j < len(starts) {
+			end = min(starts[j], len(text))
+		}
+		for at, r := range text[g.Cluster:end] {
+			if !isDefaultIgnorable(r) {
+				owners[i] = g.Cluster + at
+				break
+			}
+		}
+	}
+	return owners
 }
 
 // GroupSpan is where one stretch sits within a group already measured by

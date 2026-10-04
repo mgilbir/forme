@@ -683,6 +683,14 @@ type shaper struct {
 	f *Face
 	l *layout
 
+	// edges is what lies either side of a syllable shaped on its own, which
+	// a merge of clusters reaches into; nil for a run shaped whole. See
+	// cluster.go.
+	edges *clusterEdges
+	// keptAhead says something of the run's buffer is drawn before it on the
+	// page. See shapeContext.keptBefore and dropGlyphsIf.
+	keptAhead bool
+
 	// morx says the run's substitutions are the face's morx and not its GSUB
 	// (morx.go), which positioning has one thing to know about: see
 	// positioningFor.

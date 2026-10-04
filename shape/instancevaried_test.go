@@ -99,14 +99,11 @@ func readInstanceVariedGolden(t *testing.T) []*variedFace {
 		case "H":
 			var glyphs []hbPosition
 			for _, g := range fields[1:] {
-				parts := strings.Split(g, ",")
-				var n [5]int
-				for i := range n {
-					if n[i], err = strconv.Atoi(parts[i]); err != nil {
-						t.Fatalf("%q: %v", g, err)
-					}
+				p, err := parseHBPosition(g)
+				if err != nil {
+					t.Fatalf("%q: %v", line, err)
 				}
-				glyphs = append(glyphs, hbPosition{n[0], n[1], n[2], n[3], n[4]})
+				glyphs = append(glyphs, p)
 			}
 			loc.shaped = append(loc.shaped, glyphs)
 		default:
@@ -345,7 +342,7 @@ func TestInstancePositioningAgreesWithHarfBuzz(t *testing.T) {
 						continue
 					}
 					for k, g := range got {
-						p := hbPosition{g.GID, f.units(g.XAdvance), f.units(g.YAdvance), f.units(g.XOffset), f.units(g.YOffset)}
+						p := positionOf(f, g)
 						if p != w[k] {
 							t.Errorf("%v %s: glyph %d is %v, want %v", loc.coords, describeRunes(s), k, p, w[k])
 						}
@@ -419,7 +416,12 @@ func TestInstanceKernsAcrossARunBoundaryAtItsLocation(t *testing.T) {
 					t.Fatalf("%q: %d and %d glyphs, want 1 and 1 of %d", s, len(a), len(b), len(w))
 				}
 				for k, g := range []Glyph{a[0], b[0]} {
-					p := hbPosition{g.GID, f.units(g.XAdvance), f.units(g.YAdvance), f.units(g.XOffset), f.units(g.YOffset)}
+					p := positionOf(f, g)
+					if k == 1 {
+						// Shaped on its own, the second half's clusters
+						// start at its own start.
+						p.cluster += len(first)
+					}
 					if p != w[k] {
 						t.Errorf("%v %q cut in two: glyph %d is %v, want %v", loc.coords, s, k, p, w[k])
 					}

@@ -592,10 +592,10 @@ func (br *Breaker) advances(key groupKey, size float64) []float64 {
 		for i := range glyphs {
 			glyphs[i].XAdvance = -glyphs[i].YAdvance
 		}
-		cum = shape.GroupAdvances(glyphs, len(key.whole))
+		cum = shape.GroupAdvances(glyphs, key.whole)
 	} else if !ok {
 		glyphs := key.face.ShapeGroup(key.whole, key.before, key.after, key.kerns, key.off)
-		cum = shape.GroupAdvances(glyphs, len(key.whole))
+		cum = shape.GroupAdvances(glyphs, key.whole)
 	}
 	if !ok {
 		if br.grouped == nil {

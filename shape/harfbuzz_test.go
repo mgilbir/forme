@@ -349,8 +349,8 @@ func TestTheHarfBuzzOracleHasTeeth(t *testing.T) {
 		t.Fatalf("the fixture shaped to %d glyphs", len(glyphs))
 	}
 	right := []hbGlyph{
-		{gid: glyphs[0].GID, adv: int(glyphs[0].XAdvance)},
-		{gid: glyphs[1].GID, adv: int(glyphs[1].XAdvance)},
+		{gid: glyphs[0].GID, adv: int(glyphs[0].XAdvance), cluster: glyphs[0].Cluster},
+		{gid: glyphs[1].GID, adv: int(glyphs[1].XAdvance), cluster: glyphs[1].Cluster},
 	}
 	if same, why := sameAsHarfBuzz(f, glyphs, right); !same {
 		t.Fatalf("the comparison rejects a correct answer: %s", why)
@@ -363,6 +363,7 @@ func TestTheHarfBuzzOracleHasTeeth(t *testing.T) {
 		{func(g []hbGlyph) []hbGlyph { g[0].adv++; return g }, "a different advance"},
 		{func(g []hbGlyph) []hbGlyph { g[1].dx = 5; return g }, "a different offset"},
 		{func(g []hbGlyph) []hbGlyph { g[1].dy = -5; return g }, "a different vertical offset"},
+		{func(g []hbGlyph) []hbGlyph { g[1].cluster = 0; return g }, "a different cluster"},
 		{func(g []hbGlyph) []hbGlyph { return g[:1] }, "one glyph too few"},
 		{func(g []hbGlyph) []hbGlyph { return append(g, hbGlyph{gid: 1}) }, "one glyph too many"},
 	} {
@@ -377,6 +378,9 @@ func TestTheHarfBuzzOracleHasTeeth(t *testing.T) {
 // which is what HarfBuzz reports and not what this package does.
 type hbGlyph struct {
 	gid, adv, dx, dy int
+	// cluster is the glyph's cluster, a byte offset into the string, where
+	// the expectation states one, and -1 where it does not.
+	cluster int
 }
 
 // sameAsHarfBuzz compares a shaped run against the expectation, converting the
@@ -397,6 +401,8 @@ func sameAsHarfBuzz(f *Face, got []Glyph, want []hbGlyph) (bool, string) {
 		case got[i].XOffset != f.scale(want[i].dx) || got[i].YOffset != f.scale(want[i].dy):
 			return false, fmt.Sprintf("glyph %d is placed at (%v, %v), want (%v, %v)",
 				i, got[i].XOffset, got[i].YOffset, f.scale(want[i].dx), f.scale(want[i].dy))
+		case want[i].cluster >= 0 && got[i].Cluster != want[i].cluster:
+			return false, fmt.Sprintf("glyph %d is in cluster %d, want %d", i, got[i].Cluster, want[i].cluster)
 		}
 	}
 	return true, ""
@@ -448,6 +454,15 @@ func parseExpectedGlyphs(line string) ([]hbGlyph, error) {
 	}
 	var out []hbGlyph
 	for _, field := range strings.Fields(line) {
+		// A cluster, where the expectation states one, after an @.
+		cluster := -1
+		if at := strings.IndexByte(field, '@'); at >= 0 {
+			n, err := strconv.Atoi(field[at+1:])
+			if err != nil {
+				return nil, fmt.Errorf("%q: %v", field, err)
+			}
+			cluster, field = n, field[:at]
+		}
 		parts := strings.Split(field, ",")
 		if len(parts) != 2 && len(parts) != 4 {
 			return nil, fmt.Errorf("%q has %d parts, want 2 or 4", field, len(parts))
@@ -460,7 +475,7 @@ func parseExpectedGlyphs(line string) ([]hbGlyph, error) {
 			}
 			nums[i] = n
 		}
-		g := hbGlyph{gid: nums[0], adv: nums[1]}
+		g := hbGlyph{gid: nums[0], adv: nums[1], cluster: cluster}
 		if len(nums) == 4 {
 			g.dx, g.dy = nums[2], nums[3]
 		}

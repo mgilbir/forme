@@ -242,6 +242,9 @@ func (sh shaper) shapeMyanmar(buf []Glyph, runes []rune, p *plan) []Glyph {
 			syllable, record = sh.insertGlyphAt(syllable, record, 0, dotted,
 				indicInfo{cat: catDottedCircle, pos: posBaseC})
 		}
+		// The syllables either side, which a merge of clusters reaches into.
+		sh := sh
+		sh.edges = &clusterEdges{before: out, after: buf[syl.end:]}
 		syllable = sh.shapeMyanmarSyllable(syllable, &record, p)
 		sh.f.runWork.size(len(out) + len(syllable))
 		out = append(out, syllable...)
@@ -260,7 +263,7 @@ func (sh shaper) shapeMyanmar(buf []Glyph, runes []rune, p *plan) []Glyph {
 		buf, _, _ = sh.applyLookups(buf, p.stage(s), 0, len(buf), 0, len(buf), hooks)
 	}
 
-	return dropUnsubstituted(buf, func(i int) bool {
+	return sh.dropUnsubstituted(buf, func(i int) bool {
 		return i < len(info) && (indicIsJoiner(info[i].cat) || info[i].ignorable)
 	})
 }
@@ -281,11 +284,9 @@ func (sh shaper) shapeMyanmarSyllable(buf []Glyph, info *[]indicInfo, p *plan) [
 	// syllable so that neither can join one syllable to the next.
 	apply(p.syllables, p.reorder)
 
-	myanmarReorder(buf, *info, 0, len(buf))
+	myanmarReorder(sh.edges, buf, *info, 0, len(buf))
 
 	apply(p.reorder, p.after)
-
-	oneCluster(buf, 0, len(buf))
 	return buf
 }
 
@@ -308,7 +309,10 @@ func myanmarIsBase(c indicCat) bool {
 // There is one reordering and it happens before the font's rules run: nothing
 // in it depends on what the font makes, because Myanmar's model asks the font
 // no questions.
-func myanmarReorder(buf []Glyph, info []indicInfo, start, end int) {
+//
+// The sort merges the clusters of each glyph it moves with those it moves
+// past, as HarfBuzz's buffer sort does; e is the syllables either side.
+func myanmarReorder(e *clusterEdges, buf []Glyph, info []indicInfo, start, end int) {
 	if start >= end {
 		return
 	}
@@ -380,7 +384,7 @@ func myanmarReorder(buf []Glyph, info []indicInfo, start, end int) {
 		}
 	}
 
-	sortIndicByPosition(buf, info, start, end)
+	sortMergingClusters(e, buf, info, start, end)
 
 	// The pre-base signs come out of the sort in the order they were written,
 	// and are drawn in the opposite one: a syllable carrying two of them draws

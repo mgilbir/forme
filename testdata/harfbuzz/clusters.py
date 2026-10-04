@@ -1,0 +1,126 @@
+# Shapes strings in a face per script with HarfBuzz and writes the glyphs and
+# the clusters it gives them, so that shape/clusters_test.go can hold Glyph.Cluster
+# to them.
+#
+#   make hbclusters
+#
+# HarfBuzz's default cluster level, HB_BUFFER_CLUSTER_LEVEL_MONOTONE_GRAPHEMES,
+# makes a grapheme one cluster before anything else happens (hb_form_clusters)
+# and merges clusters wherever a substitution joins glyphs, a reordering moves
+# them or a glyph is taken out. The corpora shape.py writes for are compared
+# with their clusters; this reaches what they do not: the scripts whose shapers
+# reorder or insert by their own rules — Thai and Lao, Hangul and its tone
+# marks, Myanmar, Hebrew — emoji sequences, regional indicator pairs and tag
+# sequences, and a run cut by a character nothing is drawn for.
+#
+# The strings are drawn at random, from a fixed seed so that the file is the
+# same each time it is written, from each script's own characters, each
+# beginning with a letter as difffuzz.py's do, and a few are written by hand.
+# The faces are named on the command line as NAME=PATH; a face whose file is
+# not there (a corpus not fetched) is left out, and shape/clusters_test.go
+# leaves out a face it cannot find.
+#
+# What is written is each string's glyphs and clusters only: positions are the
+# other oracles' to compare.
+import hashlib
+import os
+import random
+import sys
+import unicodedata
+
+from oracle import harfbuzz
+
+hb = harfbuzz()
+
+out_path = sys.argv[1]
+faces = [a.split("=", 1) for a in sys.argv[2:]]
+
+# Each face's scripts, each its characters as ranges, and the strings written
+# by hand. A string is drawn from one script, since HarfBuzz is handed a run of
+# one script and this package cuts a string that changes script into runs.
+SCRIPTS = {
+    "NotoSans-Variable.ttf": (
+        [[(0x0041, 0x005A), (0x0061, 0x007A), (0x00C0, 0x00FF), (0x0300, 0x036F)],
+         [(0x0900, 0x097F)]],
+        ["á", "‪abc", "­abc", "a​b", "क‪्ष",
+         "अॅ", "र्इ", "क्कि", "ȩ́"],
+    ),
+    "NotoSansArabic.ttf": (
+        [[(0x0621, 0x065F), (0x0670, 0x06D3)]],
+        ["لا", "ب‌ب", "بَّ", "ی‌یِ"],
+    ),
+    "NotoSansKhmer.ttf": (
+        [[(0x1780, 0x17DD)]],
+        ["ក្រេ", "កេ", "ង្រ្គ"],
+    ),
+    "NotoSansJavanese.ttf": ([[(0xA980, 0xA9CD)]], []),
+    "NotoSansBalinese.ttf": ([[(0x1B00, 0x1B4B)]], []),
+    "NotoSerifTibetan.ttf": ([[(0x0F00, 0x0FD4)]], []),
+    "NotoSansHebrew-Regular.ttf": (
+        [[(0x05B0, 0x05C7), (0x05D0, 0x05EA)]],
+        ["שָׁ", "בְּ"],
+    ),
+    "Unifont-Regular.otf": (
+        [[(0x0E01, 0x0E3A), (0x0E40, 0x0E4E)], [(0x0E81, 0x0EBD), (0x0EC0, 0x0ECE)], [(0x1000, 0x109F)],
+         [(0x1100, 0x1112), (0x1161, 0x1175), (0x11A8, 0x11C2), (0xAC00, 0xAC40), (0x302E, 0x302F)]],
+        ["กำ", "ก้ำ", "ကြေ", "가〮", "가〮"],
+    ),
+    "NotoSansKR-Regular.otf": (
+        [[(0x1100, 0x1112), (0x1161, 0x1175), (0x11A8, 0x11C2), (0xAC00, 0xAC40), (0x302E, 0x302F)]],
+        ["값갳갌〮", "ᆲ〯", "ᅩ〮ᅪ"],
+    ),
+    "Noto-COLRv1.ttf": (
+        [[(0x1F466, 0x1F469), (0x1F3FB, 0x1F3FF), (0x200D, 0x200D), (0x1F1E6, 0x1F1FF),
+          (0x2764, 0x2764), (0xFE0F, 0xFE0F), (0x1F3F3, 0x1F3F3), (0x1F308, 0x1F308),
+          (0x0030, 0x0039), (0x20E3, 0x20E3), (0xE0061, 0xE007F)]],
+        ["\U0001f44d\U0001f3fd", "\U0001f469‍\U0001f4bb", "\U0001f468‍\U0001f469‍\U0001f467‍\U0001f466",
+         "\U0001f3f3️‍\U0001f308", "\U0001f1f3\U0001f1f1\U0001f1ef", "1️⃣",
+         "\U0001f3f4\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f"],
+    ),
+}
+
+SAMPLES = 300
+
+
+def strings(name, rng):
+    scripts, hand = SCRIPTS[name]
+    out = list(hand)
+    for ranges in scripts:
+        cps = [c for a, b in ranges for c in range(a, b + 1) if unicodedata.category(chr(c)) != "Cn"]
+        letters = [c for c in cps if unicodedata.category(chr(c)) in ("Lo", "Lu", "Ll", "So", "Nd")]
+        for _ in range(SAMPLES):
+            k = rng.choice([1, 2, 2, 3, 3, 4, 5, 6, 8])
+            out.append(chr(rng.choice(letters)) + "".join(chr(rng.choice(cps)) for _ in range(k - 1)))
+    return out
+
+
+out = []
+for name, path in faces:
+    if not os.path.exists(path):
+        print(f"leaving out {name}: {path} is not there", file=sys.stderr)
+        continue
+    data = open(path, "rb").read()
+    face = hb.Face(data)
+    out.append(f"face {name} {hashlib.sha256(data).hexdigest()}")
+    rng = random.Random(name)
+    for s in strings(name, rng):
+        font = hb.Font(face)
+        buf = hb.Buffer()
+        buf.add_utf8(s.encode("utf-8"))
+        buf.guess_segment_properties()
+        buf.flags = hb.BufferFlags.REMOVE_DEFAULT_IGNORABLES
+        hb.shape(font, buf, None)
+        codes = ",".join(f"{ord(c):04X}" for c in s)
+        glyphs = " ".join(f"{i.codepoint}@{i.cluster}" for i in buf.glyph_infos)
+        out.append(f"{codes} {glyphs}")
+
+with open(out_path, "w", encoding="utf-8") as w:
+    w.write("# Generated by testdata/harfbuzz/clusters.py. DO NOT EDIT.\n")
+    w.write("#\n")
+    w.write("# For each face, each string's code points and the glyphs HarfBuzz sets\n")
+    w.write("# it as, each glyph's index and, after an @, its cluster: a byte offset\n")
+    w.write("# into the UTF-8 string.\n")
+    w.write(f"# harfbuzz {hb.version_string()}\n")
+    w.write(f"# uharfbuzz {hb.__version__}\n")
+    for line in out:
+        w.write(line + "\n")

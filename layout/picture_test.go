@@ -1083,7 +1083,7 @@ func glyphMarks(v DrawText, what, shape string, opaque bool) []textMark {
 		if v.Upright {
 			adv, _ = style.FromPx(-g.YAdvance * v.Size.Px() / 1000)
 		}
-		if !blankCluster(text, g.Cluster) {
+		if !blankCluster(text, g.Cluster, glyphs) {
 			off, _ := style.FromPx(g.XOffset * squeeze * v.Size.Px() / 1000)
 			at := Point{X: along.Add(off), Y: v.At.Y}
 			if v.Sideways {
@@ -1163,7 +1163,7 @@ func glyphInkAlong(v DrawText) (lo, hi style.Unit, ok bool) {
 	scale := v.Size.Px() / upem
 	var pen style.Unit
 	for i, g := range glyphs {
-		if !blankCluster(text, g.Cluster) {
+		if !blankCluster(text, g.Cluster, glyphs) {
 			xb, _, w, _, has := v.Face.GlyphExtents(g.GID)
 			if !has {
 				return 0, 0, false
@@ -1296,12 +1296,29 @@ func clusterText(text string, cluster int) string {
 // The cluster is a byte offset into the *shaped* text, which for a right-to-left
 // run carries an override character in front of it — so the string indexed here
 // has to be the one that was shaped, not the run's own Text.
-func blankCluster(text string, cluster int) bool {
+//
+// It is every character of the cluster, from its offset to the next cluster's,
+// and not the first alone. Shaping merges a character nothing is drawn for into
+// the cluster beside it, as HarfBuzz does, so a cluster may begin with a zero
+// width non-joiner and hold the letter after it: shaping-009's reference writes
+// one either side of each letter, and asked of its first character alone every
+// letter of it was a gap.
+func blankCluster(text string, cluster int, glyphs []shape.Glyph) bool {
 	if cluster < 0 || cluster >= len(text) {
 		return false
 	}
-	r, _ := utf8.DecodeRuneInString(text[cluster:])
-	return charprop.WhiteSpace(r) || marksNoPaper(r) || isDefaultIgnorable(r)
+	end := len(text)
+	for _, g := range glyphs {
+		if g.Cluster > cluster && g.Cluster < end {
+			end = g.Cluster
+		}
+	}
+	for _, r := range text[cluster:end] {
+		if !(charprop.WhiteSpace(r) || marksNoPaper(r) || isDefaultIgnorable(r)) {
+			return false
+		}
+	}
+	return true
 }
 
 // Text that is buried, which is the other half of resolving occlusion.
