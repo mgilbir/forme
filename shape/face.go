@@ -132,6 +132,7 @@ type Face struct {
 	typoAscent, typoDescent      int
 	typoLineGap                  int
 	useTypoMetrics               bool
+	winAscent, winDescent        int
 	xHeight                      int
 	underlinePos, underlineThick int
 	strikeoutPos, strikeoutSize  int
@@ -666,6 +667,10 @@ func (f *Face) readOS2(os2 []byte) {
 	f.typoDescent = signed16(font.Be16(os2, 70))
 	f.typoLineGap = signed16(font.Be16(os2, 72))
 	f.declared |= MetricTypoMetrics
+	// Unsigned, both: the descent is a distance below the baseline.
+	f.winAscent = font.Be16(os2, 74)
+	f.winDescent = font.Be16(os2, 76)
+	f.declared |= MetricWinMetrics
 	if font.Be16(os2, 0) >= 2 && len(os2) >= 88 {
 		f.xHeight = signed16(font.Be16(os2, 86))
 		f.declared |= MetricXHeight
