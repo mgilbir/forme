@@ -267,6 +267,11 @@ type Face struct {
 	// this face, so that bounding a run costs no allocation. Not shared by
 	// Clone, for the reason used is not.
 	spareWork *runWork
+	// scratch is what shaping a run works in and is finished with by the
+	// time the run is returned, kept from run to run on this face so that a
+	// run does not allocate it again. Not shared by Clone, for the reason
+	// used is not. See runScratch.
+	scratch *runScratch
 }
 
 // faceName is the face's PostScript name, and "Embedded" for a font that
@@ -1267,6 +1272,7 @@ func (f *Face) Clone() *Face {
 	out.used = map[int]bool{}
 	out.runWork = nil
 	out.spareWork = nil
+	out.scratch = nil
 	// The cache is deliberately *kept*, not reset: it holds readings of the
 	// font's own tables, which no document can change. A layout is written only
 	// by its readers, so what is shared is a value; the mutex is there because

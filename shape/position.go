@@ -284,7 +284,9 @@ func (sh shaper) position(buf []Glyph, p *plan, model shaperModel) {
 	// as HarfBuzz sets them with the font's own advances: every rule below
 	// adjusts the width the separator has. See spacefallback.go.
 	sh.f.setStandInSpaces(buf, vertical)
-	pass := &gposPass{chain: make([]int, len(buf)), kind: make([]uint8, len(buf))}
+	// The record is the face's, kept from run to run (runScratch).
+	pass := &sh.f.runScratch().gpos
+	*pass = gposPass{chain: reuse(pass.chain, len(buf)), kind: reuse(pass.kind, len(buf))}
 	sh.gp = pass
 	if how.zero && sh.zeroMarks == zeroMarksEarly {
 		sh.cancelMarkWidths(buf, how.adjust)
@@ -390,7 +392,9 @@ func (sh shaper) propagate(buf []Glyph) {
 	// sixteen thousand U+0301 after it climbed by 3.7 per doubling. A prefix
 	// sum answers each in constant time. It sums the advances along the line,
 	// which for a run set upright are the vertical ones.
-	sums := advanceSums(buf, sh.features.Vertical)
+	scratch := sh.f.runScratch()
+	scratch.sums = advanceSums(scratch.sums, buf, sh.features.Vertical)
+	sums := scratch.sums
 	if !sh.rtl {
 		for i := range buf {
 			if g.chain[i] != 0 {
@@ -450,8 +454,10 @@ func (sh shaper) propagateAt(buf []Glyph, sums []float64, i, nesting int) {
 // advanceSums is the running total of the advances in buf along the line —
 // the vertical ones for a run set upright — so that what stands between any
 // two glyphs is one subtraction.
-func advanceSums(buf []Glyph, vertical bool) []float64 {
-	sums := make([]float64, len(buf)+1)
+//
+// They are written into dst's array where it has room (runScratch).
+func advanceSums(dst []float64, buf []Glyph, vertical bool) []float64 {
+	sums := reuse(dst, len(buf)+1)
 	for k := range buf {
 		advance := buf[k].XAdvance
 		if vertical {

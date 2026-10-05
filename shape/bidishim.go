@@ -11,14 +11,18 @@ import "github.com/mgilbir/forme/bidi"
 // of this package. Keeping it unexported here is what caused it to be written a
 // second time elsewhere.
 //
-// The four below are what shaping asks of it: the runs of a string in the order
-// they are written and in the order they are drawn, the order of a set of runs,
-// and a run's characters with rule L4's mirroring applied. There were twenty-six
-// more — the class type and every class constant — under a note that shaping
-// read a character's class in several hundred places; nothing read any of them.
+// The six below are what shaping asks of it: whether a string runs anything
+// but left to right, the runs of a string in the order they are written and in
+// the order they are drawn, the order of a set of runs, and a run's characters
+// with rule L4's mirroring applied, into new arrays or the caller's. There were
+// twenty-six more — the class type and every class constant — under a note that
+// shaping read a character's class in several hundred places; nothing read any
+// of them.
 var (
-	bidiLogicalRuns   = bidi.LogicalRuns
-	bidiVisualRuns    = bidi.VisualRuns
-	bidiVisualOrder   = bidi.VisualOrder
-	bidiRunCharacters = bidi.RunCharacters
+	bidiNeedsAlgorithm = bidi.NeedsAlgorithm
+	bidiLogicalRuns    = bidi.LogicalRuns
+	bidiVisualRuns     = bidi.VisualRuns
+	bidiVisualOrder    = bidi.VisualOrder
+	bidiRunCharacters  = bidi.RunCharacters
+	bidiRunCharsInto   = bidi.RunCharactersInto
 )
