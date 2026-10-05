@@ -26,6 +26,9 @@ func TestDescriptorReadsTheMetricsTheFontStates(t *testing.T) {
 		{"TypoAscent", d.TypoAscent, 1069},
 		{"TypoDescent", d.TypoDescent, -293},
 		{"TypoLineGap", d.TypoLineGap, 0},
+		// Both positive: usWinDescent is a distance below the baseline.
+		{"WinAscent", d.WinAscent, 1124},
+		{"WinDescent", d.WinDescent, 395},
 		{"XHeight", d.XHeight, 536},
 		{"UnderlinePosition", d.UnderlinePosition, -100},
 		{"UnderlineThickness", d.UnderlineThickness, 50},
@@ -65,7 +68,7 @@ func TestZeroAndUnknownAreDifferentAnswers(t *testing.T) {
 		{"MetricLineGap", MetricLineGap}, {"MetricTypoMetrics", MetricTypoMetrics},
 		{"MetricXHeight", MetricXHeight}, {"MetricCapHeight", MetricCapHeight},
 		{"MetricUnderline", MetricUnderline}, {"MetricStrikeout", MetricStrikeout},
-		{"MetricWeight", MetricWeight},
+		{"MetricWeight", MetricWeight}, {"MetricWinMetrics", MetricWinMetrics},
 	} {
 		if !d.Has(m.bit) {
 			t.Errorf("the bundled face does not report %s, which it states", m.name)

@@ -56,6 +56,13 @@ type Descriptor struct {
 	TypoAscent, TypoDescent, TypoLineGap int
 	UseTypoMetrics                       bool
 
+	// WinAscent and WinDescent are OS/2's usWinAscent and usWinDescent: how
+	// far above and below the baseline Windows clips the face's glyphs, both
+	// positive, for the descent too. They are also what Microsoft Word sets a
+	// line by: a single-spaced line is WinAscent + WinDescent tall, with the
+	// baseline WinAscent below its top, and no line gap.
+	WinAscent, WinDescent int
+
 	// XHeight is OS/2 sxHeight, the height of a lowercase x. CSS's ex unit is
 	// defined against it, and vertical-align: middle against half of it; the
 	// half-em both fall back to is the specified fallback and not the answer.
@@ -134,6 +141,8 @@ const (
 	// MetricWidth is WidthClass and MetricStyle is Italic and Oblique.
 	MetricWidth
 	MetricStyle
+	// MetricWinMetrics is WinAscent and WinDescent.
+	MetricWinMetrics
 )
 
 // Has reports whether the font stated a metric, as against leaving it zero.
@@ -155,6 +164,8 @@ func (f *Face) Descriptor() Descriptor {
 		TypoDescent:        f.typoDescent,
 		TypoLineGap:        f.typoLineGap,
 		UseTypoMetrics:     f.useTypoMetrics,
+		WinAscent:          f.winAscent,
+		WinDescent:         f.winDescent,
 		XHeight:            f.xHeight,
 		UnderlinePosition:  f.underlinePos,
 		UnderlineThickness: f.underlineThick,

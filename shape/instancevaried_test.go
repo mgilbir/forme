@@ -261,6 +261,8 @@ func TestInstanceMetricsAgreeWithHarfBuzz(t *testing.T) {
 					{"StrikeoutSize", d.StrikeoutSize, "STRIKEOUT_SIZE"},
 					{"UnderlinePosition", d.UnderlinePosition, "UNDERLINE_OFFSET"},
 					{"UnderlineThickness", d.UnderlineThickness, "UNDERLINE_SIZE"},
+					{"WinAscent", d.WinAscent, "HORIZONTAL_CLIPPING_ASCENT"},
+					{"WinDescent", d.WinDescent, "HORIZONTAL_CLIPPING_DESCENT"},
 				} {
 					if w, ok := loc.metrics[c.tag]; ok && c.got != w {
 						t.Errorf("%v: Descriptor().%s is %d, want %d", loc.coords, c.field, c.got, w)
