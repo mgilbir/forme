@@ -144,7 +144,8 @@ func newOutlineCache(programLen int, tables map[string][]byte) *outlineCache {
 // Where it returns an error:
 //   - A glyph index the face does not have.
 //   - A standard face, which has no font program, and a glyph whose only image
-//     is a bitmap (sbix or CBDT) and which has no outline to draw. Both are
+//     is a bitmap (sbix, CBDT, or EBDT in a face with no outlines) and which
+//     has no outline to draw. Both are
 //     ErrNoOutline. A colour glyph (COLR) is drawn as its base glyph's
 //     outline, which is the monochrome form of it; its layers are not outlines
 //     of their own here.
@@ -217,6 +218,11 @@ func (f *Face) glyphOutline(gid int) ([]Segment, error) {
 		if f.bitmap != nil {
 			if _, ok := f.bitmap.extents(gid); ok {
 				return nil, fmt.Errorf("%w: glyph %d is a CBDT bitmap", ErrNoOutline, gid)
+			}
+		}
+		if f.strikes != nil {
+			if _, ok := f.strikes.extents(gid); ok {
+				return nil, fmt.Errorf("%w: glyph %d is an EBDT bitmap", ErrNoOutline, gid)
 			}
 		}
 	}

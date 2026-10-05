@@ -1,4 +1,4 @@
-.PHONY: ftpoints hbpaint hbclusters hbmorx hbaatpos ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
+.PHONY: ftpoints ftstrikes hbpaint hbclusters hbmorx hbaatpos ucd ms-use-sources clean-ms-use-sources verify-fonts test-corpora charprops linebreak vertical dictionaries casing eastasian phrases hyphens widths shapetables bidi-tables grapheme-tables stdfonts brotli-tables glyphlist dictionary-sources phrase-sources hyphen-sources afm brotli-sources agl css-color-spec test bidi-tests test-bidi clean-bidi-tests hbshaping hbvertical hbcffink hboutline cffsubrs hbcff2 hbcolrink hbpointmatch hbvarc hbmath hbmirroredform hbverticalinstance hbinstancevaried test-hbshaping hbfuzz test-difffuzz useable clean-ucd stdfonts grapheme-tests test-grapheme clean-grapheme-tests normalization-tests test-normalization clean-normalization-tests css-tests test-css clean-css-tests html-entities clean-html-entities css-colors clean-css-colors language-tags clean-language-tags notice-sources clean-notice-sources noto-fonts clean-noto-fonts wpt test-wpt wpt-breakdown clean-wpt varinstance test-varinstance hbenv hboracles hblanguages
 
 # Every go test in this file names its -timeout, and these are the two it names.
 #
@@ -397,6 +397,18 @@ ftpoints:
 		SourceSans3VF-Upright.otf=$(CFF_DIR)/SourceSans3VF-Upright.otf#hash \
 		SourceSans3VF-Upright.otf=$(CFF_DIR)/SourceSans3VF-Upright.otf@wght=900#every=25 \
 		SourceSerif4Variable-Roman.otf=$(CFF_DIR)/SourceSerif4Variable-Roman.otf#hash
+
+# The monochrome and greyscale bitmap strikes FreeType loads, which HarfBuzz
+# does not read: every glyph of every strike of two faces with no outlines
+# built here (strikes_fixture.py), one in EBLC and EBDT and one in Apple's bloc
+# and bdat under a bhed, for what Face.PaintGlyph paints from them
+# (shape/strikes_test.go). Needs fontTools and a FreeType pkg-config can find.
+# See testdata/freetype/strikes.py.
+ftstrikes:
+	$(PYTHON) $(FT_DIR)/strikes_fixture.py $(FT_DIR)/fonts
+	$(PYTHON) $(FT_DIR)/strikes.py $(FT_DIR)/strikes.expected.txt \
+		Strikes.ttf=$(FT_DIR)/fonts/Strikes.ttf \
+		StrikesApple.ttf=$(FT_DIR)/fonts/StrikesApple.ttf
 
 hbaatpos:
 	$(PYTHON) $(HARFBUZZ_DIR)/aatpos_fixture.py $(HARFBUZZ_DIR)/fonts

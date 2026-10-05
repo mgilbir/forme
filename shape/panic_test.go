@@ -282,6 +282,11 @@ func FuzzLoadAndUse(f *testing.F) {
 			f.Add(data)
 		}
 	}
+	// Monochrome and greyscale strikes in a face with no outlines: every
+	// index subtable format, every image format, composites of composites.
+	if data, err := os.ReadFile(filepath.Join("..", "testdata", "freetype", "fonts", "Strikes.ttf")); err == nil {
+		f.Add(data)
+	}
 	// The morx suite's fonts: every kind of morx subtable, state machines
 	// that loop, and tables built to stress the reader.
 	if names, err := filepath.Glob(filepath.Join("..", "testdata", "harfbuzz", "aat", "fonts", "*.ttf")); err == nil {

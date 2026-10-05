@@ -36,6 +36,13 @@ import (
 // outline, filled with the foreground colour. GlyphColour says which, ahead of
 // painting.
 //
+// A face with no outlines at all (BitmapOnly) may have only monochrome or
+// greyscale strikes, EBDT or Apple's bdat, which HarfBuzz does not paint and
+// which are what such a face's glyphs are: a glyph none of the others paints
+// is painted from them, as an image that is a mask in the foreground colour
+// (ImageMask), read as FreeType reads it (strikes.go). A face with outlines is
+// painted from its outlines, whatever strikes it also carries.
+//
 // # What it costs, and what is refused
 //
 // HarfBuzz bounds a COLRv1 glyph's painting at 64 paints deep and 16,384 paint
@@ -170,6 +177,10 @@ const (
 	ImagePNG ImageFormat = iota + 1
 	// ImageSVG is an SVG glyph's document. See Image.
 	ImageSVG
+	// ImageMask is a glyph of a monochrome or greyscale strike (EBDT or
+	// bdat) as coverage: one byte a pixel, from 0 for none to 255 for all,
+	// to be painted in Image.Color. See Image.
+	ImageMask
 )
 
 // Image is a glyph's image. Data is the font's own bytes, and is not to be
@@ -178,6 +189,15 @@ const (
 // A bitmap glyph's is the image file for its strike, its width and height in
 // pixels, and Box, where it is drawn, in font units — the image is scaled to
 // fill it.
+//
+// A glyph of a monochrome or greyscale strike's is an ImageMask, the one image
+// that is not the font's bytes but made for the call, which the caller may
+// keep: Width times Height bytes, a row at a time from the top, each the
+// coverage of a pixel. The strike's samples of fewer bits are spread over the
+// range, so that a one-bit pixel set is 255 and a two-bit one's values are 0,
+// 85, 170 and 255. It is drawn in Box, as a bitmap glyph's is, painting Color
+// where it covers: the foreground (see PaintOptions.Foreground), for a mask is
+// the shape of the text and has no colour of its own.
 //
 // An SVG glyph's is the SVG document the glyph is in, as the font holds it,
 // and nothing else: Width, Height and Box are zero, as HarfBuzz hands it over.
@@ -190,6 +210,18 @@ type Image struct {
 	Data          []byte
 	Width, Height int
 	Box           Rect
+	// Color is what an ImageMask paints, and the zero Color for the other
+	// formats, whose images carry their own.
+	Color Color
+	// Exact says that a bitmap glyph's image is from a strike drawn for the
+	// size it was asked for, PaintOptions.PPEM, across and down: painted at
+	// that size its pixels are the device's, one for one. It is false where
+	// the strike chosen is the nearest to that size and not it, which painting
+	// scales; where no size was asked for; and for an SVG document. A caller
+	// that draws only what a font draws for the size, as a renderer that
+	// takes no bitmap it would have to scale does, draws an image that is not
+	// Exact another way or not at all.
+	Exact bool
 }
 
 // Painter receives a glyph's painting from PaintGlyph.
@@ -232,8 +264,9 @@ type PaintOptions struct {
 	// fill marked as the foreground carries is the font's alone.
 	Foreground Color
 	// PPEM is the size the glyph is drawn at, in pixels per em, which picks
-	// a CBDT or sbix glyph's strike: the smallest at least that large, or
-	// failing any the largest. Zero picks the largest.
+	// a CBDT, sbix or EBDT glyph's strike: the smallest at least that large,
+	// or failing any the largest. Zero picks the largest. Image.Exact says
+	// whether the strike is that size.
 	PPEM int
 	// PaletteOverrides replaces entries of the palette, by index, as CSS
 	// font-palette's override-colors does: a COLR paint, a colour stop or a
@@ -250,8 +283,8 @@ type PaintOptions struct {
 type GlyphColour uint8
 
 // The representations. PaintGlyph asks for them in the order COLR (ColourPaint
-// and ColourLayers), ColourSVG, ColourBitmap; ColourSVG comes last here only
-// so that the others keep their values.
+// and ColourLayers), ColourSVG, ColourBitmap, ColourMask; ColourSVG and
+// ColourMask come last here only so that the others keep their values.
 const (
 	// ColourNone is a glyph with no colour: it is painted as its outline,
 	// filled with the foreground, or, in a face with no outlines
@@ -266,6 +299,13 @@ const (
 	ColourBitmap
 	// ColourSVG is a glyph of the SVG table, an SVG document. See Image.
 	ColourSVG
+	// ColourMask is a glyph of a monochrome or greyscale strike, EBDT or
+	// bdat, in a face with no outlines (BitmapOnly): an ImageMask, which
+	// has no colour of its own and is painted in the foreground. It is told
+	// apart from ColourBitmap, though both are images, because it is drawn
+	// as the text's colour is, and from ColourNone because the face has no
+	// outline to draw it from instead.
+	ColourMask
 )
 
 // GlyphColour says which representation PaintGlyph paints a glyph from, at a
@@ -292,15 +332,20 @@ func (f *Face) GlyphColour(gid, ppem int) GlyphColour {
 	if _, ok := f.bitmapImage(gid, ppem); ok {
 		return ColourBitmap
 	}
+	if f.strikes != nil {
+		if _, ok := f.strikes.image(gid, ppem); ok {
+			return ColourMask
+		}
+	}
 	return ColourNone
 }
 
 // PaintGlyph paints a glyph through p: its COLR paints, or its SVG document,
-// or its CBDT or sbix image, or, for a glyph with none, its outline in the
-// foreground; see
-// GlyphColour. A face whose glyphs are only bitmaps (BitmapOnly) paints nothing
-// for a glyph with no image. Coordinates are in font units, y increasing
-// upwards.
+// or its CBDT or sbix image, or, in a face with no outlines, its EBDT or bdat
+// image as a mask in the foreground, or, for a glyph with none, its outline in
+// the foreground; see GlyphColour. A face whose glyphs are only bitmaps
+// (BitmapOnly) paints nothing for a glyph with no image. Coordinates are in
+// font units, y increasing upwards.
 //
 // It is an error for a glyph the face does not have, and for a standard face,
 // which has no glyphs to paint (ErrNoOutline). A COLR glyph whose painting
@@ -329,6 +374,13 @@ func (f *Face) PaintGlyph(gid int, opts PaintOptions, p Painter) error {
 	if img, ok := f.bitmapImage(gid, opts.PPEM); ok {
 		p.Image(img)
 		return nil
+	}
+	if f.strikes != nil {
+		if img, ok := f.strikes.image(gid, opts.PPEM); ok {
+			img.Color = fg
+			p.Image(img)
+			return nil
+		}
 	}
 	if f.bitmapOnly {
 		// A face with no outlines paints nothing for a glyph its strike has
@@ -642,13 +694,14 @@ func (f *Face) bitmapImage(gid, ppem int) (Image, bool) {
 	}
 	var data []byte
 	var width, height int
-	ok := false
+	ok, exact := false, false
 	if f.bitmap != nil {
-		data, width, height, ok = f.bitmap.png(gid, ppem)
+		data, width, height, exact, ok = f.bitmap.png(gid, ppem)
 	}
 	if !ok && f.sbix != nil {
 		strike, sppem := f.sbix.strikeFor(ppem)
 		_, _, width, height, data, ok = f.sbix.pngIn(gid, strike, sppem)
+		exact = exactStrike(ppem, sppem, sppem)
 	}
 	if !ok {
 		return Image{}, false
@@ -666,5 +719,6 @@ func (f *Face) bitmapImage(gid, ppem int) (Image, bool) {
 			XMin: float64(e.xBearing), YMin: float64(e.yBearing + e.height),
 			XMax: float64(e.xBearing + e.width), YMax: float64(e.yBearing),
 		},
+		Exact: exact,
 	}, true
 }
