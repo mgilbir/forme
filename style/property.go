@@ -237,6 +237,13 @@ var properties = map[string]property{
 	// as using three things this engine ignores.
 	"-webkit-line-clamp": {false, "none"},
 	"-webkit-box-orient": {false, "horizontal"},
+	// -forme-line-placement is not CSS. It is where a block's lines put their
+	// text within the line box — the middle, as CSS's half-leading puts it, or
+	// the top, the bottom, or a baseline a fraction of the way down — which is
+	// what setting a Word document's line rules needs. It inherits, as
+	// line-height does, and is read from the block whose lines it places. See
+	// paragraph.LinePlacement.
+	"-forme-line-placement": {true, "auto"},
 	// overflow-wrap inherits. word-wrap, the name Internet Explorer shipped it
 	// under, is not registered: it is an alias — see the shorthands table.
 	"overflow-wrap": {true, "normal"},

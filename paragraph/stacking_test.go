@@ -207,3 +207,44 @@ func TestATallerItemNeverShortensTheLine(t *testing.T) {
 		}
 	}
 }
+
+// TestAPlacedLineMovesItsBaselineAndNotWhatIsAlignedToItsEdges: the placement
+// moves the line's baseline within a line box whose height it leaves alone,
+// measured by the margin box of an atomic inline as by the type of the
+// strut; and a "vertical-align: top" box, placed against the line box's top
+// edge, stays there.
+func TestAPlacedLineMovesItsBaselineAndNotWhatIsAlignedToItsEdges(t *testing.T) {
+	// A 40px strut holding 20px of type, 16px of it above the baseline.
+	s := Strut{Height: u(40), Baseline: u(26), Ascent: u(16), Descent: u(4)}
+	picture := atomicOfExtents(u(30), 0, VAlignState{})
+	subtree := new(int)
+	topped := atomicOfExtents(u(10), 0, VAlignState{LineAlign: VAlignTop, Subtree: subtree})
+	runs := []Item{picture, topped}
+
+	centred := StackLine(runs, s)
+	for _, c := range []struct {
+		placement LinePlacement
+		want      style.Unit
+	}{
+		// The picture's top, 30px above the baseline, is the highest thing on
+		// the line.
+		{LinePlacement{Mode: PlaceTop}, u(30)},
+		// The strut's descent is the deepest.
+		{LinePlacement{Mode: PlaceBottom}, centred.Height.Sub(u(4))},
+		{LinePlacement{Mode: PlaceAt, Fraction: 0.5}, centred.Height.Div(2)},
+	} {
+		s.Placement = c.placement
+		got := StackLine(runs, s)
+		if got.Baseline != c.want {
+			t.Errorf("%+v put the baseline at %v, want %v", c.placement, got.Baseline, c.want)
+		}
+		if got.Height != centred.Height {
+			t.Errorf("%+v made the line %v tall, want the %v it is centred", c.placement, got.Height, centred.Height)
+		}
+		// The top-aligned box's baseline, from the top of the line box.
+		if got.baselineFor(topped.Valign) != centred.baselineFor(topped.Valign) {
+			t.Errorf("%+v moved a top-aligned box from %v to %v", c.placement,
+				centred.baselineFor(topped.Valign), got.baselineFor(topped.Valign))
+		}
+	}
+}

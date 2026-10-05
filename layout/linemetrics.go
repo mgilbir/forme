@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"strings"
+
 	"github.com/mgilbir/forme/paragraph"
 
 	"github.com/mgilbir/forme/internal/ascii"
@@ -26,7 +28,7 @@ func (l *layouter) strutFor(b *Box) strut { return l.strutAt(b, b.FontSize) }
 // the other.
 func (l *layouter) strutAt(b *Box, size style.Unit) strut {
 	h := l.lineHeightAt(b, size)
-	s := strut{Height: h, Baseline: l.baselineAt(b, h, size)}
+	s := strut{Height: h, Baseline: l.baselineAt(b, h, size), Placement: l.linePlacementOf(b)}
 	// The strut is the block's root inline box, and the emphasis marks of its
 	// text are its own: it takes the leading withEmphasis gives the block's
 	// text, so a line holds the marks of a block whose text on it has none.
@@ -70,6 +72,37 @@ func (l *layouter) strutAt(b *Box, size style.Unit) strut {
 		s.XHeight = size.Mul(float64(d.CapHeight) / upem * 0.7)
 	}
 	return s
+}
+
+// linePlacementOf reads -forme-line-placement, which is where a block's lines
+// put their text within the line box. See paragraph.LinePlacement.
+//
+// A line set down the page is left in the middle. Its runs are aligned by
+// their central baseline and not their alphabetic one, so "the top of the
+// tallest text" would need a different arithmetic there, and the documents the
+// property is for are set across the page.
+func (l *layouter) linePlacementOf(b *Box) paragraph.LinePlacement {
+	if _, vertical := l.facingOf(b); vertical {
+		return paragraph.LinePlacement{}
+	}
+	raw := ascii.Lower(ascii.TrimCSSSpace(b.Style.Get("-forme-line-placement")))
+	switch raw {
+	case "", "auto":
+		return paragraph.LinePlacement{}
+	case "top":
+		return paragraph.LinePlacement{Mode: paragraph.PlaceTop}
+	case "bottom":
+		return paragraph.LinePlacement{Mode: paragraph.PlaceBottom}
+	}
+	scale := 1.0
+	if pct, ok := strings.CutSuffix(raw, "%"); ok {
+		raw, scale = pct, 0.01
+	}
+	f, ok := parseNumber(raw)
+	if !ok {
+		return paragraph.LinePlacement{}
+	}
+	return paragraph.LinePlacement{Mode: paragraph.PlaceAt, Fraction: min(max(f*scale, 0), 1)}
 }
 
 // leading is how far a run of text in an inline box reaches above and below the
