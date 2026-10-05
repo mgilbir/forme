@@ -67,6 +67,7 @@ package shape
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"sort"
 
@@ -179,6 +180,10 @@ type Face struct {
 	// is asked before anything else: nil for a face with no sbix table, or one
 	// HarfBuzz would refuse. See sbixink.go.
 	sbix *sbixInk
+	// strikes reads a glyph's monochrome or greyscale bitmap, from EBLC and
+	// EBDT or bloc and bdat, for a face that has no outlines to draw it from
+	// instead: nil for every other face. See strikes.go.
+	strikes *ebdtStrikes
 	// varc measures and draws a glyph through the VARC table, which is asked
 	// after COLR and before the outline: nil for a face with none, or one
 	// HarfBuzz would refuse. See varc.go.
@@ -285,18 +290,34 @@ func faceName(name []byte) string {
 }
 
 // hasBitmaps reports whether a font has a table of bitmap glyphs: CBDT and
-// CBLC, sbix, or EBDT and EBLC.
+// CBLC, sbix, EBDT and EBLC, or Apple's bdat and bloc.
 func hasBitmaps(tables map[string][]byte) bool {
 	present := func(tag string) bool { return len(tables[tag]) > 0 }
-	return present("CBDT") && present("CBLC") || present("sbix") || present("EBDT") && present("EBLC")
+	return present("CBDT") && present("CBLC") || present("sbix") ||
+		present("EBDT") && present("EBLC") || present("bdat") && present("bloc")
 }
 
 // BitmapOnly reports whether the face's glyphs are only bitmaps: a font with
-// CBDT, sbix or EBDT and no glyf, CFF or CFF2 outlines, such as Noto Color
-// Emoji's CBDT build. Every glyph's outline is empty, so GlyphOutline draws
-// nothing and the glyphs are painted from their images (PaintGlyph); and it
-// cannot be subsetted or embedded as a font, which has to carry outlines.
+// CBDT, sbix, EBDT or bdat and no glyf, CFF or CFF2 outlines, such as Noto
+// Color Emoji's CBDT build. Every glyph's outline is empty, so GlyphOutline
+// draws nothing and the glyphs are painted from their images (PaintGlyph);
+// and it cannot be subsetted or embedded as a font, which has to carry
+// outlines.
 func (f *Face) BitmapOnly() bool { return f.bitmapOnly }
+
+// withBitmapHead is a font's tables with Apple's bhed read as head, for a
+// font that has no head: Apple names the table bhed in a font whose glyphs are
+// only bitmaps, so that a reader looking for head to find outlines does not
+// take it for an outline font, and it is otherwise the same table. FreeType
+// reads it the same way. The caller's map is left as it was.
+func withBitmapHead(tables map[string][]byte) map[string][]byte {
+	if _, ok := tables["head"]; ok || len(tables["bhed"]) == 0 {
+		return tables
+	}
+	out := maps.Clone(tables)
+	out["head"] = tables["bhed"]
+	return out
+}
 
 // layoutTableNames are the tables readLayout reads, and so the ones a face
 // keeps in order to read them again per script. The rest of the font is not
@@ -403,6 +424,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 // tables are slices of the collection and not a program of their own (see
 // fontcollection.go).
 func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face, error) {
+	tables = withBitmapHead(tables)
 	unitsPerEm, err := headUnitsPerEm(tables["head"])
 	if err != nil {
 		return nil, err
@@ -418,11 +440,11 @@ func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face,
 	// else.
 	_, hasCFF2 := tables["CFF2"]
 	cff2Outlines := hasCFF2 && !hasGlyf && !hasCFF
-	// A font whose glyphs are only bitmaps — CBDT, sbix or EBDT and no
-	// outlines, which is how Noto Color Emoji's CBDT build and most bitmap
-	// emoji fonts are made — is a face whose every outline is empty: it is
-	// shaped and measured from hmtx and the bitmaps, and painted from them.
-	// See BitmapOnly.
+	// A font whose glyphs are only bitmaps — CBDT, sbix, EBDT or bdat and no
+	// outlines, which is how Noto Color Emoji's CBDT build, most bitmap emoji
+	// fonts and the bitmap fonts of old are made — is a face whose every
+	// outline is empty: it is shaped and measured from hmtx and the bitmaps,
+	// and painted from them. See BitmapOnly.
 	bitmapOnly := !hasGlyf && !hasCFF && !cff2Outlines && hasBitmaps(tables)
 	if !hasGlyf && !hasCFF && !cff2Outlines && !bitmapOnly {
 		return nil, errors.New("fonts: the font carries neither glyf nor CFF outlines, nor bitmaps")
@@ -568,6 +590,9 @@ func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face,
 	f.svg = readSVG(tables["SVG "])
 	f.bitmap = newCBDTInk(tables, f.unitsPerEm)
 	f.sbix = newSbixInk(tables, prog.NumGlyphs, f.unitsPerEm)
+	if bitmapOnly {
+		f.strikes = newEBDTStrikes(tables, f.unitsPerEm)
+	}
 	f.varc = newVARCFace(f, tables, prog.NumGlyphs)
 	f.vert = readVerticalTables(tables, prog.NumGlyphs, budget)
 	if err := budget.Err(); err != nil {
