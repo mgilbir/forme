@@ -165,6 +165,14 @@ func init() {
 		num(numeric{number: true, integer: true, min: 1, hasMin: true})))
 	g["-webkit-box-orient"] = single(kw("horizontal", "vertical", "inline-axis", "block-axis"))
 
+	// forme's own: where a line's text sits within its line box. A number or a
+	// percentage is where the baseline goes, as a fraction of the line box's
+	// height from its top, and so runs from 0 to 1. See
+	// paragraph.LinePlacement.
+	g["-forme-line-placement"] = single(either(kw("auto", "top", "bottom"),
+		num(numeric{number: true, min: 0, hasMin: true, max: 1, hasMax: true}),
+		num(numeric{percent: true, min: 0, hasMin: true, max: 100, hasMax: true})))
+
 	// css-writing-modes-4. The SVG 1.1 spellings of writing-mode are §3.2's
 	// obsolete values, which browsers accept; "sideways-right" is the old name
 	// of "sideways".

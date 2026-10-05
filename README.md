@@ -100,7 +100,10 @@ floats and clearance, margin collapsing, absolute and relative positioning,
 tables including the collapsing border model, lists and counters, generated
 content, backgrounds and borders, overflow and clipping, and the stacking order
 of Appendix E. From CSS Text: white space processing, word and line breaking,
-`text-wrap: balance`, tab stops. From CSS Overflow: `line-clamp`.
+`text-wrap: balance`, tab stops. From CSS Overflow: `line-clamp`. One property
+of its own, which is not CSS: `-forme-line-placement` puts each line's text at
+the top or bottom of its line box, or its baseline a fraction of the way down,
+rather than in the middle, which is what a Word document's line rules need.
 
 **Boxes beyond CSS 2.1**, each a deliberately narrow slice: flexbox
 (`display: flex`), grid (`display: grid`), multiple columns (`column-count`,

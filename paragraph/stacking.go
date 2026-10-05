@@ -54,7 +54,46 @@ type Strut struct {
 	Ascent, Descent style.Unit
 	// XHeight is what "middle" is measured against.
 	XHeight style.Unit
+	// Placement is where the block's lines put their text within the line
+	// box, which is the middle unless it says otherwise. See LinePlacement.
+	Placement LinePlacement
 }
+
+// LinePlacement is where a line's text sits within its line box: forme's
+// -forme-line-placement, which is not CSS.
+//
+// CSS splits the leading of every inline box evenly above and below its text,
+// so a line taller than its type has the type in the middle. Word does not,
+// and how it does not depends on the paragraph's line rule: a multiple of
+// single spacing puts the type at the top of the line and the extra space
+// below it; "at least" a height the type does not fill puts the type at the
+// bottom; "exactly" a height puts the baseline four fifths of the way down.
+// A renderer setting a Word document has no CSS for any of the three, and
+// moving the paragraph as a whole is exact only where every line of it has the
+// same tallest run.
+//
+// So it is a rule for each line, applied once the line box is stacked: the
+// height is CSS's, and the baseline moves within it. Top puts the top of the
+// tallest text on the line — the highest content-area top, or margin-box top
+// for an atomic inline, of anything aligned against the baseline — at the top
+// of the line box. Bottom puts the lowest bottom at the bottom. At puts the
+// baseline Fraction of the line box's height down from its top. A box
+// vertical-align puts at the top or the bottom of the line box stays there.
+type LinePlacement struct {
+	Mode     PlacementMode
+	Fraction float64
+}
+
+// PlacementMode is how a LinePlacement places a line's text.
+type PlacementMode uint8
+
+const (
+	// PlaceCentred is CSS's half-leading, and the zero value.
+	PlaceCentred PlacementMode = iota
+	PlaceTop
+	PlaceBottom
+	PlaceAt
+)
 
 // VAlignState is where §10.8.1's alignment has got to at one point of the walk
 // over an inline subtree.
@@ -274,7 +313,61 @@ func StackLine(runs []Item, s Strut) LineStack {
 		}
 		g.Baseline = g.Ascent
 	}
+	if s.Placement.Mode != PlaceCentred {
+		ls.place(runs, s, content)
+	}
 	return ls
+}
+
+// place moves the line's baseline within its line box as the strut's
+// placement asks. See LinePlacement.
+//
+// The line box keeps the height the stacking gave it, and the subtrees aligned
+// against its top and bottom keep their places, which are measured from its
+// edges. What moves is everything aligned against the baseline, which is to
+// say the baseline.
+func (ls *LineStack) place(runs []Item, s Strut, content bool) {
+	if s.Placement.Mode == PlaceAt {
+		ls.Baseline = ls.Height.Mul(s.Placement.Fraction)
+		return
+	}
+	// How far the text reaches above and below the baseline without its
+	// leading: the content area of each run of text, from the face that set
+	// it, and the margin box of each atomic inline, as vertical-align has
+	// moved them. The strut's is the block's own type, which is on every
+	// line.
+	above, below := s.Ascent, s.Descent
+	for _, item := range runs {
+		if item.Valign.LineAlign != VAlignBaseline || (item.LeadingOnly && !content) {
+			continue
+		}
+		var a, d style.Unit
+		switch {
+		case item.Atomic != nil:
+			a, d = item.Ascent, item.Descent
+		case item.Leads && item.Face != nil:
+			top, bottom, upem, ok := LineMetrics(item.Face)
+			if !ok {
+				continue
+			}
+			a, d = item.Size.Mul(top/upem), item.Size.Mul(-bottom/upem)
+		default:
+			continue
+		}
+		a, d = alignedExtents(item.Valign, a, d, s)
+		above, below = style.Max(above, a), style.Max(below, d)
+	}
+	if above.Add(below) <= 0 {
+		// Nothing on the line says where its type is: the strut's face has no
+		// metrics and the line holds no text that has. The middle is as good
+		// an answer as any, and it is the one already given.
+		return
+	}
+	if s.Placement.Mode == PlaceTop {
+		ls.Baseline = above
+		return
+	}
+	ls.Baseline = ls.Height.Sub(below)
 }
 
 // LineStack is a finished line box: its height and baseline, and where each
