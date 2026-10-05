@@ -2346,3 +2346,19 @@ A small face made from nothing by the script named above, whose rules name
 the characters nothing is drawn for and put marks on a ligature built from a
 multiple substitution. It is listed here because every font the repository
 keeps is, and for where it came from; no third party's work is in it.
+
+============================================================================
+Fonts built for the bitmap strike oracle
+============================================================================
+
+Files:   testdata/freetype/fonts/Strikes.ttf
+         testdata/freetype/fonts/StrikesApple.ttf
+Source:  testdata/freetype/strikes_fixture.py, in this repository, which
+         builds them with fontTools
+Licence: the licence in LICENSE; they are not anyone else's work
+
+Small faces made from nothing by the script named above, with no outlines and
+monochrome and greyscale strikes of every index and image format, one in EBLC
+and EBDT and one in Apple's bloc and bdat. They are listed here because every
+font the repository keeps is, and for where they came from; no third party's
+work is in them.
