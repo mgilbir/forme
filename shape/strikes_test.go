@@ -2,6 +2,7 @@ package shape
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -448,6 +449,73 @@ func TestAFontWithOutlinesIsPaintedFromThemWhateverStrikesItCarries(t *testing.T
 	}
 }
 
+// TestAFontWithOutlinesPaintsItsStrikesWhenAskedForItsBitmaps is
+// PaintOptions.Bitmaps (issue 918): the same face, asked for its bitmaps,
+// paints a glyph its strike has an image of as that image — the mask the
+// strike's own bitmap-only face paints — and every other glyph as its outline,
+// and is measured as before.
+func TestAFontWithOutlinesPaintsItsStrikesWhenAskedForItsBitmaps(t *testing.T) {
+	data := strikesFont(t, "Strikes.ttf")
+	strikes := font.SFNTTables(data)
+	only, err := Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gs := []fonttest.Glyph{{Rune: 'A', Advance: 600, HasShape: true}, {Rune: 'B', Advance: 600, HasShape: true}}
+	plain, err := Load(fonttest.SFNT(fonttest.SFNTOptions{Glyphs: gs}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tags := range [][2]string{{"EBLC", "EBDT"}, {"bloc", "bdat"}} {
+		f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{Glyphs: gs, Extra: map[string][]byte{
+			tags[0]: strikes["EBLC"], tags[1]: strikes["EBDT"],
+		}}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		masks := 0
+		for gid := range f.NumGlyphs() {
+			for _, ppem := range []int{0, 12, 16} {
+				opts := PaintOptions{PPEM: ppem, Bitmaps: true}
+				want, isMask := paintedMask(only, gid, ppem)
+				got := &imagePainter{}
+				_ = f.PaintGlyph(gid, PaintOptions{PPEM: ppem, Bitmaps: true, Foreground: Color{A: 1}}, got)
+				colour := f.GlyphColourFor(gid, opts)
+				if !isMask {
+					// No image: the outline, as without the option.
+					outline, plainOutline := &recordingPainter{}, &recordingPainter{}
+					_ = f.PaintGlyph(gid, opts, outline)
+					_ = plain.PaintGlyph(gid, PaintOptions{PPEM: ppem}, plainOutline)
+					if strings.Join(outline.lines, ";") != strings.Join(plainOutline.lines, ";") || colour != ColourNone {
+						t.Errorf("%s glyph %d at %d, which no strike has: painted %q, %v", tags[0], gid, ppem, outline.lines, colour)
+					}
+					continue
+				}
+				masks++
+				if len(got.images) != 1 || got.others != 0 {
+					t.Errorf("%s glyph %d at %d: %d images and %d other calls, want its mask alone", tags[0], gid, ppem, len(got.images), got.others)
+					continue
+				}
+				img := got.images[0]
+				if img.Format != ImageMask || !bytes.Equal(img.Data, want.Data) || img.Width != want.Width ||
+					img.Height != want.Height || img.Exact != want.Exact || img.Color != (Color{A: 1}) {
+					t.Errorf("%s glyph %d at %d: painted %+v, want the strike's %+v", tags[0], gid, ppem, img, want)
+				}
+				if colour != ColourMask {
+					t.Errorf("%s glyph %d at %d: GlyphColourFor is %v, want ColourMask", tags[0], gid, ppem, colour)
+				}
+				// Without the option, the outline.
+				if f.GlyphColour(gid, ppem) != ColourNone {
+					t.Errorf("%s glyph %d at %d: painted from its strike without being asked", tags[0], gid, ppem)
+				}
+			}
+		}
+		if masks == 0 {
+			t.Fatalf("%s: no glyph of the face has a strike image, so this tests nothing", tags[0])
+		}
+	}
+}
+
 // TestAnAppleBitmapFontIsMeasuredByItsBhed is StrikesApple.ttf, whose head is
 // bhed, with the units per em bhed states changed to 2048: the face has them,
 // and its masks are placed in them.
@@ -755,7 +823,26 @@ func TestSystemBitmapFonts(t *testing.T) {
 		t.Fatal(err)
 	}
 	gid, _ := f.GlyphID('A')
-	if f.BitmapOnly() || f.strikes != nil || f.GlyphColour(gid, 12) != ColourNone {
+	if f.BitmapOnly() || f.GlyphColour(gid, 12) != ColourNone {
 		t.Error("Courier New is not painted from its outlines")
+	}
+	// Asked for its bitmaps, at the size of each of its strikes, a glyph a
+	// strike has is painted from it, and one none has from its outline. Its
+	// strikes hold three glyphs, 371 to 373, and not the letters.
+	if f.strikes == nil {
+		t.Fatal("Courier New's strikes are not read")
+	}
+	for i := range int(font.Be32(f.strikes.loc, 4)) {
+		ppem := int(f.strikes.loc[8+bitmapSizeTableSize*i+44])
+		opts := PaintOptions{PPEM: ppem, Bitmaps: true}
+		p := &imagePainter{}
+		_ = f.PaintGlyph(371, opts, p)
+		if len(p.images) != 1 || p.images[0].Format != ImageMask || !p.images[0].Exact ||
+			f.GlyphColourFor(371, opts) != ColourMask {
+			t.Errorf("Courier New's glyph 371 at %d, asked for its bitmaps, is not painted from its strike", ppem)
+		}
+		if f.GlyphColourFor(gid, opts) != ColourNone {
+			t.Errorf("Courier New's A at %d, which no strike has, is not painted from its outline", ppem)
+		}
 	}
 }

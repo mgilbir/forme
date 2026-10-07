@@ -220,7 +220,7 @@ func (f *Face) glyphOutline(gid int) ([]Segment, error) {
 				return nil, fmt.Errorf("%w: glyph %d is a CBDT bitmap", ErrNoOutline, gid)
 			}
 		}
-		if f.strikes != nil {
+		if f.bitmapOnly && f.strikes != nil {
 			if _, ok := f.strikes.extents(gid); ok {
 				return nil, fmt.Errorf("%w: glyph %d is an EBDT bitmap", ErrNoOutline, gid)
 			}

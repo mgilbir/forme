@@ -149,8 +149,11 @@ which is not the same question.
 palette with any of its entries overridden (`PaintOptions.PaletteOverrides`), an
 SVG glyph's document, and a CBDT or sbix glyph's PNG image at the strike for
 the size drawn, handed to a `Painter` call for call as HarfBuzz's
-`hb_font_paint_glyph` hands them out. `Face.GlyphColour` says which a glyph is
-painted from, so a caller can fall back.
+`hb_font_paint_glyph` hands them out. A monochrome or greyscale EBDT or bdat
+strike's glyph is painted as a mask in the text's colour — in a face with no
+outlines, and in one with them when a caller asks (`PaintOptions.Bitmaps`), as a
+writer of a font licensed for bitmap embedding only does. `Face.GlyphColour`
+says which a glyph is painted from, so a caller can fall back.
 
 **Untrusted text.** `Face.ShapeGlyphsContext` shapes one run under a context
 and `RunLimits` — input bytes, live glyphs and charged lookup work, by default
