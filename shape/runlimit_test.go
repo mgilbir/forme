@@ -390,3 +390,100 @@ func TestTheRulesALookupTriesAreCharged(t *testing.T) {
 		t.Errorf("a budget of half the rules tried was not exhausted: %v", err)
 	}
 }
+
+// A ShapingBudget charges everything shaped on the faces put under it to one
+// budget, takes them off it when Run returns however Run ended, and is spent
+// by one Run.
+func TestAShapingBudgetIsSharedByItsFacesAndSpentByOneRun(t *testing.T) {
+	noto, err := NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := noto.Clone(), noto.Clone()
+	single, err := a.Clone().ShapeGlyphsContext(context.Background(), RunInput{Text: "office"}, RunLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	budget, err := NewShapingBudget(context.Background(), RunLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := budget.Bound(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := budget.Bound(a); err != nil {
+		t.Errorf("a face put under the budget twice: %v", err)
+	}
+	work, err := budget.Run(func() error {
+		a.ShapeGlyphs("office")
+		// A face put under it while it runs.
+		if err := budget.Bound(b); err != nil {
+			return err
+		}
+		b.ShapeGlyphs("office")
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work != 2*single.Work {
+		t.Errorf("two runs on two faces were charged %d, want twice the %d one costs", work, single.Work)
+	}
+	for _, f := range []*Face{a, b} {
+		if _, err := f.ShapeGlyphsBounded(context.Background(), RunInput{Text: "x"}, RunLimits{}); err != nil {
+			t.Errorf("a face is still under the budget once Run returned: %v", err)
+		}
+	}
+	if _, err := budget.Run(func() error { return nil }); err == nil {
+		t.Error("a spent budget ran again")
+	}
+	if err := budget.Bound(noto.Clone()); err == nil {
+		t.Error("a face was put under a spent budget")
+	}
+}
+
+// A budget that runs out stops the shaping where it is, and Run reports it;
+// so does a context done, and a face under another budget is not taken.
+func TestAShapingBudgetStopsWhatItCannotAfford(t *testing.T) {
+	noto, err := NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := noto.Clone()
+	budget, _ := NewShapingBudget(context.Background(), RunLimits{MaxWork: 1})
+	_ = budget.Bound(f)
+	reached := false
+	if _, err := budget.Run(func() error {
+		f.ShapeGlyphs("office")
+		reached = true
+		return nil
+	}); !errors.Is(err, ErrRunLimit) {
+		t.Errorf("a budget of one unit: %v", err)
+	}
+	if reached {
+		t.Error("shaping went on past the budget")
+	}
+	if _, err := f.ShapeGlyphsBounded(context.Background(), RunInput{Text: "x"}, RunLimits{}); err != nil {
+		t.Errorf("a face is still under a budget that stopped: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	budget, _ = NewShapingBudget(ctx, RunLimits{})
+	_ = budget.Bound(f)
+	cancel()
+	if _, err := budget.Run(func() error { f.ShapeGlyphs("office"); return nil }); !errors.Is(err, context.Canceled) {
+		t.Errorf("a cancelled context: %v", err)
+	}
+
+	first, _ := NewShapingBudget(context.Background(), RunLimits{})
+	second, _ := NewShapingBudget(context.Background(), RunLimits{})
+	g := noto.Clone()
+	_ = first.Bound(g)
+	if err := second.Bound(g); err == nil {
+		t.Error("a face under one budget was put under another")
+	}
+	if _, err := NewShapingBudget(context.Background(), RunLimits{MaxWork: -1}); err == nil {
+		t.Error("a negative limit was accepted")
+	}
+}

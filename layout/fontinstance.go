@@ -228,6 +228,20 @@ type instancer struct {
 	// once and not once per box.
 	capped  bool
 	refused map[*shape.Face]bool
+	// budget is the document's shaping budget, which every instance is put
+	// under as it is cut. See documentFonts.budget.
+	budget *shape.ShapingBudget
+}
+
+// shapeUnder puts every instance cut so far under a budget, and every one cut
+// from now on.
+func (in *instancer) shapeUnder(b *shape.ShapingBudget) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.budget = b
+	for _, f := range in.made {
+		_ = b.Bound(f)
+	}
 }
 
 // instanceKey is a face and a location, spelled in axis order.
@@ -300,6 +314,11 @@ func (in *instancer) instanced(face *shape.Face, ask variationAsk, rec *Recorder
 		// An @font-face rule's font-feature-settings are on the face it
 		// loaded (withFeatureSettings), and are the instance's too.
 		inst = inst.WithFeatureSettings(settings)
+	}
+	if in.budget != nil {
+		// An instance is cut for this document, and so is under no other
+		// budget: see documentFonts.bind.
+		_ = in.budget.Bound(inst)
 	}
 	in.made[key] = inst
 	return inst

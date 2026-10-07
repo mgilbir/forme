@@ -1,9 +1,12 @@
 package layout
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
 
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
 
@@ -183,6 +186,11 @@ type Composed struct {
 	// complete one is how "three problems" becomes what a reader believes about
 	// a document with four hundred.
 	Truncated bool
+
+	// ShapingWork is the shaping work ComposeContext charged the document's
+	// budget, in RunResult.Work's units, for a caller keeping a budget wider
+	// than one document's. Compose charges nothing and leaves it zero.
+	ShapingWork int64
 }
 
 // Compose is everything between a document and a backend: build the box tree,
@@ -194,6 +202,55 @@ type Composed struct {
 // into a raster, into a test — and everything above this line is the same
 // whichever it is.
 func Compose(in Input, opts Options) Composed {
+	out, _ := compose(context.Background(), in, opts, nil)
+	return out
+}
+
+// ComposeContext is Compose under a context and limits on the shaping the
+// document costs, for a caller setting a document it does not trust, in fonts
+// it may not control.
+//
+// Every run of text the document sets — shaped to be drawn or measured to be
+// broken into lines, in a face of the caller's, one of the document's own
+// @font-face faces or an instance cut from either — is held to limits'
+// MaxInputBytes and MaxGlyphs, and the work they all do is charged to one
+// MaxWork for the document: shape.ShapingBudget, whose zero fields take the
+// defaults RunLimits states. The context is asked as that work is done, and
+// between the phases of composing.
+//
+// It fails with the context's error, or an error wrapping shape.ErrRunLimit
+// — a run too long, a document's shaping over its budget, a font whose layout
+// tables ran into one of its own limits — and a zero Composed: never a
+// composition that stopped part way presented as one that finished. A
+// document its own findings refuse is not an error; Composed.Refused says so,
+// as Compose's does.
+//
+// What is not bounded here is what Compose bounds without it: the size of
+// the document, the faces it may load and what they may cost, and the work
+// of building and laying out boxes, which have limits of their own. Text the
+// cascade measures while the document is built, before layout — the font
+// metrics a length in ex or ch is resolved against — is not charged.
+func ComposeContext(ctx context.Context, in Input, opts Options, limits shape.RunLimits) (Composed, error) {
+	budget, err := shape.NewShapingBudget(ctx, limits)
+	if err != nil {
+		return Composed{}, err
+	}
+	var out Composed
+	work, err := budget.Run(func() error {
+		var err error
+		out, err = compose(ctx, in, opts, budget)
+		return err
+	})
+	if err != nil {
+		return Composed{}, err
+	}
+	out.ShapingWork = work
+	return out, nil
+}
+
+// compose is Compose, with the document's shaping under budget where there is
+// one; see ComposeContext.
+func compose(ctx context.Context, in Input, opts Options, budget *shape.ShapingBudget) (Composed, error) {
 	opts, optionsRefused := checkOptions(opts)
 
 	rec := NewRecorder(in.Policy)
@@ -208,6 +265,17 @@ func Compose(in Input, opts Options) Composed {
 	// into a second recorder loses the counts, spends the bound twice and
 	// deduplicates everything twice — see buildWith.
 	built := buildWith(in, opts.Page, rec)
+	if budget != nil {
+		if err := ctx.Err(); err != nil {
+			return Composed{}, err
+		}
+		// From here every face the document sets text in is under the
+		// budget: the ones the cascade has handed out already, and the ones
+		// layout finds as it goes.
+		if !shapeUnder(built.Fonts, budget) {
+			return Composed{}, errors.New("layout: the document's font set cannot be put under a shaping budget")
+		}
+	}
 	// The sheet the document settled on, checked the same way. An @page rule
 	// writes into the same geometry the caller does and had nothing checking
 	// it: "@page { margin: 100mm }" on A5 left a content box of negative width,
@@ -234,6 +302,9 @@ func Compose(in Input, opts Options) Composed {
 	// have been loaded onto the caller's library by now, and laying out with
 	// the library alone would set the page in the wrong faces.
 	root := Layout(built.Root, avail, built.Fonts, rec)
+	if err := ctx.Err(); err != nil {
+		return Composed{}, err
+	}
 
 	natural := naturalSize(root)
 
@@ -250,7 +321,7 @@ func Compose(in Input, opts Options) Composed {
 		Counts:    rec.Counts(),
 		Refused:   rec.Failed(),
 		Truncated: rec.Truncated(),
-	}
+	}, ctx.Err()
 }
 
 // naturalSize is what the content needed before any scaling: the far edge of

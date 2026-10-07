@@ -301,6 +301,55 @@ type documentFonts struct {
 	// inst is the document's instances of variable faces, shared by the
 	// cascade and layout. See fontinstance.go.
 	inst *instancer
+
+	// budget is what the document's shaping is charged to, where it is set
+	// under one (ComposeContext), and nil where it is not. Every face this
+	// set hands out is put under it — its copies of the caller's, its own
+	// @font-face faces and the instances cut from either — so that no text
+	// the document sets, measured or drawn, is shaped outside it. See
+	// shapeUnder.
+	budget *shape.ShapingBudget
+}
+
+// bind puts a face this document owns under its budget, if it has one. d.mu
+// is held.
+//
+// It cannot fail for a face that is this document's: Bound refuses only a
+// face under some other budget, and every face bound here was made for this
+// document — a clone, a face its own rule loaded, an instance cut for it.
+func (d *documentFonts) bind(f *shape.Face) {
+	if d.budget != nil && f != nil {
+		_ = d.budget.Bound(f)
+	}
+}
+
+// shapeUnder puts the document's shaping under a budget: every face the set
+// has handed out already, while the document was built, and every face it
+// hands out from now on. It reports false for a set that is not a document's,
+// which has no faces of its own to put under one.
+func shapeUnder(set FontSet, b *shape.ShapingBudget) bool {
+	var d *documentFonts
+	switch s := set.(type) {
+	case *documentFonts:
+		d = s
+	case fallbackDocumentFonts:
+		d = s.documentFonts
+	default:
+		return false
+	}
+	d.mu.Lock()
+	d.budget = b
+	for _, f := range d.mine {
+		d.bind(f)
+	}
+	for _, df := range d.faces {
+		d.bind(df.face)
+	}
+	d.mu.Unlock()
+	if d.inst != nil {
+		d.inst.shapeUnder(b)
+	}
+	return true
 }
 
 // own returns this document's copy of a face.
@@ -336,6 +385,7 @@ func (d *documentFonts) own(f *shape.Face, ok bool) (*shape.Face, bool) {
 		d.mine = map[*shape.Face]*shape.Face{}
 	}
 	c := f.Clone()
+	d.bind(c)
 	d.mine[f] = c
 	return c, true
 }
