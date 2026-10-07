@@ -50,8 +50,17 @@ type runWork struct {
 	glyphs int
 	left   int64
 	// input bounds the bytes of each run shaped in a WithShapingLimits scope,
-	// zero where the caller checked the one run itself.
+	// zero where the caller checked the one run itself, or where nothing
+	// bounds a run's length (a ShapingBudget's default).
 	input int
+	// workPerByte and glyphsPerByte, where they are not zero, are a
+	// ShapingBudget's limits growing with what it shapes: each byte a run
+	// brings adds workPerByte to the work left, and the glyphs a run may hold
+	// are at least glyphsPerByte a byte of the longest run yet. granted is the
+	// work it has been given, which is what the work done is measured from.
+	workPerByte   int64
+	glyphsPerByte int
+	granted       int64
 	// layouts are the ones this call shaped through, whose limits are the
 	// call's own. See layoutLimits.
 	layouts []*layout
@@ -316,22 +325,31 @@ func (f *Face) WithShapingLimits(ctx context.Context, limits RunLimits, fn func(
 }
 
 func (w *runWork) checkInput(f *Face, s string, extra []string, ctx shapeContext) {
-	if w == nil || w.input == 0 {
+	if w == nil || w.input == 0 && w.workPerByte == 0 && w.glyphsPerByte == 0 {
 		return
 	}
 	w.checkCtx()
-	left := w.input
-	check := func(s string) {
-		if len(s) > left {
-			panic(runAbort{fmt.Errorf("%w: input bytes", ErrRunLimit)})
-		}
-		left -= len(s)
-	}
+	n := 0
 	for _, s := range []string{s, ctx.before, ctx.after, ctx.mergeBefore, ctx.mergeAfter, ctx.features.Tags, ctx.features.TagsOff, ctx.features.Language, f.settingsOn, f.settingsOff} {
-		check(s)
+		n += len(s)
 	}
 	for _, tag := range extra {
-		check(tag)
+		n += len(tag)
+	}
+	if w.input != 0 && n > w.input {
+		panic(runAbort{fmt.Errorf("%w: input bytes", ErrRunLimit)})
+	}
+	// A budget that grows with what it shapes. A run met again — a piece of a
+	// run already counted, as each script of a mixed run is, or the
+	// neighbour a boundary pair is found by — is counted again, which at most
+	// doubles what a byte is given.
+	if w.workPerByte != 0 {
+		more := w.workPerByte * int64(n)
+		w.left += more
+		w.granted += more
+	}
+	if w.glyphsPerByte != 0 {
+		w.glyphs = max(w.glyphs, w.glyphsPerByte*n)
 	}
 }
 
@@ -342,13 +360,30 @@ func (w *runWork) checkInput(f *Face, s string, extra []string, ctx shapeContext
 // not take a face as an argument — layout's, which finds its faces as it goes.
 //
 // Each run shaped or measured on a face under it is held to MaxInputBytes and
-// MaxGlyphs, as a run under WithShapingLimits is, and the work they all do is
-// charged to the one MaxWork. A budget is used on one goroutine, by Run.
+// MaxGlyphs, and the work they all do is charged to the one MaxWork. A budget
+// is used on one goroutine, by Run.
+//
+// Its defaults are not a run's, because its runs are a document's: layout
+// shapes a paragraph as one run, and a bound on how long one may be is a bound
+// on how long a paragraph may be, whatever it costs (issue 923). So where a
+// field is zero the budget grows with what it shapes, as HarfBuzz's limits on
+// a buffer grow with its length:
+//
+//   - MaxInputBytes: no bound on how long a run is. The work it does and the
+//     glyphs it makes are still bounded, by the two below.
+//   - MaxGlyphs: 32,768, or 64 for each byte of the longest run shaped yet,
+//     whichever is more — what a multiple substitution may make of a run, as
+//     HarfBuzz allows a buffer 64 times its length.
+//   - MaxWork: 64 million units, and 1,024 more for each byte of input a run
+//     brings, which is three times what a byte of the costliest real text
+//     costs (see RunLimits): a document is given work in proportion to its
+//     text, and a font that does much more than real text does runs out.
+//
+// A field the caller sets is a fixed bound, as it is for a run.
 type ShapingBudget struct {
-	limits RunLimits
-	work   *runWork
-	faces  []*Face
-	done   bool
+	work  *runWork
+	faces []*Face
+	done  bool
 }
 
 // NewShapingBudget is a budget under ctx, with the limits' zero fields at
@@ -358,15 +393,21 @@ func NewShapingBudget(ctx context.Context, limits RunLimits) (*ShapingBudget, er
 	if ctx == nil {
 		return nil, errors.New("shape: nil context")
 	}
-	limits, err := limits.withDefaults()
-	if err != nil {
+	if _, err := limits.withDefaults(); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &ShapingBudget{limits: limits,
-		work: &runWork{ctx: ctx, glyphs: limits.MaxGlyphs, left: limits.MaxWork, input: limits.MaxInputBytes}}, nil
+	w := &runWork{ctx: ctx, input: limits.MaxInputBytes, glyphs: limits.MaxGlyphs, left: limits.MaxWork}
+	if limits.MaxGlyphs == 0 {
+		w.glyphs, w.glyphsPerByte = 32768, 64
+	}
+	if limits.MaxWork == 0 {
+		w.left, w.workPerByte = 64<<20, 1024
+	}
+	w.granted = w.left
+	return &ShapingBudget{work: w}, nil
 }
 
 // Bound puts a face the caller owns under the budget, until Run returns:
@@ -436,5 +477,5 @@ func (b *ShapingBudget) Run(fn func() error) (work int64, err error) {
 			return 0, fmt.Errorf("%w: font layout: %v", ErrRunLimit, findings)
 		}
 	}
-	return b.limits.MaxWork - b.work.left, nil
+	return b.work.granted - b.work.left, nil
 }
