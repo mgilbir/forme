@@ -487,3 +487,56 @@ func TestAShapingBudgetStopsWhatItCannotAfford(t *testing.T) {
 		t.Error("a negative limit was accepted")
 	}
 }
+
+// A budget's defaults grow with what it shapes (issue 923): no bound on how
+// long a run is, glyphs of 64 a byte of the longest run, and 1,024 units of
+// work a byte on top of the 64 million — which a font doing several times
+// what real text does still runs out of.
+func TestAShapingBudgetsDefaultsGrowWithItsText(t *testing.T) {
+	noto, err := NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := noto.Clone()
+	budget, err := NewShapingBudget(context.Background(), RunLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = budget.Bound(f)
+	text := strings.Repeat("revenue ", 2000) // 16,000 bytes, past a run's 4,096
+	if _, err := budget.Run(func() error { f.ShapeGlyphs(text); return nil }); err != nil {
+		t.Fatalf("a run of %d bytes under a budget's defaults: %v", len(text), err)
+	}
+	if w := budget.work; w.glyphs != 64*len(text) || w.granted < 64<<20+1024*int64(len(text)) {
+		t.Errorf("after a run of %d bytes the budget allows %d glyphs and %d units, want %d and at least %d",
+			len(text), w.glyphs, w.granted, 64*len(text), 64<<20+1024*len(text))
+	}
+
+	// The allowance a byte brings, with the 64 million taken away so that
+	// what is tested is what a byte is given: real text fits in it, and a
+	// font trying 5,000 rules at every glyph, matching none, does not.
+	allowanceOnly := func() *ShapingBudget {
+		b, _ := NewShapingBudget(context.Background(), RunLimits{})
+		b.work.left, b.work.granted = 0, 0
+		return b
+	}
+	budget = allowanceOnly()
+	plain := noto.Clone()
+	_ = budget.Bound(plain)
+	if _, err := budget.Run(func() error { plain.ShapeGlyphs(text); return nil }); err != nil {
+		t.Errorf("real text does not fit in what its bytes are given: %v", err)
+	}
+	const rules = 5000
+	set := make([]fonttest.ContextRule, rules)
+	for i := range set {
+		set[i] = fonttest.ContextRule{Input: []int{gidB, gidD}, Lookups: []fonttest.SeqLookup{{At: 0, Lookup: 0}}}
+	}
+	hostile := contextFace(t, []fonttest.Lookup{substB(), {Type: 5, Subtables: [][]byte{
+		fonttest.SequenceContext1(map[int][]fonttest.ContextRule{gidB: set}),
+	}}}, nil)
+	budget = allowanceOnly()
+	_ = budget.Bound(hostile)
+	if _, err := budget.Run(func() error { hostile.ShapeGlyphs(strings.Repeat("b", 300)); return nil }); !errors.Is(err, ErrRunLimit) {
+		t.Errorf("a font doing %d units a byte fitted in what its bytes are given: %v", rules, err)
+	}
+}

@@ -214,9 +214,12 @@ func Compose(in Input, opts Options) Composed {
 // broken into lines, in a face of the caller's, one of the document's own
 // @font-face faces or an instance cut from either — is held to limits'
 // MaxInputBytes and MaxGlyphs, and the work they all do is charged to one
-// MaxWork for the document: shape.ShapingBudget, whose zero fields take the
-// defaults RunLimits states. The context is asked as that work is done, and
-// between the phases of composing.
+// MaxWork for the document: shape.ShapingBudget. Its zero fields are not a
+// single run's defaults but a document's, which grow with its text — no bound
+// on how long a run is, since layout shapes a paragraph as one, and glyphs and
+// work in proportion to what is shaped — so a document is admitted for what it
+// costs and not for how its text is cut into paragraphs. The context is asked
+// as that work is done, and between the phases of composing.
 //
 // It fails with the context's error, or an error wrapping shape.ErrRunLimit
 // — a run too long, a document's shaping over its budget, a font whose layout

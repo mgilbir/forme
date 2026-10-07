@@ -139,3 +139,26 @@ func TestAComposedDocumentsFacesAreUnboundedAfter(t *testing.T) {
 		t.Fatal("the composition drew no text, so this tests nothing")
 	}
 }
+
+// TestComposeContextsDefaultsAdmitLongParagraphs: layout shapes a paragraph
+// as one run, so a bound on a run's length was a bound on a paragraph's, and
+// the defaults refused a paragraph or a <pre> of more than 4 KB however little
+// it cost, while the same text cut into short paragraphs composed (issue 923).
+// The budget's defaults grow with the text instead; see shape.ShapingBudget.
+func TestComposeContextsDefaultsAdmitLongParagraphs(t *testing.T) {
+	for _, c := range []struct{ name, html string }{
+		{"a paragraph of 8 KB", "<p>" + strings.Repeat("revenue ", 1000) + "</p>"},
+		{"a paragraph of 40 KB", "<p>" + strings.Repeat("revenue ", 5000) + "</p>"},
+		{"a <pre> of 8 KB in lines of 80", "<pre>" + strings.Repeat(strings.Repeat("x", 79)+"\n", 100) + "</pre>"},
+		{"a paragraph of 60 KB of Devanagari", "<p>" + strings.Repeat("क्षत्रिय नमस्ते हिन्दी ", 1000) + "</p>"},
+	} {
+		got, err := ComposeContext(context.Background(), Input{HTML: c.html}, Options{}, shape.RunLimits{})
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if len(got.Ops) == 0 {
+			t.Errorf("%s composed nothing", c.name)
+		}
+	}
+}
