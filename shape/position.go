@@ -527,6 +527,7 @@ func (sh shaper) visibleBefore(buf []Glyph, at, flags, markSet int) int {
 	for j >= 0 && sh.l.ignoresIn(flags, markSet, buf[j]) {
 		j--
 	}
+	sh.work().spend(int64(at - 1 - j))
 	return j
 }
 

@@ -154,7 +154,9 @@ func (sh shaper) applyReverse(buf []Glyph, idx, from, to int) int {
 			continue
 		}
 		for _, sub := range lk.subs {
-			work.spend(int64(len(sub)) + int64(len(buf)) + 1)
+			// A subtable tried; its backtrack and lookahead are charged by
+			// the matchers that walk them.
+			work.spend(1)
 			gid, ok := sh.reverseChainAt(sub, buf, at, lk.flags)
 			if !ok {
 				continue

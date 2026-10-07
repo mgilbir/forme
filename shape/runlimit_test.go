@@ -309,3 +309,84 @@ func TestAScopeCancelledAfterItsLastRunIsRefused(t *testing.T) {
 		t.Fatalf("a scope cancelled after its last run: %v", err)
 	}
 }
+
+// The default limits admit a run of real text as long as MaxInputBytes allows,
+// in the scripts whose fonts do the most per character, with room to spare
+// (issue 916). A subtable used to be charged its whole size at every position
+// it was tried at, whether or not it covered the glyph, which put a byte of
+// Latin at about 460,000 units and of Devanagari at eight million: the 64M
+// default admitted 140 bytes of the one and 8 of the other. What is charged
+// now is what is read — see RunLimits — and the costliest of these, Devanagari,
+// is about 300 units a byte.
+func TestTheDefaultLimitsAdmitOrdinaryText(t *testing.T) {
+	noto, err := NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	load := func(path string) *Face {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := Load(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	arabic := load("../testdata/harfbuzz/fonts/NotoSansArabic.ttf")
+	khmer := load("../testdata/harfbuzz/fonts/NotoSansKhmer.ttf")
+	const maxInput = 4096 // RunLimits' default MaxInputBytes
+	for _, c := range []struct {
+		name string
+		face *Face
+		text string
+	}{
+		{"Latin", noto, "office affluent waffle "},
+		{"Devanagari", noto, "क्षत्रिय नमस्ते हिन्दी "},
+		{"Arabic", arabic, "مرحبا بالعالم "},
+		{"Khmer", khmer, "ភាសាខ្មែរ "},
+	} {
+		text := strings.Repeat(c.text, maxInput/len(c.text))
+		if _, missing := c.face.ShapeGlyphs(text); missing != 0 {
+			t.Fatalf("%s: the face cannot set the text, so this tests nothing", c.name)
+		}
+		result, err := c.face.ShapeGlyphsContext(context.Background(), RunInput{Text: text, Kerns: true}, RunLimits{})
+		if err != nil {
+			t.Errorf("%d bytes of %s refused at the default limits: %v", len(text), c.name, err)
+			continue
+		}
+		// Room to spare: a sixteenth of the default.
+		if result.Work > (64<<20)/16 {
+			t.Errorf("%d bytes of %s cost %d units, more than a sixteenth of the default", len(text), c.name, result.Work)
+		}
+	}
+}
+
+// What a rule set makes the shaper try is charged, however little of it
+// matches: a font that lists a thousand rules for a glyph and matches none
+// pays for the thousand at every position it is tried at. It is the work the
+// budget is for, and what charging only what is read must not stop counting.
+func TestTheRulesALookupTriesAreCharged(t *testing.T) {
+	const rules, run = 1000, 64
+	set := make([]fonttest.ContextRule, rules)
+	for i := range set {
+		// b followed by d, which the run never has.
+		set[i] = fonttest.ContextRule{Input: []int{gidB, gidD}, Lookups: []fonttest.SeqLookup{{At: 0, Lookup: 0}}}
+	}
+	f := contextFace(t, []fonttest.Lookup{substB(), {Type: 5, Subtables: [][]byte{
+		fonttest.SequenceContext1(map[int][]fonttest.ContextRule{gidB: set}),
+	}}}, nil)
+	text := strings.Repeat("b", run)
+	result, err := f.ShapeGlyphsContext(context.Background(), RunInput{Text: text}, RunLimits{MaxWork: 1 << 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Work < rules*run {
+		t.Errorf("%d positions each trying %d rules were charged %d units, fewer than the rules tried",
+			run, rules, result.Work)
+	}
+	if _, err := f.ShapeGlyphsContext(context.Background(), RunInput{Text: text}, RunLimits{MaxWork: rules * run / 2}); !errors.Is(err, ErrRunLimit) {
+		t.Errorf("a budget of half the rules tried was not exhausted: %v", err)
+	}
+}

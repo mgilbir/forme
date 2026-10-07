@@ -133,7 +133,10 @@ func (sh shaper) applyGSUBAt(idx int, buf []Glyph, at, depth int) (int, []Glyph)
 	}
 	work := sh.work()
 	for _, sub := range lk.subs {
-		work.spend(int64(len(sub)) + int64(len(buf)) + 1)
+		// A subtable tried. What it then reads beyond its coverage — the
+		// ligatures and rules it tries, the glyphs it steps over — is charged
+		// where it is read. See RunLimits.
+		work.spend(1)
 		switch lk.kind {
 		case 1:
 			if gid, ok := singleSubstAt(sub, buf[at].GID); ok {
@@ -343,7 +346,13 @@ func (sh shaper) ligatureAt(sub []byte, buf []Glyph, at, flags int) ([]int, int,
 		return nil, 0, false
 	}
 	set := sub[off:]
-	for j := 0; j < font.Be16(set, 0); j++ {
+	// Each ligature tried is charged once the search is done, as the glyphs
+	// matchInput looks at are.
+	j := 0
+	if work := sh.work(); work != nil {
+		defer func() { work.spend(int64(j) + 1) }()
+	}
+	for ; j < font.Be16(set, 0); j++ {
 		if 2+2*j+2 > len(set) {
 			break
 		}
@@ -523,16 +532,19 @@ func (sh shaper) formLigature(buf []Glyph, at, gid int, comps []int) (int, []Gly
 // ligature over a joiner means it.
 func (sh shaper) nextNotIgnored(buf []Glyph, from, flags, want int) int {
 	end := sh.end(buf)
-	for i := from; i < end; i++ {
+	i := from
+	for ; i < end; i++ {
 		if sh.ignores(flags, buf[i]) {
 			continue
 		}
 		if sh.stepsOver(buf[i], i, false) && (buf[i].GID != want || !sh.maskAllows(buf[i])) {
 			continue
 		}
-		return i
+		break
 	}
-	return end
+	// Each glyph looked at; see matchInput.
+	sh.work().spend(int64(i-from) + 1)
+	return i
 }
 
 // # Matching without building
@@ -574,10 +586,13 @@ func (sh shaper) matchInput(buf []Glyph, at, count, flags int, out *ruleInput,
 	end := sh.end(buf)
 	pos := at
 	base := ligbaseNotChecked
+	matched := true
+input:
 	for k := 0; k < count; k++ {
 		for {
 			if pos >= end {
-				return false
+				matched = false
+				break input
 			}
 			// The first glyph is the one the lookup is being applied at, and is
 			// compared whatever it is.
@@ -589,16 +604,18 @@ func (sh shaper) matchInput(buf []Glyph, at, count, flags int, out *ruleInput,
 		}
 		// A glyph the lookup is not for ends the match, as a glyph that differs
 		// does: it is part of the input, and the input is what the mask is about.
-		if !sh.maskAllows(buf[pos]) || !match(k, pos) {
-			return false
-		}
-		if k > 0 && !sh.sameLigaturePart(buf, at, pos, flags, &base) {
-			return false
+		if !sh.maskAllows(buf[pos]) || !match(k, pos) ||
+			k > 0 && !sh.sameLigaturePart(buf, at, pos, flags, &base) {
+			matched = false
+			break
 		}
 		out[k] = pos
 		pos++
 	}
-	return true
+	// Each glyph looked at, charged once the match is decided: a charge in the
+	// loop is a call in the loop, which an unbounded run pays for too.
+	sh.work().spend(int64(pos-at) + 1)
+	return matched
 }
 
 // ligbaseState is what sameLigaturePart has found out about the ligature the
@@ -644,6 +661,8 @@ func (sh shaper) sameLigaturePart(buf []Glyph, at, pos, flags int, base *ligbase
 	}
 	if *base == ligbaseNotChecked {
 		*base = ligbaseMayNotSkip
+		// At most maxContextLength glyphs, charged as that many.
+		sh.work().spend(maxContextLength)
 		for j, n := at-1, 0; n < maxContextLength; j, n = j-1, n+1 {
 			if j < 0 && (sh.run == nil || -j > len(sh.run.settled())) {
 				break
@@ -669,10 +688,13 @@ func (sh shaper) sameLigaturePart(buf []Glyph, at, pos, flags int, base *ligbase
 func (sh shaper) matchLookahead(buf []Glyph, from, count, flags int, match func(k int, g Glyph) bool) bool {
 	end := sh.end(buf)
 	pos := from
+	matched := true
+ahead:
 	for k := 0; k < count; k++ {
 		for {
 			if pos >= end {
-				return false
+				matched = false
+				break ahead
 			}
 			if !sh.ignores(flags, buf[pos]) && !(sh.stepsOver(buf[pos], pos, true) && !match(k, buf[pos])) {
 				break
@@ -680,11 +702,14 @@ func (sh shaper) matchLookahead(buf []Glyph, from, count, flags int, match func(
 			pos++
 		}
 		if !match(k, buf[pos]) {
-			return false
+			matched = false
+			break
 		}
 		pos++
 	}
-	return true
+	// Each glyph looked at; see matchInput.
+	sh.work().spend(int64(pos-from) + 1)
+	return matched
 }
 
 // matchBacktrack compares the glyphs before a position, nearest first, which
@@ -700,10 +725,13 @@ func (sh shaper) matchBacktrack(buf []Glyph, before, count, flags int, match fun
 		low = settled
 	}
 	pos := before - 1
+	matched := true
+behind:
 	for k := 0; k < count; k++ {
 		for {
 			if pos < low {
-				return false
+				matched = false
+				break behind
 			}
 			if g := sh.glyphAt(buf, pos); !sh.ignores(flags, g) && !(sh.stepsOver(g, pos, true) && !match(k, g)) {
 				break
@@ -711,11 +739,14 @@ func (sh shaper) matchBacktrack(buf []Glyph, before, count, flags int, match fun
 			pos--
 		}
 		if !match(k, sh.glyphAt(buf, pos)) {
-			return false
+			matched = false
+			break
 		}
 		pos--
 	}
-	return true
+	// Each glyph looked at; see matchInput.
+	sh.work().spend(int64(before-pos) + 1)
+	return matched
 }
 
 // sequenceContext matches a GSUB type 5 subtable and applies its lookups.
@@ -780,7 +811,13 @@ func (sh shaper) contextRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, 
 	}
 	set := sub[off:]
 	var in ruleInput
-	for r := 0; r < font.Be16(set, 0); r++ {
+	// Each rule tried is charged once the set is done, as the glyphs
+	// matchInput looks at are.
+	r := 0
+	if work := sh.work(); work != nil {
+		defer func() { work.spend(int64(r) + 1) }()
+	}
+	for ; r < font.Be16(set, 0); r++ {
 		if 2+2*r+2 > len(set) {
 			break
 		}
@@ -874,7 +911,13 @@ func (sh shaper) chainedRuleSet(sub []byte, setsAt, index int, buf []Glyph, at, 
 	}
 
 	var in ruleInput
-	for r := 0; r < font.Be16(set, 0); r++ {
+	// Each rule tried is charged once the set is done, as the glyphs
+	// matchInput looks at are.
+	r := 0
+	if work := sh.work(); work != nil {
+		defer func() { work.spend(int64(r) + 1) }()
+	}
+	for ; r < font.Be16(set, 0); r++ {
 		if 2+2*r+2 > len(set) {
 			break
 		}
@@ -1045,7 +1088,9 @@ func (sh shaper) runRecords(base []byte, recAt, count int, positions []int, buf 
 	// the buffer's length.
 	end := positions[len(positions)-1] + 1
 	startLen := len(buf)
+	work := sh.work()
 	for i := 0; i < count; i++ {
+		work.spend(1)
 		rec := recAt + 4*i
 		if rec+4 > len(base) {
 			break
