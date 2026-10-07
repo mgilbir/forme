@@ -10,9 +10,19 @@ import (
 var ErrRunLimit = errors.New("shape: run limit exceeded")
 
 // RunLimits bounds one ShapeGlyphsContext or ShapeGlyphsBounded call. Zero fields select defaults;
-// negative fields are invalid. MaxWork counts conservative lookup work units,
-// including subtable bytes and the glyphs a lookup can inspect. It does not
-// replace the font parser's own budgets or interrupt an individual font read.
+// negative fields are invalid. It does not replace the font parser's own
+// budgets or interrupt an individual font read.
+//
+// MaxWork counts the lookup work the run does: a unit for each lookup at each
+// position, each subtable tried, each ligature and each rule a subtable then
+// tries, and each glyph a match or a search for a base steps over. It is what
+// is read and not what could have been: a subtable was charged its size at
+// every position whether or not it covered the glyph, and the default refused
+// 140 bytes of Latin and 8 of Devanagari. Real text costs tens of units a
+// byte, and a few hundred in the costliest scripts and fonts — Noto Sans's
+// Devanagari and Noto Nastaliq Urdu — so the defaults admit MaxInputBytes of
+// any of them with fifty times to spare, and a font's runaway rules are still
+// stopped where the units they spend run out.
 type RunLimits struct {
 	MaxInputBytes int
 	MaxGlyphs     int

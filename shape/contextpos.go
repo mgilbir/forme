@@ -48,7 +48,9 @@ func (sh shaper) applyGPOSAt(idx int, buf []Glyph, at, depth int) int {
 	}
 	work := sh.work()
 	for _, sub := range lk.subs {
-		work.spend(int64(len(sub)) + int64(len(buf)) + 1)
+		// A subtable tried; what it reads beyond that is charged where it is
+		// read, as in applyGSUBAt.
+		work.spend(1)
 		var n int
 		switch lk.kind {
 		case 1:
@@ -425,7 +427,8 @@ func (sh shaper) markBaseFor(buf []Glyph, at int, sub []byte, ligature bool) int
 	if g.lastBaseUntil > at {
 		g.lastBaseUntil, g.lastBase = 0, -1
 	}
-	for j := at; j > g.lastBaseUntil; j-- {
+	j := at
+	for ; j > g.lastBaseUntil; j-- {
 		c := buf[j-1]
 		if sh.l.classOf(c) == classMark {
 			continue
@@ -442,6 +445,9 @@ func (sh shaper) markBaseFor(buf []Glyph, at int, sub []byte, ligature bool) int
 		g.lastBase = j - 1
 		break
 	}
+	// Each glyph looked at, charged once the search is done; see
+	// matchInput.
+	sh.work().spend(int64(at-j) + 1)
 	g.lastBaseUntil = at
 	return g.lastBase
 }
