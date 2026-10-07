@@ -334,3 +334,107 @@ func (w *runWork) checkInput(f *Face, s string, extra []string, ctx shapeContext
 		check(tag)
 	}
 }
+
+// ShapingBudget is one budget of shaping work, under a context, shared by
+// every face put under it: what a document costs to set, rather than what each
+// of its runs costs alone. It is WithShapingLimits for a caller whose shaping
+// and measuring goes through more faces than one, and through code that does
+// not take a face as an argument — layout's, which finds its faces as it goes.
+//
+// Each run shaped or measured on a face under it is held to MaxInputBytes and
+// MaxGlyphs, as a run under WithShapingLimits is, and the work they all do is
+// charged to the one MaxWork. A budget is used on one goroutine, by Run.
+type ShapingBudget struct {
+	limits RunLimits
+	work   *runWork
+	faces  []*Face
+	done   bool
+}
+
+// NewShapingBudget is a budget under ctx, with the limits' zero fields at
+// their defaults. It is an error for a nil context, a negative limit, or a
+// context already done.
+func NewShapingBudget(ctx context.Context, limits RunLimits) (*ShapingBudget, error) {
+	if ctx == nil {
+		return nil, errors.New("shape: nil context")
+	}
+	limits, err := limits.withDefaults()
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return &ShapingBudget{limits: limits,
+		work: &runWork{ctx: ctx, glyphs: limits.MaxGlyphs, left: limits.MaxWork, input: limits.MaxInputBytes}}, nil
+}
+
+// Bound puts a face the caller owns under the budget, until Run returns:
+// everything shaped or measured on it is charged to the budget and held to its
+// limits. A face already under this budget is left as it is. It is an error
+// for a face under another budget, or a scope's, and once Run has returned.
+//
+// The face is the caller's to own, as ShapeGlyphsBounded's is — its own
+// clone, not one shared with other goroutines — since the budget is written to
+// by everything shaped on it.
+func (b *ShapingBudget) Bound(f *Face) error {
+	switch {
+	case b == nil || f == nil:
+		return errors.New("shape: nil budget or face")
+	case b.done:
+		return errors.New("shape: the budget has been spent")
+	case f.runWork == b.work:
+		return nil
+	case f.runWork != nil:
+		return errors.New("shape: face is already shaping under a budget")
+	}
+	f.runWork = b.work
+	b.faces = append(b.faces, f)
+	return nil
+}
+
+// Run calls fn, which shapes and measures on faces put under the budget —
+// before it is called or while it runs — and reports the work they did.
+//
+// A run that reaches a limit, or finds the context done, stops fn where it
+// is, and Run reports why: an error wrapping ErrRunLimit, or the context's.
+// So does reading a layout table the faces shaped with running into one of
+// the font's own limits, as for WithShapingLimits. fn's own error is returned
+// as it is. Work is zero on any error. Every face is taken off the budget when
+// Run returns, and shapes unbounded after; the budget is spent, and Run may
+// not be called again.
+func (b *ShapingBudget) Run(fn func() error) (work int64, err error) {
+	if b == nil || fn == nil {
+		return 0, errors.New("shape: nil budget or function")
+	}
+	if b.done {
+		return 0, errors.New("shape: the budget has been spent")
+	}
+	defer func() {
+		b.done = true
+		for _, f := range b.faces {
+			if f.runWork == b.work {
+				f.runWork = nil
+			}
+		}
+		// The context is the caller's, and is not kept past its call.
+		b.work.ctx = nil
+		if p := recover(); p != nil {
+			if stop, ok := p.(runAbort); ok {
+				work, err = 0, stop.err
+			} else {
+				panic(p)
+			}
+		}
+	}()
+	if err := fn(); err != nil {
+		return 0, err
+	}
+	b.work.checkCtx()
+	for _, f := range b.faces {
+		if findings := b.work.layoutLimits(f); len(findings) != 0 {
+			return 0, fmt.Errorf("%w: font layout: %v", ErrRunLimit, findings)
+		}
+	}
+	return b.limits.MaxWork - b.work.left, nil
+}

@@ -161,7 +161,12 @@ charged, for a caller keeping a document-wide budget. It shapes through a clone
 of the face; a caller that keeps clones of its own, one per goroutine, calls
 `Face.ShapeGlyphsBounded` on one instead, which allocates what an unbounded run
 does. `Face.WithShapingLimits` shares one budget across the measuring and
-shaping a callback does, for paragraph breaking. Font parsing and Unicode
+shaping a callback does, for paragraph breaking, and `shape.ShapingBudget`
+shares one across any number of faces. `layout.ComposeContext` composes a
+document under a context and a `ShapingBudget`: every run it shapes or
+measures, in any face, is held to the run limits and charged to one budget for
+the document, and it fails with the context's error or `ErrRunLimit` rather
+than return a composition that stopped part way. Font parsing and Unicode
 preprocessing keep their own bounds and are not interrupted inside a phase.
 
 Glyphs come back in **visual order** — the order a pen draws them, left to right —
