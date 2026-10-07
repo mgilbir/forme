@@ -590,9 +590,11 @@ func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face,
 	f.svg = readSVG(tables["SVG "])
 	f.bitmap = newCBDTInk(tables, f.unitsPerEm)
 	f.sbix = newSbixInk(tables, prog.NumGlyphs, f.unitsPerEm)
-	if bitmapOnly {
-		f.strikes = newEBDTStrikes(tables, f.unitsPerEm)
-	}
+	// Read for every face that has them, and drawn from only where the face
+	// has no outlines or a caller asks for its bitmaps (PaintOptions.Bitmaps):
+	// a face with outlines is measured from those, whatever strikes it
+	// carries.
+	f.strikes = newEBDTStrikes(tables, f.unitsPerEm)
 	f.varc = newVARCFace(f, tables, prog.NumGlyphs)
 	f.vert = readVerticalTables(tables, prog.NumGlyphs, budget)
 	if err := budget.Err(); err != nil {

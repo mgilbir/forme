@@ -616,6 +616,10 @@ func useFace(face *Face) {
 		_ = face.GlyphColour(gid, 20)
 		paintBalanced(face, gid, PaintOptions{Palette: 1, PPEM: 20,
 			PaletteOverrides: map[int]Color{0: {R: 255, A: 128}, 0xFFFF: {G: 255, A: 255}}})
+		// And from its monochrome or greyscale strike where the face has
+		// outlines too, which only a caller asking for its bitmaps reaches.
+		_ = face.GlyphColourFor(gid, PaintOptions{PPEM: 12, Bitmaps: true})
+		paintBalanced(face, gid, PaintOptions{PPEM: 12, Bitmaps: true})
 	}
 	_, _, _ = face.ScriptOffsets()
 	// The MATH table, where the font has one: every question, for glyphs in

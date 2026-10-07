@@ -277,6 +277,16 @@ type PaintOptions struct {
 	// overridden: Foreground is what colours it. It is HarfBuzz's
 	// custom_palette_color.
 	PaletteOverrides map[int]Color
+	// Bitmaps paints a glyph of a face that has outlines from its EBDT or
+	// bdat strike for PPEM, as a face with none is painted, where the strike
+	// has an image of it, rather than from its outline: an ImageMask in the
+	// foreground. It is what a writer needs that may embed a font's bitmaps
+	// and not its outlines — OS/2 fsType's bitmap embedding only
+	// (FSTypeBitmapOnly) — and for a glyph a strike has no image of, the
+	// outline is still what is painted, which such a writer will refuse
+	// rather than embed. CBDT and sbix images are painted whether or not it
+	// is set, and a face's measurements are its outlines' either way.
+	Bitmaps bool
 }
 
 // GlyphColour is which of its representations PaintGlyph paints a glyph from.
@@ -300,11 +310,11 @@ const (
 	// ColourSVG is a glyph of the SVG table, an SVG document. See Image.
 	ColourSVG
 	// ColourMask is a glyph of a monochrome or greyscale strike, EBDT or
-	// bdat, in a face with no outlines (BitmapOnly): an ImageMask, which
-	// has no colour of its own and is painted in the foreground. It is told
-	// apart from ColourBitmap, though both are images, because it is drawn
-	// as the text's colour is, and from ColourNone because the face has no
-	// outline to draw it from instead.
+	// bdat, in a face with no outlines (BitmapOnly), or in one with outlines
+	// asked with PaintOptions.Bitmaps: an ImageMask, which has no colour of
+	// its own and is painted in the foreground. It is told apart from
+	// ColourBitmap, though both are images, because it is drawn as the text's
+	// colour is, and from ColourNone because it is not drawn from an outline.
 	ColourMask
 )
 
@@ -313,6 +323,14 @@ const (
 // only some of them knows which glyphs to draw otherwise. A glyph the face
 // does not have, and every glyph of a standard face, is ColourNone.
 func (f *Face) GlyphColour(gid, ppem int) GlyphColour {
+	return f.GlyphColourFor(gid, PaintOptions{PPEM: ppem})
+}
+
+// GlyphColourFor is GlyphColour for PaintGlyph asked with opts, of which it
+// reads PPEM and Bitmaps: with Bitmaps, a glyph of a face with outlines that
+// its EBDT or bdat strike for the size has an image of is ColourMask.
+func (f *Face) GlyphColourFor(gid int, opts PaintOptions) GlyphColour {
+	ppem := opts.PPEM
 	if f.prog == nil || gid < 0 || gid >= f.prog.NumGlyphs {
 		return ColourNone
 	}
@@ -332,7 +350,7 @@ func (f *Face) GlyphColour(gid, ppem int) GlyphColour {
 	if _, ok := f.bitmapImage(gid, ppem); ok {
 		return ColourBitmap
 	}
-	if f.strikes != nil {
+	if f.paintsStrikes(opts) {
 		if _, ok := f.strikes.image(gid, ppem); ok {
 			return ColourMask
 		}
@@ -340,9 +358,16 @@ func (f *Face) GlyphColour(gid, ppem int) GlyphColour {
 	return ColourNone
 }
 
+// paintsStrikes reports whether PaintGlyph asked with opts paints glyphs from
+// the face's EBDT or bdat strikes: always for a face with no outlines, and for
+// one with them only when opts asks for its Bitmaps.
+func (f *Face) paintsStrikes(opts PaintOptions) bool {
+	return f.strikes != nil && (f.bitmapOnly || opts.Bitmaps)
+}
+
 // PaintGlyph paints a glyph through p: its COLR paints, or its SVG document,
-// or its CBDT or sbix image, or, in a face with no outlines, its EBDT or bdat
-// image as a mask in the foreground, or, for a glyph with none, its outline in
+// or its CBDT or sbix image, or, in a face with no outlines or asked for its
+// Bitmaps, its EBDT or bdat image as a mask in the foreground, or, for a glyph with none, its outline in
 // the foreground; see GlyphColour. A face whose glyphs are only bitmaps
 // (BitmapOnly) paints nothing for a glyph with no image. Coordinates are in
 // font units, y increasing upwards.
@@ -375,7 +400,7 @@ func (f *Face) PaintGlyph(gid int, opts PaintOptions, p Painter) error {
 		p.Image(img)
 		return nil
 	}
-	if f.strikes != nil {
+	if f.paintsStrikes(opts) {
 		if img, ok := f.strikes.image(gid, opts.PPEM); ok {
 			img.Color = fg
 			p.Image(img)

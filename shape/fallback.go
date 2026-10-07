@@ -211,7 +211,7 @@ func (f *Face) glyphExtentsAt(gid, ppem int) (extents, bool) {
 			return e, true
 		}
 	}
-	if f.strikes != nil {
+	if f.bitmapOnly && f.strikes != nil {
 		if e, ok := f.strikes.extentsAt(gid, ppem); ok {
 			return e, true
 		}
