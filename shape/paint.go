@@ -222,6 +222,10 @@ type Image struct {
 	// takes no bitmap it would have to scale does, draws an image that is not
 	// Exact another way or not at all.
 	Exact bool
+	// Strike is the strike a bitmap glyph's image is from — the one its size
+	// chose, for PaintGlyph — and the zero Strike for an SVG document. See
+	// Face.Strikes.
+	Strike Strike
 }
 
 // Painter receives a glyph's painting from PaintGlyph.
@@ -403,6 +407,9 @@ func (f *Face) PaintGlyph(gid int, opts PaintOptions, p Painter) error {
 	if f.paintsStrikes(opts) {
 		if img, ok := f.strikes.image(gid, opts.PPEM); ok {
 			img.Color = fg
+			if st, chosen := f.strikes.strikeFor(opts.PPEM); chosen {
+				img.Strike = f.strikes.public(st)
+			}
 			p.Image(img)
 			return nil
 		}
@@ -719,13 +726,19 @@ func (f *Face) bitmapImage(gid, ppem int) (Image, bool) {
 	}
 	var data []byte
 	var width, height int
+	var from Strike
 	ok, exact := false, false
 	if f.bitmap != nil {
-		data, width, height, exact, ok = f.bitmap.png(gid, ppem)
+		if at, chosen := f.bitmap.strikeFor(ppem); chosen {
+			data, width, height, ok = f.bitmap.pngIn(gid, at)
+			from = Strike{Table: "CBDT", PPEMX: int(f.bitmap.cblc[at+44]), PPEMY: int(f.bitmap.cblc[at+45]), at: at}
+			exact = exactStrike(ppem, from.PPEMX, from.PPEMY)
+		}
 	}
 	if !ok && f.sbix != nil {
 		strike, sppem := f.sbix.strikeFor(ppem)
 		_, _, width, height, data, ok = f.sbix.pngIn(gid, strike, sppem)
+		from = Strike{Table: "sbix", PPEMX: sppem, PPEMY: sppem, at: strike}
 		exact = exactStrike(ppem, sppem, sppem)
 	}
 	if !ok {
@@ -740,10 +753,8 @@ func (f *Face) bitmapImage(gid, ppem int) (Image, bool) {
 		Data:   data,
 		Width:  width,
 		Height: height,
-		Box: Rect{
-			XMin: float64(e.xBearing), YMin: float64(e.yBearing + e.height),
-			XMax: float64(e.xBearing + e.width), YMax: float64(e.yBearing),
-		},
-		Exact: exact,
+		Box:    extentsBox(e),
+		Exact:  exact,
+		Strike: from,
 	}, true
 }

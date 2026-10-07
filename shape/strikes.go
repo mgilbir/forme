@@ -76,6 +76,9 @@ import (
 type ebdtStrikes struct {
 	loc, dat []byte
 	upem     int
+	// tag is the table the bitmaps are in, EBDT or Apple's bdat, which is
+	// what Strike.Table says.
+	tag string
 }
 
 // The tables, in the order they are looked for: EBLC and EBDT, and failing
@@ -113,7 +116,7 @@ func newEBDTStrikes(tables map[string][]byte, upem int) *ebdtStrikes {
 		if n == 0 || n >= 0x10000 || 8+bitmapSizeTableSize*n > int64(len(loc)) {
 			return nil
 		}
-		return &ebdtStrikes{loc: loc, dat: dat, upem: upem}
+		return &ebdtStrikes{loc: loc, dat: dat, upem: upem, tag: pair[1]}
 	}
 	return nil
 }
@@ -188,13 +191,7 @@ func (s *ebdtStrikes) strikeFor(ppem int) (strike, bool) {
 	if !ok {
 		return strike{}, false
 	}
-	st := strike{at: at, ppemX: int(s.loc[at+44]), ppemY: int(s.loc[at+45]), depth: int(s.loc[at+strikeBitDepth])}
-	switch st.depth {
-	case 1, 2, 4, 8:
-	default:
-		return strike{}, false
-	}
-	return st, st.ppemX > 0 && st.ppemY > 0
+	return s.strikeAt(at)
 }
 
 // span is b[at:at+n], and false where that is not all inside b.
@@ -417,6 +414,27 @@ func (s *ebdtStrikes) image(gid, ppem int) (Image, bool) {
 	if !ok {
 		return Image{}, false
 	}
+	img, ok := s.imageIn(gid, st)
+	img.Exact = ok && exactStrike(ppem, st.ppemX, st.ppemY)
+	return img, ok
+}
+
+// strikeAt is the strike whose BitmapSizeTable is at an offset in EBLC, which
+// the caller has checked is one of the table's, and false where its bit depth
+// is not one EBDT has.
+func (s *ebdtStrikes) strikeAt(at int) (strike, bool) {
+	st := strike{at: at, ppemX: int(s.loc[at+44]), ppemY: int(s.loc[at+45]), depth: int(s.loc[at+strikeBitDepth])}
+	switch st.depth {
+	case 1, 2, 4, 8:
+	default:
+		return strike{}, false
+	}
+	return st, st.ppemX > 0 && st.ppemY > 0
+}
+
+// imageIn is image in one strike, with no size to say whether it is exact
+// for.
+func (s *ebdtStrikes) imageIn(gid int, st strike) (Image, bool) {
 	work := font.NewBudget(strikeWork)
 	img, ok := s.locate(st, gid, work)
 	if !ok {
@@ -447,7 +465,6 @@ func (s *ebdtStrikes) image(gid, ppem int) (Image, bool) {
 			XMin: float64(m.bearingX) * sx, YMin: float64(m.bearingY-m.height) * sy,
 			XMax: float64(m.bearingX+m.width) * sx, YMax: float64(m.bearingY) * sy,
 		},
-		Exact: exactStrike(ppem, st.ppemX, st.ppemY),
 	}, true
 }
 

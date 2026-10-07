@@ -620,6 +620,11 @@ func useFace(face *Face) {
 		// outlines too, which only a caller asking for its bitmaps reaches.
 		_ = face.GlyphColourFor(gid, PaintOptions{PPEM: 12, Bitmaps: true})
 		paintBalanced(face, gid, PaintOptions{PPEM: 12, Bitmaps: true})
+		// And its image in each of the face's strikes, whose offsets the
+		// file states.
+		for _, s := range face.Strikes() {
+			_, _ = face.StrikeImage(gid, s)
+		}
 	}
 	_, _, _ = face.ScriptOffsets()
 	// The MATH table, where the font has one: every question, for glyphs in

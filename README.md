@@ -153,7 +153,9 @@ the size drawn, handed to a `Painter` call for call as HarfBuzz's
 strike's glyph is painted as a mask in the text's colour — in a face with no
 outlines, and in one with them when a caller asks (`PaintOptions.Bitmaps`), as a
 writer of a font licensed for bitmap embedding only does. `Face.GlyphColour`
-says which a glyph is painted from, so a caller can fall back.
+says which a glyph is painted from, so a caller can fall back, `Face.Strikes`
+lists a face's bitmap strikes, and `Face.StrikeImage` is a glyph's image in
+one of them, for a caller falling back to another strike than its size chose.
 
 **Untrusted text.** `Face.ShapeGlyphsContext` shapes one run under a context
 and `RunLimits` — input bytes, live glyphs and charged lookup work, by default

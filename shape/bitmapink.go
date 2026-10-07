@@ -64,9 +64,23 @@ func (c *cbdtInk) extentsAt(gid, ppem int) (extents, bool) {
 // (exactStrike). It is false where get_extents is, and for an image with no
 // bytes, which HarfBuzz paints nothing of.
 func (c *cbdtInk) png(gid, ppem int) (data []byte, width, height int, exact, ok bool) {
-	m, format, ppemX, ppemY, ok := c.metrics(gid, ppem)
+	strike, ok := c.strikeFor(ppem)
 	if !ok {
 		return nil, 0, 0, false, false
+	}
+	data, width, height, ok = c.pngIn(gid, strike)
+	if !ok {
+		return nil, 0, 0, false, false
+	}
+	return data, width, height, exactStrike(ppem, int(c.cblc[strike+44]), int(c.cblc[strike+45])), true
+}
+
+// pngIn is png in one strike, the offset of its BitmapSizeTable, with no size
+// to say whether it is exact for.
+func (c *cbdtInk) pngIn(gid, strike int) (data []byte, width, height int, ok bool) {
+	m, format, _, _, ok := c.metricsIn(gid, strike)
+	if !ok {
+		return nil, 0, 0, false
 	}
 	// The data's length is after the metrics: small ones in format 17, five
 	// bytes, and big ones in 18, eight.
@@ -80,9 +94,9 @@ func (c *cbdtInk) png(gid, ppem int) (data []byte, width, height int, exact, ok 
 		data = data[:n]
 	}
 	if len(data) == 0 {
-		return nil, 0, 0, false, false
+		return nil, 0, 0, false
 	}
-	return data, int(m[1]), int(m[0]), exactStrike(ppem, ppemX, ppemY), true
+	return data, int(m[1]), int(m[0]), true
 }
 
 // metrics is where a glyph's image starts in CBDT, its metrics first, in the
@@ -94,6 +108,12 @@ func (c *cbdtInk) metrics(gid, ppem int) (m []byte, format, ppemX, ppemY int, ok
 	if !ok {
 		return nil, 0, 0, 0, false
 	}
+	return c.metricsIn(gid, strike)
+}
+
+// metricsIn is metrics in one strike, the offset of its BitmapSizeTable in
+// CBLC, which the caller has checked is one of the table's.
+func (c *cbdtInk) metricsIn(gid, strike int) (m []byte, format, ppemX, ppemY int, ok bool) {
 	ppemX, ppemY = int(c.cblc[strike+44]), int(c.cblc[strike+45])
 	array := int(font.Be32(c.cblc, strike))
 	count := int(font.Be32(c.cblc, strike+8))
