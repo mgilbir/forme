@@ -244,14 +244,22 @@ func ParseLength(vals []css.ComponentValue, ctx LengthContext) (l Length, unsupp
 			// what it refers to.
 			return Length{}, true, false
 		}
-		u, fits := FromPx(t.Number * px)
-		if !fits {
-			// A length past what the range holds. It is saturated rather than
-			// wrapped, and reported: "width: 1e9px" is a stylesheet saying
-			// something impossible, and laying out the saturated value silently
-			// would produce a page with one enormous box and no explanation.
-			return Length{Kind: LengthAbsolute, Value: u}, false, false
-		}
+		// A length past what a Unit holds is the largest length there is, of
+		// its sign. CSS Values 3 §4: "When a value cannot be explicitly
+		// supported due to range/precision limitations, it must be converted
+		// to the closest value supported by the implementation." Every
+		// browser does it with its own fixed point, and calc() does it here,
+		// where the arithmetic saturates.
+		//
+		// It used to be refused, on the ground that the layer above would
+		// report it. Nothing did: layout read a refused length as no
+		// declaration at all, so "height: 1e9px" composed at scale one with
+		// no finding, while "height: calc(1e9 * 1px)" set the box at the
+		// largest height and the page said, through min-scale, that it had
+		// been shrunk to fit. What explains an enormous box is what the
+		// enormous box does to the page, and that is reported where it
+		// happens. See TestAHugeLengthIsTheLargestLengthHoweverItIsWritten.
+		u, _ := FromPx(t.Number * px)
 		return Length{Kind: LengthAbsolute, Value: u}, false, true
 	}
 	return Length{}, false, false

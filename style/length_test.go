@@ -311,22 +311,31 @@ func TestNoInfinitiesOrNaNs(t *testing.T) {
 	}
 }
 
-// TestOversizedLengthsAreReported pins that a length past the range is
-// saturated *and* reported. Saturating quietly would lay out one enormous box
-// with no explanation.
-func TestOversizedLengthsAreReported(t *testing.T) {
-	for _, input := range []string{"1e9px", "1e12pt", "-1e9px", "99999999in"} {
-		vals, _ := css.ParseComponentValues(input)
+// TestOversizedLengthsAreClamped pins that a length past the range is the
+// largest length of its sign, and is read: CSS Values 3 §4 converts a value an
+// implementation cannot hold "to the closest value supported". It used to be
+// refused, for a layer above to report, and no layer did; see
+// layout's TestAHugeLengthIsTheLargestLengthHoweverItIsWritten.
+func TestOversizedLengthsAreClamped(t *testing.T) {
+	for _, c := range []struct {
+		input string
+		want  Unit
+	}{
+		{"1e9px", MaxUnit}, {"1e12pt", MaxUnit}, {"-1e9px", MinUnit},
+		{"99999999in", MaxUnit}, {"1e400px", MaxUnit}, {"-1e400px", MinUnit},
+		{"calc(1e9px)", MaxUnit}, {"calc(1e9 * 1px)", MaxUnit},
+		{"calc(-1e9px)", MinUnit},
+	} {
+		vals, _ := css.ParseComponentValues(c.input)
 		l, unsupported, ok := ParseLength(vals, LengthContext{})
-		if ok {
-			t.Errorf("%q was accepted as %v px", input, l.Value.Px())
+		if !ok || unsupported {
+			t.Errorf("%q was refused (unsupported %v); it is a length, the largest "+
+				"there is", c.input, unsupported)
+			continue
 		}
-		if unsupported {
-			t.Errorf("%q was reported as unsupported; it is a length, just an impossible one", input)
-		}
-		// And what it saturated to is at an end of the range, not wrapped.
-		if l.Value != MaxUnit && l.Value != MinUnit {
-			t.Errorf("%q saturated to %d, which is not an end of the range", input, l.Value)
+		// At an end of the range, not wrapped.
+		if l.Kind != LengthAbsolute || l.Value != c.want {
+			t.Errorf("%q = %v of kind %v, want %d", c.input, l.Value, l.Kind, c.want)
 		}
 	}
 }

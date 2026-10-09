@@ -93,9 +93,10 @@ const (
 //
 // ok reports whether the value fitted. A caller that ignores it gets a
 // well-defined number at the end of the range, which is the safe direction to be
-// wrong in — but "width: 1e9px" is a stylesheet saying something impossible, and
-// the layer above turns a false here into a finding rather than laying out a
-// box the width of a country.
+// wrong in, and is what a stylesheet's length gets: "width: 1e9px" is the
+// widest box there is, as CSS Values says a value past an implementation's
+// range is, and the page that box makes says so (see ParseLength). A caller
+// that would rather refuse the value reads ok.
 func FromPx(px float64) (u Unit, ok bool) {
 	if math.IsNaN(px) {
 		// A NaN length poisons every comparison it reaches — it is neither
