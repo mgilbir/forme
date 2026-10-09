@@ -230,7 +230,7 @@ func TestAnUnreadablePageMarginKeepsTheOneItHad(t *testing.T) {
 	for css, unsupported := range map[string]bool{
 		`@page { margin: auto }`:                true,
 		`@page { margin: var(--m) }`:            true,
-		`@page { margin: min(1in, 10%) }`:       true,
+		`@page { margin: 2lh }`:                 true,
 		`@page { margin: red }`:                 false,
 		`@page { margin: 1in 2in 3in 4in 5in }`: false,
 		`@page { margin-left: banana }`:         false,

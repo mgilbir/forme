@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
@@ -63,21 +64,36 @@ func opacityOf(cs style.ComputedStyle) float64 {
 	if raw == "" {
 		return 1
 	}
-	scale := 1.0
-	if pct, ok := strings.CutSuffix(raw, "%"); ok {
-		raw, scale = ascii.TrimCSSSpace(pct), 100
-	}
-	n, ok := parseNumber(raw)
+	n, ok := opacityNumber(raw)
 	if !ok {
 		return 1
 	}
-	switch n /= scale; {
+	switch {
 	case n <= 0:
 		return 0
 	case n >= 1:
 		return 1
 	}
 	return n
+}
+
+// opacityNumber reads opacity's value as a number, a percentage being a
+// hundredth: written out, or a math function of either, which the value
+// grammar admits and so this has to read. "opacity: calc(50%)" used to be kept
+// by the cascade and read here as nothing, so the box stayed opaque and
+// nothing said so. A value with no function in it is read without
+// tokenizing, since this is asked of every box that paints.
+func opacityNumber(raw string) (float64, bool) {
+	if strings.IndexByte(raw, '(') >= 0 {
+		vals, _ := css.ParseComponentValues(raw)
+		return style.ParseNumberPercentage(vals)
+	}
+	scale := 1.0
+	if pct, ok := strings.CutSuffix(raw, "%"); ok {
+		raw, scale = ascii.TrimCSSSpace(pct), 100
+	}
+	n, ok := parseNumber(raw)
+	return n / scale, ok
 }
 
 // groupsItsPaint reports whether a box's own opacity makes a group of it.

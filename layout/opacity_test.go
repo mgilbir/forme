@@ -113,6 +113,13 @@ func TestOpacityIsClampedAndReadsPercentages(t *testing.T) {
 		{"", 1},
 		{"half", 1},
 		{"0.5px", 1},
+		// A math function the grammar admits is read, not taken as opaque.
+		{"calc(50%)", 0.5},
+		{"min(50%, 30%)", 0.3},
+		{"clamp(0, 0.25, 1)", 0.25},
+		{"max(0.2, 2)", 1},
+		{"calc(nan)", 0},
+		{"calc(0.5 + 10%)", 1}, // a number and a percentage do not add
 	} {
 		if got := opacityOf(style.Initial().With("opacity", tc.decl)); got != tc.want {
 			t.Errorf("opacity: %q read as %v, want %v", tc.decl, got, tc.want)

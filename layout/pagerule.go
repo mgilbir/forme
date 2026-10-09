@@ -299,8 +299,9 @@ func badPageSize(rec *Recorder, p pendingPage, d css.Declaration) {
 
 // badPageMargin reports a margin descriptor this could not use, as the cascade
 // would report the same value on an element: a var() and a value the value
-// grammar calls valid and unevaluated — min(), "auto", which the paper has no
-// calculation for — are this engine's gap and not the author's mistake. The
+// grammar calls valid and unevaluated — min() over a percentage, "auto", which
+// the paper has no calculation for — are this engine's gap and not the
+// author's mistake. The
 // var() case was reported as invalid CSS while "margin: var(--m)" on an
 // element was unsupported, so the page was counted clean with its margin
 // wrong (audit C110).

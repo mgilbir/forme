@@ -134,7 +134,9 @@ func TestCalcRefusesWhatIsNotALength(t *testing.T) {
 		"calc(1px * 2px)", // two lengths multiply to an area
 		"calc(1px / 2px)", // and divide to a number with nowhere to go
 		"calc(2 / 1px)",   //
-		"calc(1px / 0)",   // division by zero is not infinity, it is invalid
+		"min(1px, 2)",     // nor do a min()'s arguments
+		"round(1.5px)",    // B may be left out only when A is a number
+		"sign(1px)",       // which is what sign() is
 		"calc(4)",         // a number is not a length
 		"calc()",          // and neither is nothing
 		"calc(1px +)",     // nor half an expression

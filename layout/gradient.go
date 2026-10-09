@@ -374,8 +374,9 @@ func (l *layouter) bandStop(b *Box, arg []css.ComponentValue) (bandStop, bool) {
 	case style.LengthAbsolute, style.LengthPercent:
 	default:
 		// auto is not a position, and a calc() that came out as both a length
-		// and a percentage cannot be ordered against its neighbours until the
-		// gradient line has a length. Neither is read here.
+		// and a percentage — or a math function over a percentage — cannot be
+		// ordered against its neighbours until the gradient line has a
+		// length. None of them is read here.
 		return bandStop{}, false
 	}
 	return bandStop{at: length, placed: true, colour: c}, true

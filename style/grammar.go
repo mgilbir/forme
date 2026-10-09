@@ -1,8 +1,6 @@
 package style
 
 import (
-	"strings"
-
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/internal/ascii"
 )
@@ -34,10 +32,10 @@ import (
 //   - valid: the declaration is kept;
 //   - invalid: §4.2 drops it, and the finding is the author's to act on;
 //   - valid, and naming something this engine does not evaluate — a colour
-//     function past sRGB, a math function other than calc(), a unit nothing
-//     here resolves: the declaration is dropped as well, so the one before it
-//     stands — which is the fallback an author writes such a declaration after —
-//     and the finding says the engine is missing something.
+//     function past sRGB, min() over a percentage it cannot yet resolve, a
+//     unit nothing here resolves: the declaration is dropped as well, so the
+//     one before it stands — which is the fallback an author writes such a
+//     declaration after — and the finding says the engine is missing something.
 //
 // # What it is, and what it is not
 //
@@ -255,9 +253,6 @@ const (
 	kindNumber
 	kindLength
 	kindPercent
-	// kindLengthPercent is a sum of a length and a percentage, which only a
-	// slot that takes both can hold.
-	kindLengthPercent
 	kindAngle
 	kindTime
 	kindFrequency
@@ -291,8 +286,8 @@ func unitKind(unit string) mathKind {
 	return kindNone
 }
 
-// mathFunctions are CSS Values 4's math functions. Only calc() is evaluated
-// here — see calc.go — and the rest are valid CSS this engine does not compute.
+// mathFunctions are CSS Values 4's math functions, which mathfn.go reads and
+// runs.
 var mathFunctions = map[string]bool{
 	"calc": true, "min": true, "max": true, "clamp": true, "round": true,
 	"mod": true, "rem": true, "abs": true, "sign": true, "sin": true,
@@ -313,6 +308,10 @@ var otherFunctions = map[string]bool{
 }
 
 // mathTerm judges a function in a numeric slot.
+//
+// The type is the evaluator's own: the function is read by the code that
+// would run it, so the grammar cannot call valid what the reader then cannot
+// read.
 func mathTerm(v css.ComponentValue, n numeric) verdict {
 	name := ascii.Lower(v.Token.Value)
 	if otherFunctions[name] {
@@ -321,309 +320,55 @@ func mathTerm(v css.ComponentValue, n numeric) verdict {
 	if !mathFunctions[name] {
 		return invalid
 	}
-	kind, evaluated, ok := mathOf(v)
-	if !ok || !n.takes(kind) {
+	p, ok := compileMath(v, mathScope{typecheck: true, pctAs: n.percentAs()})
+	if !ok || !n.takes(p.typ) {
 		return invalid
 	}
-	// calc() is evaluated where a length is read, and where a slot says its
-	// reader evaluates it; anywhere else, a number, an integer or an angle
-	// given by one is valid CSS this engine does not compute.
-	if evaluated && (n.readsCalc || (n.length || n.percent) && kind != kindNumber) {
+	if p.evaluable && n.reads(p) {
 		return valid
 	}
 	return unevaluated(name + "()")
 }
 
-// takes reports whether a slot holds what a math expression computes to.
-func (n numeric) takes(k mathKind) bool {
-	switch k {
+// percentAs is what a percentage in this slot resolves against, for a math
+// function's type: a length where the slot takes one, and otherwise a
+// percentage of its own, which §10.9 does not let add to a number.
+func (n numeric) percentAs() mathKind {
+	if n.length {
+		return kindLength
+	}
+	return kindPercent
+}
+
+// takes reports whether a slot holds what a math function computes to.
+func (n numeric) takes(t mathType) bool {
+	if t.pct && !n.percent {
+		return false
+	}
+	switch t.kind {
 	case kindNumber:
 		return n.number
 	case kindLength:
 		return n.length
 	case kindPercent:
 		return n.percent
-	case kindLengthPercent:
-		return n.length && n.percent
 	case kindAngle:
 		return n.angle
 	}
 	return false
 }
 
-// mathOf type-checks a math function by CSS Values 4 §10.9, and reports whether
-// calc.go evaluates it — only calc() and parentheses, over numbers,
-// percentages, angles and the lengths pxPerUnit resolves.
+// reads reports whether this slot's reader evaluates a math function it holds.
 //
-// The arithmetic is Values 3's, as calc.go's is: a product needs a number on
-// one side, and a quotient a number on the right. An expression that does not
-// type-check is not a value, and the declaration holding it is invalid.
-func mathOf(fn css.ComponentValue) (kind mathKind, evaluated, ok bool) {
-	name := ascii.Lower(fn.Token.Value)
-	args := splitOnComma(fn.Values)
-	sum := func(vals []css.ComponentValue) (mathKind, bool, bool) { return mathSum(vals) }
-	all := func(want int) ([]mathKind, bool) {
-		if want > 0 && len(args) != want {
-			return nil, false
-		}
-		out := make([]mathKind, len(args))
-		for i, a := range args {
-			k, _, ok := sum(a)
-			if !ok {
-				return nil, false
-			}
-			out[i] = k
-		}
-		return out, true
-	}
-	same := func(kinds []mathKind) (mathKind, bool) {
-		k := kinds[0]
-		for _, o := range kinds[1:] {
-			var ok bool
-			if k, ok = addKinds(k, o); !ok {
-				return kindNone, false
-			}
-		}
-		return k, true
-	}
-
-	switch name {
-	case "calc":
-		if len(args) != 1 {
-			return kindNone, false, false
-		}
-		return sum(args[0])
-	case "min", "max", "hypot":
-		kinds, ok := all(0)
-		if !ok {
-			return kindNone, false, false
-		}
-		k, ok := same(kinds)
-		return k, false, ok
-	case "clamp":
-		if len(args) != 3 {
-			return kindNone, false, false
-		}
-		var kinds []mathKind
-		for i, a := range args {
-			if (i == 0 || i == 2) && isNoneArg(a) {
-				continue
-			}
-			k, _, ok := sum(a)
-			if !ok {
-				return kindNone, false, false
-			}
-			kinds = append(kinds, k)
-		}
-		k, ok := same(kinds)
-		return k, false, ok
-	case "round":
-		if len(args) > 0 {
-			if s, isIdent := singleIdent(args[0]); isIdent {
-				switch s {
-				case "nearest", "up", "down", "to-zero":
-					args = args[1:]
-				}
-			}
-		}
-		if len(args) != 1 && len(args) != 2 {
-			return kindNone, false, false
-		}
-		kinds, ok := all(0)
-		if !ok {
-			return kindNone, false, false
-		}
-		k, ok := same(kinds)
-		return k, false, ok
-	case "mod", "rem", "atan2":
-		kinds, ok := all(2)
-		if !ok {
-			return kindNone, false, false
-		}
-		k, ok := same(kinds)
-		if name == "atan2" {
-			k = kindAngle
-		}
-		return k, false, ok
-	case "abs":
-		kinds, ok := all(1)
-		if !ok {
-			return kindNone, false, false
-		}
-		return kinds[0], false, true
-	case "sign":
-		_, ok := all(1)
-		return kindNumber, false, ok
-	case "sin", "cos", "tan":
-		kinds, ok := all(1)
-		return kindNumber, false, ok && (kinds[0] == kindNumber || kinds[0] == kindAngle)
-	case "asin", "acos", "atan":
-		kinds, ok := all(1)
-		return kindAngle, false, ok && kinds[0] == kindNumber
-	case "pow":
-		kinds, ok := all(2)
-		return kindNumber, false, ok && kinds[0] == kindNumber && kinds[1] == kindNumber
-	case "sqrt", "exp":
-		kinds, ok := all(1)
-		return kindNumber, false, ok && kinds[0] == kindNumber
-	case "log":
-		if len(args) != 1 && len(args) != 2 {
-			return kindNone, false, false
-		}
-		kinds, ok := all(0)
-		if !ok {
-			return kindNone, false, false
-		}
-		for _, k := range kinds {
-			if k != kindNumber {
-				return kindNone, false, false
-			}
-		}
-		return kindNumber, false, true
-	}
-	return kindNone, false, false
-}
-
-func isNoneArg(vals []css.ComponentValue) bool {
-	s, ok := singleIdent(vals)
-	return ok && s == "none"
-}
-
-// addKinds is the type of a sum.
-func addKinds(a, b mathKind) (mathKind, bool) {
-	switch {
-	case a == b:
-		return a, true
-	case (a == kindLength || a == kindPercent || a == kindLengthPercent) &&
-		(b == kindLength || b == kindPercent || b == kindLengthPercent):
-		return kindLengthPercent, true
-	}
-	return kindNone, false
-}
-
-// mathSum reads "a + b - c", where each operand is a product. CSS Values
-// requires white space around "+" and "-", which is what tells them from the
-// sign of a number; tokens arrive with that already settled.
-func mathSum(vals []css.ComponentValue) (mathKind, bool, bool) {
-	terms, _, ok := splitOperators(vals, "+-")
-	if !ok {
-		return kindNone, false, false
-	}
-	var kind mathKind
-	evaluated := true
-	for i, t := range terms {
-		k, ev, ok := mathProduct(t)
-		if !ok {
-			return kindNone, false, false
-		}
-		evaluated = evaluated && ev
-		if i == 0 {
-			kind = k
-			continue
-		}
-		if kind, ok = addKinds(kind, k); !ok {
-			return kindNone, false, false
-		}
-	}
-	return kind, evaluated, true
-}
-
-// mathProduct reads "a * b / c".
-func mathProduct(vals []css.ComponentValue) (mathKind, bool, bool) {
-	terms, ops, ok := splitOperators(vals, "*/")
-	if !ok {
-		return kindNone, false, false
-	}
-	kind, evaluated, ok := mathValue(terms[0])
-	if !ok {
-		return kindNone, false, false
-	}
-	for i, t := range terms[1:] {
-		k, ev, ok := mathValue(t)
-		if !ok {
-			return kindNone, false, false
-		}
-		evaluated = evaluated && ev
-		switch {
-		case ops[i] == '/' && k != kindNumber:
-			return kindNone, false, false
-		case k == kindNumber:
-		case kind == kindNumber:
-			kind = k
-		default:
-			return kindNone, false, false
-		}
-	}
-	return kind, evaluated, true
-}
-
-// mathValue reads one operand.
-func mathValue(vals []css.ComponentValue) (mathKind, bool, bool) {
-	vals = items(vals)
-	if len(vals) != 1 {
-		return kindNone, false, false
-	}
-	v := vals[0]
-	switch {
-	case v.IsBlock() && v.Token.Kind == css.LeftParen:
-		return mathSum(v.Values)
-	case v.IsFunction():
-		name := ascii.Lower(v.Token.Value)
-		if !mathFunctions[name] {
-			return kindNone, false, false
-		}
-		k, ev, ok := mathOf(v)
-		return k, ev && name == "calc", ok
-	case !v.IsToken():
-		return kindNone, false, false
-	}
-	t := v.Token
-	switch t.Kind {
-	case css.Number:
-		return kindNumber, true, true
-	case css.Percentage:
-		return kindPercent, true, true
-	case css.Dimension:
-		k := unitKind(t.Unit)
-		if k == kindNone {
-			return kindNone, false, false
-		}
-		_, _, supported := pxPerUnit(t.Unit, LengthContext{})
-		return k, (k == kindLength && supported) || k == kindAngle, true
-	case css.Ident:
-		switch ascii.Lower(t.Value) {
-		case "e", "pi", "infinity", "-infinity", "nan":
-			return kindNumber, false, true
-		}
-	}
-	return kindNone, false, false
-}
-
-// splitOperators cuts a value at the top-level delimiters in ops, which must
-// separate operands: an operator first, last or next to another is not an
-// expression.
-func splitOperators(vals []css.ComponentValue, ops string) ([][]css.ComponentValue, []byte, bool) {
-	var terms [][]css.ComponentValue
-	var seen []byte
-	start := 0
-	for i, v := range vals {
-		if !v.IsToken() || v.Token.Kind != css.Delim || len(v.Token.Value) != 1 ||
-			!strings.Contains(ops, v.Token.Value) {
-			continue
-		}
-		part := vals[start:i]
-		if len(items(part)) == 0 {
-			return nil, nil, false
-		}
-		terms = append(terms, part)
-		seen = append(seen, v.Token.Value[0])
-		start = i + 1
-	}
-	last := vals[start:]
-	if len(items(last)) == 0 {
-		return nil, nil, false
-	}
-	return append(terms, last), seen, true
+// A length's reader is ParseLength, which evaluates any of them that resolves
+// to a length: a percentage in it is folded into LengthCalc, or, under min()
+// or the like, carried as LengthMath for Resolve to run against the basis. A
+// slot whose reader evaluates a number or an angle as well says so with
+// readsCalc. Anywhere else, a number, an integer, an angle or a bare
+// percentage given by a math function is valid CSS this engine does not
+// compute.
+func (n numeric) reads(p mathProgram) bool {
+	return n.readsCalc || n.length && p.typ.kind == kindLength
 }
 
 // Colours.

@@ -33,6 +33,12 @@ func TestAnAngleIsReadInDegrees(t *testing.T) {
 		{"calc((10deg + 20deg) * 3)", 90},
 		{"calc(-45deg)", -45},
 		{"calc(calc(100grad) - 1rad * 0)", 90},
+		// §10.9.2: a NaN at the top of a calculation is censored to zero.
+		{"calc(1e308deg * 10 - 1e308deg * 10)", 0},
+		{"calc(nan * 1deg)", 0},
+		{"min(10deg, 0.25turn)", 10},
+		{"atan2(1, -1)", 135},
+		{"calc(acos(-1) / 2)", 90},
 	} {
 		got, ok := ParseAngle(angleValues(t, tc.src))
 		if !ok || math.Abs(got-tc.want) > 1e-9 {
@@ -46,15 +52,14 @@ func TestAnAngleIsReadInDegrees(t *testing.T) {
 		"calc(10%)",          // a percentage is not an <angle>
 		"calc(45deg + 10%)",
 		"calc(45deg * 2deg)", // an angle squared
-		"calc(45deg / 0)",    // division by zero
+		"calc(45deg / 0)",    // an infinity, which an angle has no largest value for
 		"calc(45deg / 1deg)", // a quotient of two dimensions
 		"calc(45deg +5deg)",  // "+" needs space on both sides
 		"45deg 10deg",        // two
 		"45px", "45", "10%", "calc()",
-		// Past a float, and nothing a float can be: an angle has no largest
-		// value to stand for either.
+		// Past a float: an angle has no largest value to stand for it.
 		"calc(1e308deg * 10)",
-		"calc(1e308deg * 10 - 1e308deg * 10)",
+		"min(10deg, 10%)", // a percentage is not an <angle>, even here
 	} {
 		if got, ok := ParseAngle(angleValues(t, bad)); ok {
 			t.Errorf("%s was read as %v degrees", bad, got)
@@ -91,11 +96,11 @@ func TestAnAnglePercentageKeepsItsParts(t *testing.T) {
 // read, nor an angle added to a length.
 func TestALengthIsNotAnAngle(t *testing.T) {
 	for _, bad := range []string{"calc(10deg)", "calc(10px + 10deg)", "calc(10% + 1turn)"} {
-		if l, ok := evalCalc(angleValues(t, bad)[0].Values, LengthContext{FontSize: 16}); ok {
+		if l, ok := evalLength(angleValues(t, bad)[0], LengthContext{FontSize: 16}); ok {
 			t.Errorf("%s was read as the length %+v", bad, l)
 		}
 	}
-	if l, ok := evalCalc(angleValues(t, "calc(10% + 2px * 3)")[0].Values, LengthContext{}); !ok ||
+	if l, ok := evalLength(angleValues(t, "calc(10% + 2px * 3)")[0], LengthContext{}); !ok ||
 		l.Kind != LengthCalc || l.Percent != 10 || l.Value.Px() != 6 {
 		t.Errorf("a length-percentage is %+v %v", l, ok)
 	}

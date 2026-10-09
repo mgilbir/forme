@@ -429,7 +429,9 @@ func (l *layouter) replacedIntrinsicWidth(b *Box) style.Unit {
 		case style.LengthAbsolute:
 			w := transferredWidth(maxZero(length.Value.Sub(insetV)), ratio, offH, offV)
 			return maxZero(l.clampWidth(b, w, 0))
-		case style.LengthPercent:
+		case style.LengthPercent, style.LengthCalc, style.LengthMath:
+			// Any percentage, inside calc() or min() as well: each is of the
+			// same ancestor's height.
 			if basis, ok := l.settledAncestorHeight(b); ok {
 				h, _ := length.Resolve(basis, true)
 				w := transferredWidth(maxZero(h.Sub(insetV)), ratio, offH, offV)
@@ -534,7 +536,7 @@ func (l *layouter) settledLength(b *Box, property string) (style.Unit, bool) {
 	switch length.Kind {
 	case style.LengthAbsolute:
 		return length.Value, true
-	case style.LengthPercent:
+	case style.LengthPercent, style.LengthCalc, style.LengthMath:
 		basis, ok := l.settledAncestorHeight(b)
 		if !ok {
 			return 0, false

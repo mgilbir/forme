@@ -263,7 +263,9 @@ func init() {
 	g["overflow-y"] = g["overflow-x"]
 	g["clip"] = single(either(kw("auto"), rectFn))
 	// css-color-4 §11.2.
-	g["opacity"] = single(num(numeric{number: true, percent: true}))
+	// Read by layout's opacityNumber, which evaluates a math function of
+	// either.
+	g["opacity"] = single(num(numeric{number: true, percent: true, readsCalc: true}))
 	// filter-effects-1 §5: none | <filter-value-list>.
 	g["filter"] = filterValue
 	// css-will-change-1 §3: auto | <animateable-feature>#, a feature being
