@@ -457,6 +457,9 @@ func (p *Prepared) apply(doc *html.Node, m Metrics, viewport Media, urls InlineU
 			parent = out.Styles[p]
 		}
 		b, declared, own := s.computeFor(n, rules, parent, "")
+		// Before anything below reads the style, and before any child
+		// inherits from it: "display: inherit" takes the computed value.
+		computeDisplayContents(b, n, parentElement(n) == nil)
 		// What has been resolved so far, for the questions asked of it
 		// below. It is a view of the builder and not a copy; the writes that
 		// follow go through the builder.

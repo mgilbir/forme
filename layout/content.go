@@ -304,9 +304,17 @@ func attrArgument(fn css.ComponentValue) string {
 // The text keeps the pseudo-element's style, which is what it inherits. The
 // value used to be read as "inline", and the box it made drew all of those.
 //
-// A pseudo-element whose content is one picture is a replaced element, whose
-// content is not boxes, and the value is not honoured on it any more than on
-// an <img>: see contentsIsHonoured. It keeps its box, and says so.
+// A pseudo-element whose content is one picture keeps its box, and says so,
+// because a lone url() reads two ways and the two answer it opposite ways.
+// css-content-3's grammar admits it both as a <content-list>, whose <image>
+// "represents an anonymous inline replaced element" the pseudo-element holds
+// — which the value would hoist into the box around it, as it hoists text —
+// and as a <content-replacement>, which "makes the element or pseudo-element a
+// replaced element", on which css-display-3 §2.5 makes the value compute to
+// "none" and the picture is not drawn at all. One draws the picture and the
+// other draws nothing, an element's answer (style.unusualDisplayContents) does
+// not settle a pseudo-element's, so this keeps what it drew before and does
+// not let the page be silent about it.
 func (b *boxBuilder) addGenerated(box *Box, n *html.Node, name string, fontSize style.Unit) {
 	g := b.generated(n, name, fontSize)
 	if g == nil {

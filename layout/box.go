@@ -508,7 +508,6 @@ func buildBoxes(doc *html.Node, styled style.Styled, base documentBase, rec *Rec
 	if root == nil {
 		return nil
 	}
-	b.documentElement = root
 	// The root's font-size is resolved against the initial value, since there
 	// is no parent to take one from, and it then becomes what every "rem" in
 	// the document means. CSS Values §5.1.1 says it in as many words: an em on
@@ -589,9 +588,6 @@ type boxBuilder struct {
 	counters     counterSnapshots
 	rootFontSize style.Unit
 	count        int
-	// documentElement is the root, which §2.7 blockifies and so exempts from
-	// "display: contents". See contentsIsHonoured.
-	documentElement *html.Node
 	// reportedPhraseSeparators says the finding below has been made once. It is
 	// once per document rather than once per box for the reason
 	// layouter.reportWordBreak is: the value is inherited, so a page that
@@ -1134,39 +1130,18 @@ func (b *boxBuilder) appendContents(box *Box, n *html.Node, parentFontSize style
 }
 
 // replacedByItsContents reports whether an element is one that "display:
-// contents" removes from box generation.
+// contents" removes from box generation: whether that is its computed display.
 //
-// The value does not apply to every element, and css-display-3's appendix on
-// unusual elements is why: an element whose layout is not decided by CSS box
-// generation has no contents to be replaced by. A replaced element's content is
-// a picture or a document and a form control's is a widget the engine draws —
-// neither is a subtree of boxes, so "the boxes its children make" names nothing
-// and the declaration cannot be honoured. Those keep the box they had and the
-// finding that says the value was not applied.
-//
-// The root element is the other exception, and is not one this engine chose:
-// §2.7 blockifies the root, so "display: contents" on <html> computes to
-// "block" and the element has a box like any other. It is left with its old
-// treatment and its finding rather than blockified here, because blockifying
-// the root is a rule about every display value and not about this one.
+// It is the computed value and nothing else, because where the value does not
+// hold the cascade has already said so. css-display-3 §2.5 makes it compute to
+// "none" on a replaced element or a form control, and Appendix B lists which
+// those are; §2.8 makes it compute to "block" on the root. Each is a computed
+// value, and style.unusualDisplayContents is the one place that answers it —
+// an element listed there never reaches here as "contents".
 func (b *boxBuilder) replacedByItsContents(n *html.Node) bool {
-	return contentsIsHonoured(n, b.styles[n], b.documentElement)
-}
-
-// contentsIsHonoured is the predicate above with the state it needs passed in,
-// so that the guardrail in pipeline.go can ask the same question the box tree
-// asks rather than a second copy of it.
-func contentsIsHonoured(n *html.Node, cs style.ComputedStyle, root *html.Node) bool {
-	if n == nil || cs.IsZero() {
-		return false
-	}
-	if !ascii.EqualFold(ascii.TrimCSSSpace(cs.Get("display")), "contents") {
-		return false
-	}
-	if n == root {
-		return false
-	}
-	return !replacesItsOwnContent(n) && controlKindOf(n) == controlNone
+	cs := b.styles[n]
+	return !cs.IsZero() &&
+		ascii.EqualFold(ascii.TrimCSSSpace(cs.Get("display")), "contents")
 }
 
 // endsAWord reports whether an element ends the word before it, without being
@@ -1443,16 +1418,17 @@ func parseDisplay(raw string) displayType {
 	case "table-column":
 		return displayType{outer: OuterBlock, inner: InnerTableColumn}
 	case "contents":
-		// "display: contents" replaces the element with its children, and where
-		// it is honoured the element never reaches here at all —
-		// contentsIsHonoured decides that, and the walk skips the box.
+		// "display: contents" replaces the element with its children, and an
+		// element never reaches here with it: appendChildren follows the
+		// element instead of building it, and the elements the value does not
+		// hold on — the root, a replaced element, a form control — have had it
+		// computed to "block" or "none" by the cascade. See
+		// style.unusualDisplayContents.
 		//
-		// What reaches here is the cases it refuses: the root element, a
-		// replaced element, a form control. Each of those has content of its
-		// own that is not its children, so there is nothing to replace it with;
-		// the specification's own answer is to treat the value as an ordinary
-		// one, and inline is what the element would have been. The caller
-		// reports it.
+		// What does reach here is a ::before or an ::after whose content is one
+		// picture, which addGenerated keeps as the inline box it was and
+		// reports, and a reader asking what kind of box an element is without
+		// building it, for which inline is the answer that claims least.
 		return displayType{outer: OuterInline, inner: InnerFlow}
 	case "ruby-base", "ruby-base-container":
 		// The boxes a ruby is built from, laid out as the inline boxes they
