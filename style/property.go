@@ -870,8 +870,8 @@ const (
 	// kwRevertLayer is CSS Cascade 5's. It rolls the value back to the
 	// previous cascade *layer* — the layers below the declaration's own in
 	// the same origin, and only where there are none to the previous origin,
-	// which is revert. Neither roll-back is implemented: the cascade reads
-	// both as "unset" and says so. See Styler.resolve.
+	// which is revert. Both roll-backs are made where the winner is chosen,
+	// before any value is resolved. See revert.go.
 	kwRevertLayer = "revert-layer"
 )
 

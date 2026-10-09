@@ -58,17 +58,16 @@ import (
 // what keeps this safe rather than subtly wrong: an imported sheet cannot land
 // *unlayered* and beat the layers around it, because it does not land at all.
 //
-// A revert-layer value is not implemented: it is read as "unset", as "revert"
-// is, and reported as not implemented where the cascade resolves it (see
-// Styler.resolve). Neither is a quiet narrowing: one is a rule this engine
-// declines to fetch and says so, the other a keyword it says it does not act
-// on.
+// A revert-layer value rolls back to the layer below the declaration's own, the
+// group being an origin and a layer number together; see revert.go.
 
 // layerRank orders two declarations of the same origin and importance by the
 // layer each was written in. Higher wins, as with CascadeRank.
 //
 // Unlayered is zero and is not a layer: it is the band above all of them for a
-// normal declaration and below all of them for an important one.
+// normal declaration and below all of them for an important one. The layers are
+// numbered from one, so a presentational hint's hintLayer, minus one, is below
+// every one of them; a hint is never important.
 func layerRank(layer int, important bool) int {
 	if important {
 		if layer == 0 {
