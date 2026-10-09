@@ -184,6 +184,9 @@ type Face struct {
 	// EBDT or bloc and bdat, for a face that has no outlines to draw it from
 	// instead: nil for every other face. See strikes.go.
 	strikes *ebdtStrikes
+	// strikeList is the strikes of bitmap, sbix and strikes, listed once. See
+	// Strikes.
+	strikeList *strikeList
 	// varc measures and draws a glyph through the VARC table, which is asked
 	// after COLR and before the outline: nil for a face with none, or one
 	// HarfBuzz would refuse. See varc.go.
@@ -595,6 +598,7 @@ func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face,
 	// a face with outlines is measured from those, whatever strikes it
 	// carries.
 	f.strikes = newEBDTStrikes(tables, f.unitsPerEm)
+	f.strikeList = f.listStrikes()
 	f.varc = newVARCFace(f, tables, prog.NumGlyphs)
 	f.vert = readVerticalTables(tables, prog.NumGlyphs, budget)
 	if err := budget.Err(); err != nil {
