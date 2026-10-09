@@ -16,8 +16,8 @@ import (
 //
 // Two of the three answers were not offsets into a stylesheet at all: a
 // declaration written in a style attribute is in the markup, and a finding
-// about the styling as a whole — matching that stopped early, "revert" being
-// unimplemented — is in no file.
+// about the styling as a whole — matching that stopped early, the note that
+// further problems went unreported — is in no file.
 
 // findingFor returns the first finding whose message holds substr.
 func findingFor(t *testing.T, fs []Finding, substr string) Finding {
@@ -78,16 +78,19 @@ func TestAFindingFromAStyleAttributeIsInTheMarkup(t *testing.T) {
 	}
 }
 
-// TestAFindingAboutTheWholeStylingIsInNoFile. "revert" is not implemented and
-// is reported once for the document; reporting it at byte nought of a
-// stylesheet sends an author to the top of a file to look for something that is
-// not there.
+// TestAFindingAboutTheWholeStylingIsInNoFile. The note that stands for the
+// styling problems past the bound is about the document's styling and not about
+// any one of them; reporting it at byte nought of a stylesheet sends an author
+// to the top of a file to look for something that is not there.
+//
+// It used to be "revert" being unimplemented, which was reported once for the
+// document. The keyword is honoured now, so this is the note instead.
 func TestAFindingAboutTheWholeStylingIsInNoFile(t *testing.T) {
 	built := Build(Input{
 		HTML: `<p id=p>x</p>`,
-		CSS:  []Stylesheet{{Source: "p { color: red } p { color: revert }"}},
+		CSS:  []Stylesheet{{Source: strings.Repeat("p { width: nonsense } ", 250)}},
 	})
-	f := findingFor(t, built.Findings, "revert")
+	f := findingFor(t, built.Findings, "further styling problems")
 	if f.Source.CSSOffset >= 0 || f.Source.HTMLOffset >= 0 {
 		t.Errorf("the finding is at CSS byte %d and markup byte %d; it is about the "+
 			"document's styling and is in neither",

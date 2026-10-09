@@ -58,11 +58,8 @@ import (
 // what keeps this safe rather than subtly wrong: an imported sheet cannot land
 // *unlayered* and beat the layers around it, because it does not land at all.
 //
-// A revert-layer value is not implemented: it is read as "unset", as "revert"
-// is, and reported as not implemented where the cascade resolves it (see
-// Styler.resolve). Neither is a quiet narrowing: one is a rule this engine
-// declines to fetch and says so, the other a keyword it says it does not act
-// on.
+// A revert-layer value rolls back to the layer below the declaration's own, the
+// group being an origin and a layer number together; see revert.go.
 
 // layerRank orders two declarations of the same origin and importance by the
 // layer each was written in. Higher wins, as with CascadeRank.

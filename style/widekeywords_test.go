@@ -14,9 +14,8 @@ import (
 // declaration using it was read as a value of the property and dropped for not
 // being one — "color: revert-layer" left the colour an *earlier* declaration had
 // set, which is the opposite of what it asks for. It rolls back to the previous
-// cascade layer, and this engine has none: no @layer rule reaches it, so every
-// declaration is in the implicit outer layer, and the specification's own answer
-// for that case is that it behaves as "revert".
+// cascade layer, and where nothing lower in the origin set the property it
+// behaves as "revert". Both roll back now; revert_test.go has the cases.
 //
 // The other place is inertness, which is in inert_test.go: a property this
 // engine does not implement is reported only where the document asked for
@@ -43,7 +42,9 @@ func styledColor(t *testing.T, src string) (string, []Finding) {
 	return got, out.Findings
 }
 
-// TestRevertLayerIsRevert.
+// TestRevertLayerIsRevert where there are no layers: the paragraph has no
+// colour from any other origin, so both come to "unset", and neither is the red
+// an earlier declaration set.
 func TestRevertLayerIsRevert(t *testing.T) {
 	plain, _ := styledColor(t, "p { color: red }")
 	if plain != "red" {
@@ -60,32 +61,19 @@ func TestRevertLayerIsRevert(t *testing.T) {
 		t.Errorf("\"revert-layer\" left the colour the earlier declaration set, " +
 			"which is what happens when it is read as a colour and dropped")
 	}
-	// And it is reported by name rather than as a value that did not parse.
-	named := false
+	// It is honoured, so nothing says otherwise.
 	for _, f := range findings {
-		if strings.Contains(f.Message, "revert-layer") && f.Unsupported {
-			named = true
+		if strings.Contains(f.Message, "revert-layer") {
+			t.Errorf("a finding names \"revert-layer\": %q", f.Message)
 		}
-	}
-	if !named {
-		t.Errorf("no finding names \"revert-layer\" as unimplemented: %v", findings)
 	}
 
-	// With @layer applied it rolls back to the layer below, which "unset" does
-	// not do either — so the finding says where the reading can be wrong, and
-	// that includes a lower layer. Here it is: base's green is what the
-	// keyword asks for, and it comes out as the initial colour.
-	_, findings = styledColor(t,
+	// With @layer it rolls back to the layer below, which "unset" does not:
+	// base's green is what the keyword asks for.
+	got, _ := styledColor(t,
 		"@layer base, top; @layer base { p { color: green } } @layer top { p { color: revert-layer } }")
-	layers := false
-	for _, f := range findings {
-		if strings.Contains(f.Message, "revert-layer") && strings.Contains(f.Message, "cascade layer") {
-			layers = true
-		}
-	}
-	if !layers {
-		t.Errorf("the finding for \"revert-layer\" does not say a lower cascade layer "+
-			"is where reading it as \"unset\" is wrong: %v", findings)
+	if got != "green" {
+		t.Errorf("\"revert-layer\" in the top layer gave %q, want the base layer's green", got)
 	}
 }
 

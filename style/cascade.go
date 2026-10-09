@@ -2179,10 +2179,20 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 	// loop below resolves every property with, because it is the same
 	// question — a winner, an inline style against it, and inheritance under
 	// both — asked early.
-	writingMode := s.early("writing-mode", winners, inline, parent)
-	rtl := ascii.EqualFold(s.early("direction", winners, inline, parent), "rtl")
+	//
+	// A roll-back asked here sees the candidates before the rename, which is
+	// right for these two: neither is a logical property, so no rename can add
+	// or take away one of their declarations.
+	rb := &rollback{cands: cands}
+	writingMode := s.early("writing-mode", winners, inline, rb, parent)
+	rtl := ascii.EqualFold(s.early("direction", winners, inline, rb, parent), "rtl")
 	if renameLogical(cands, inline, writingMode, rtl) {
 		pick()
+		// The index is by property name, and the rename changed names: a
+		// revert of "margin-left" has to roll back to a "margin-inline-start"
+		// that set the left margin, as css-logical says the two are one
+		// property.
+		rb.byProperty = nil
 	}
 
 	// The properties something declared, in the registry's order so that
@@ -2210,7 +2220,7 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 		prop := registry.slots[id].property()
 		value, have := "", false
 
-		value, have = s.winning(name, winners, inline)
+		value, have = s.winning(name, winners, inline, rb)
 
 		b.set(id, s.resolve(name, prop, value, have, parent))
 		if name == "font-size" {
@@ -2223,15 +2233,16 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 // declaresItsOwnValue reports whether a winning declaration says something about
 // the element rather than deferring to its parent.
 //
-// The three CSS-wide keywords that defer are the ones that reach inheritFrom:
-// "inherit" always, and "unset" and "revert" on a property that inherits. Every
-// other value — including "initial", which is a statement about this element —
-// is the element's own.
+// The CSS-wide keywords that defer are the ones that reach inheritFrom:
+// "inherit" always, and "unset" on a property that inherits. Every other value
+// — including "initial", which is a statement about this element — is the
+// element's own. "revert" and "revert-layer" never arrive: winning rolls them
+// back to the declaration they stand for, or to "unset" where there is none.
 func declaresItsOwnValue(value string, prop property) bool {
 	switch ascii.Lower(ascii.TrimCSSSpace(value)) {
 	case kwInherit:
 		return false
-	case kwUnset, kwRevert, kwRevertLayer:
+	case kwUnset:
 		return !prop.inherits
 	}
 	return true
@@ -2269,38 +2280,6 @@ func (s *Styler) resolve(name string, prop property, value string, have bool, pa
 		case kwUnset:
 			// "unset" is "inherit if the property inherits, initial if it does
 			// not" — the keyword that means "as though nothing had been said".
-			if prop.inherits {
-				return inheritFrom()
-			}
-			return prop.initial
-		case kwRevert, kwRevertLayer:
-			// Reverting to the previous origin is not implemented. Treating it
-			// as "unset" is the closest available answer and is wrong whenever a
-			// user-agent rule set the property, so it is reported rather than
-			// quietly substituted.
-			//
-			// "revert-layer" is read the same way. It rolls back to the
-			// cascade layers below the declaration's own, and to the previous
-			// origin only where there are none, so it differs from "unset"
-			// wherever a lower layer set the property as well. It was not
-			// recognised at all, so a declaration using it was read as a value
-			// of the property and dropped for not being one: "color:
-			// revert-layer" left the colour the *earlier* declaration had set,
-			// which is the opposite of what it asks for.
-			said := ascii.Lower(value)
-			lower := "a lower-priority stylesheet"
-			if said == kwRevertLayer {
-				lower = "a lower cascade layer or a lower-priority stylesheet"
-			}
-			if !s.suppressed(said) {
-				s.report(Finding{
-					Offset: -1,
-					Message: "\"" + said + "\" is not implemented and was read as \"unset\", " +
-						"which differs wherever " + lower + " set the property",
-					Unsupported: true,
-					Property:    name,
-				})
-			}
 			if prop.inherits {
 				return inheritFrom()
 			}
@@ -2882,6 +2861,10 @@ func usesVar(vals []css.ComponentValue) bool {
 // winner among the stylesheet candidates, or the inline style's declaration
 // where it beats that winner. have is false where neither said anything.
 //
+// A winner that is "revert" or "revert-layer" is rolled back here, to the
+// declaration it stands for or to "unset" where there is none — see revert.go —
+// so neither keyword reaches resolve. rb is the element's candidates for that.
+//
 // It is one function because two places ask it, and they drifted. computeFor's
 // main loop decides every property with it, and the rename of logical
 // properties has to know the element's writing mode and direction before that
@@ -2891,7 +2874,7 @@ func usesVar(vals []css.ComponentValue) bool {
 // style="direction: rtl !important; margin-inline-start: 10px" computed
 // direction rtl and put the margin on the left (audit C108).
 func (s *Styler) winning(name string, winners map[string]candidate,
-	inline map[string]preparedDecl) (string, bool) {
+	inline map[string]preparedDecl, rb *rollback) (string, bool) {
 
 	value, have := "", false
 	if c, ok := winners[name]; ok {
@@ -2920,6 +2903,14 @@ func (s *Styler) winning(name string, winners map[string]candidate,
 			value, have = s.interner().value(d.text), true
 		}
 	}
+	if have && rollbackKeyword(value) != "" {
+		d, hasInline := inline[name]
+		text, fromInline := rollBack(rb.ordered(name), d, hasInline)
+		if fromInline {
+			text = s.interner().value(text)
+		}
+		return text, true
+	}
 	return value, have
 }
 
@@ -2928,8 +2919,8 @@ func (s *Styler) winning(name string, winners map[string]candidate,
 // loop takes. It is how the rename of logical properties learns the element's
 // writing mode and direction.
 func (s *Styler) early(name string, winners map[string]candidate,
-	inline map[string]preparedDecl, parent ComputedStyle) string {
+	inline map[string]preparedDecl, rb *rollback, parent ComputedStyle) string {
 
-	value, have := s.winning(name, winners, inline)
+	value, have := s.winning(name, winners, inline, rb)
 	return ascii.TrimCSSSpace(s.resolve(name, properties[name], value, have, parent))
 }

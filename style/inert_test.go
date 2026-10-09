@@ -269,8 +269,9 @@ func TestAnUnknownPropertyIsStillReported(t *testing.T) {
 // the value this engine produces has to resolve it first. Which value it stands
 // for depends on the property, and that is the whole difficulty: "unset" is the
 // initial value on a property that does not inherit and the parent's on one that
-// does, and "revert" and "revert-layer" come to the same thing here — this
-// engine reverts to nothing and has no cascade layers.
+// does, and "revert" and "revert-layer" come to the same thing here — these
+// properties are not in the property table, so no sheet of this engine sets
+// one, and a roll-back finds nothing to roll back to.
 //
 // So the three of them are resolved for an entry that does not inherit and left
 // alone for one that does. "inherit" is never resolved: the parent's value can

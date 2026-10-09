@@ -115,13 +115,21 @@ func TestEveryDisplayCSSDefinesStillApplies(t *testing.T) {
 // TestTheCSSWideKeywordsAreNotDisplayValuesAndAreNotDropped. They are values of
 // every property, resolved after this point, and a check that does not know them
 // would throw away "display: inherit" as a stray word.
+//
+// "revert" is asked differently, because the user agent sheet's "block" is the
+// right answer for it: a div's display reverted is the div's default. So it is
+// written after a flex, which a dropped revert leaves standing.
 func TestTheCSSWideKeywordsAreNotDisplayValuesAndAreNotDropped(t *testing.T) {
-	for _, kw := range []string{"inherit", "initial", "unset", "revert"} {
+	for _, kw := range []string{"inherit", "initial", "unset"} {
 		got, _ := displayOf(t, "display: "+kw)
 		if got == "block" {
 			t.Errorf("%q computed to \"block\", which is what the user agent sheet "+
 				"said; the declaration was dropped", kw)
 		}
+	}
+	if got, _ := displayOf(t, "display: flex; display: revert"); got != "block" {
+		t.Errorf("\"display: revert\" computed to %q; it rolls back to the user "+
+			"agent sheet's \"block\"", got)
 	}
 }
 
