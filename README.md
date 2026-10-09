@@ -114,6 +114,25 @@ been without the feature, and the reason is reported. A box arranged that should
 not have been is a page that is quietly wrong; a box refused is a page with a
 finding attached to it.
 
+**Transforms** (`transform`, `transform-origin`) are a narrower slice still,
+and the limit is the display list's rather than the layout's. A transform is
+applied where its product, about the origin, is a turn by a multiple of ninety
+degrees, a scale along each axis and a move: `translate()` in lengths and in
+percentages of the border box, `scale()`, `rotate(90deg)`, `matrix()`, and any
+list of them that comes to one of those. Those take every rectangle on the page
+to a rectangle, and a run of text turned a quarter is the sideways run the
+vertical writing modes already draw, so every backend draws them unchanged.
+What is refused, reported at the box and drawn untransformed: an angle that is
+not a quarter turn, a skew, a mirror, every 3D function, and a box whose
+contents the display list cannot draw under its transform — text scaled more
+along one axis than the other or turned upside down, a picture or upright text
+turned. An arbitrary angle needs a transformation matrix in the display list,
+which every backend would have to learn; whether to add one is a decision about
+that contract, and it has not been taken. A transformed box is a stacking
+context and the containing block of what is positioned inside it, applied or
+not, and nothing around it moves; the page is scaled to fit it, and its links
+are followed, where it was drawn.
+
 What it does *not* do is fragment across pages. A document is laid out on one
 sheet and scaled to fit it (`Options.MinScale`), and the only fragmentation
 anywhere is multicol's, within a single box.

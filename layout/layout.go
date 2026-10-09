@@ -215,6 +215,12 @@ type Fragment struct {
 	// clip and the curves around the box, and its own "clip". See filter.go.
 	filterClip  Clip
 	filterRound *roundClip
+	// transform is the box's transform, where layout applies one: the matrix,
+	// and the clip around the box, which is applied after it rather than to
+	// what the box holds; transformRound is that clip's curves. See
+	// transform.go.
+	transform      boxTransform
+	transformRound *roundClip
 	// filters is, on the root fragment only, every filtered box's chain, which
 	// the painter wraps each such box's group in. See filter.go.
 	filters map[*Box][]FilterFunction
@@ -394,6 +400,7 @@ func (l *layouter) layout() *Fragment {
 		}
 		frag := icb.Children[0]
 		l.resolveBackgrounds(frag, page)
+		l.resolveTransforms(frag)
 		l.resolveClips(frag)
 		l.resolveFilters(frag)
 		frag.paintLengths = l.paintLengths()
@@ -433,6 +440,10 @@ func (l *layouter) layout() *Fragment {
 	// placed against the page. Both are known only now, and neither changes
 	// anything the walk above computed.
 	l.resolveBackgrounds(frag, page)
+
+	// The transforms, which are of boxes where layout put them, and which
+	// decide which clips are outside a transformed box and which inside it.
+	l.resolveTransforms(frag)
 
 	// Clipping last of all, because §11.1's rectangles are final ones: a
 	// padding box in page coordinates, for boxes that were positioned after

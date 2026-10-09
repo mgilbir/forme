@@ -406,10 +406,11 @@ func (Link) isOp()      {}
 // a box above its neighbours — a fact that looks like an accident of the
 // specification and is relied on constantly.
 //
-// # What is not done
+// # Transforms and opacity
 //
-// A transform creates a stacking context and is not implemented, so it does not
-// appear here. Opacity does and is: see dimming, which works out what fraction
+// A transform creates a stacking context, and is applied to what that context
+// painted once it is painted: see transforming, in transform.go. Opacity
+// creates one too: see dimming, which works out what fraction
 // of each fragment's own marks reaches the page and which box asked for it.
 // Every step of §E.2 is present, reduced to the primitives this engine emits.
 func Paint(root *Fragment) []Op { return PaintReporting(root, nil) }
@@ -427,8 +428,17 @@ func Paint(root *Fragment) []Op { return PaintReporting(root, nil) }
 // that matters is Compose's, and TestAGroupThatOverlapsItselfIsReported goes
 // through it.
 func PaintReporting(root *Fragment, rec *Recorder) []Op {
+	ops, _ := paintApplying(root, rec)
+	return ops
+}
+
+// paintApplying is PaintReporting, with the fragments whose transform the
+// paint drew: whether one is drawn is known only once what it paints is, and
+// what is measured from the page afterwards — the natural size, the font
+// sizes — has to see the box where it was drawn. See transform.go.
+func paintApplying(root *Fragment, rec *Recorder) ([]Op, transformsApplied) {
 	if root == nil {
-		return nil
+		return nil, nil
 	}
 	if rec == nil {
 		// A recorder nobody reads, for the reason newLayouter makes one: the
@@ -452,7 +462,7 @@ func PaintReporting(root *Fragment, rec *Recorder) []Op {
 	}
 	ops := gatherLinks(p.ops)
 	useDrawnGlyphs(ops)
-	return ops
+	return ops, p.applied
 }
 
 // useDrawnGlyphs records the glyphs every DrawGlyphs in a display list draws
@@ -731,8 +741,7 @@ func (p *painter) as(d dim, paint func()) {
 	// To the innermost group only. The groups around it read these through
 	// their children when they are settled; appending to every one of them
 	// held each mark once per level of nested opacity (audit C21).
-	g := p.groups[d.owners.box]
-	g.marks = append(g.marks, marks...)
+	p.addMarks(p.groups[d.owners.box], marks)
 }
 
 // canvasBackground paints the page's own background, before anything else.
@@ -872,6 +881,13 @@ type painter struct {
 	// filters is every filtered box's chain, from the root fragment. See
 	// filter.go.
 	filters map[*Box][]FilterFunction
+	// applied is the fragments whose transform was drawn, transformDepth how
+	// many transformed boxes are being painted around the current mark, and
+	// transformLogs the marks recorded for opacity groups while one was. See
+	// transform.go.
+	applied        transformsApplied
+	transformDepth int
+	transformLogs  []transformLog
 	// painted counts the marks emit has appended, and filterPasses the
 	// operations a filter has passed over to fold a colour matrix into them or
 	// cast a shadow of them, which the first pays for. See filterPass.
@@ -1040,12 +1056,14 @@ func (p *painter) stackLevel(s stackLevel) {
 		p.unit(s.frag)
 		return
 	}
-	if filtersItsPaint(s.frag.Box) {
-		f := s.frag
-		p.filtering(f.Box, p.dimOf(f), f.filterClip, f.filterRound, func() { p.stackingContext(f) })
-		return
-	}
-	p.stackingContext(s.frag)
+	f := s.frag
+	p.transforming(f, func() {
+		if filtersItsPaint(f.Box) {
+			p.filtering(f.Box, p.dimOf(f), f.filterClip, f.filterRound, func() { p.stackingContext(f) })
+			return
+		}
+		p.stackingContext(f)
+	})
 }
 
 // sealsItsDescendants reports whether a positioned box is a stacking context of
@@ -1078,13 +1096,14 @@ func sealsItsDescendants(b *Box) bool {
 }
 
 // formsAStackingContext reports whether a box is a stacking context for a
-// reason other than its position and its z-index — the three this engine
+// reason other than its position and its z-index — the four this engine
 // implements: an opacity below one (CSS Color 4 §3.3), a filter (Filter
-// Effects 1 §5), and a will-change naming a property some value of which would
-// make one (css-will-change 1 §3; see willChangeRules for which, and on which
-// boxes).
+// Effects 1 §5), a transform (CSS Transforms 1 §2, applied or not; see
+// transform.go), and a will-change naming a property some value of which
+// would make one (css-will-change 1 §3; see willChangeRules for which, and on
+// which boxes).
 func formsAStackingContext(b *Box) bool {
-	return groupsItsPaint(b) || filtersItsPaint(b) || willChangeStacks(b)
+	return groupsItsPaint(b) || filtersItsPaint(b) || transformsItsPaint(b) || willChangeStacks(b)
 }
 
 // # Who stacks where

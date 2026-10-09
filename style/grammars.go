@@ -266,6 +266,10 @@ func init() {
 	g["opacity"] = single(num(numeric{number: true, percent: true}))
 	// filter-effects-1 §5: none | <filter-value-list>.
 	g["filter"] = filterValue
+	// css-transforms-1 §6 and §7, with css-transforms-2's 3D functions,
+	// which are CSS and which layout reports rather than applies.
+	g["transform"] = transformValue
+	g["transform-origin"] = transformOrigin
 	// css-will-change-1 §3: auto | <animateable-feature>#, a feature being
 	// scroll-position, contents or a <custom-ident> that is none of the
 	// words below.
@@ -1113,4 +1117,140 @@ func dropShadowArgs(args []css.ComponentValue) verdict {
 		return invalid
 	}
 	return out
+}
+
+// transformValue is CSS Transforms 1 §6's "none | <transform-list>", a
+// <transform-list> being one or more <transform-function>s: §12's 2D
+// functions and CSS Transforms 2 §13's 3D ones.
+//
+// It says which values are CSS and not which this engine applies, as
+// filterValue does: every function here is valid, and layout reports the
+// ones it does not draw (see layout/transform.go). The numbers and angles are
+// read by layout through style.ParseNumberPercentage and style.ParseAngle,
+// which evaluate a calc() of either, so a calc() is accepted in those slots.
+func transformValue(it []css.ComponentValue) verdict {
+	if len(it) == 1 {
+		if name, ok := identOf(it[0]); ok && name == "none" {
+			return valid
+		}
+	}
+	if len(it) == 0 {
+		return invalid
+	}
+	lp := num(lengthPctSlot)
+	length := num(lengthSlot)
+	number := num(numeric{number: true, readsCalc: true})
+	// Transforms 2 §13 lets a scale be written as a percentage.
+	factor := num(numeric{number: true, percent: true, readsCalc: true})
+	angle := num(numeric{angle: true, readsCalc: true})
+	out := valid
+	for _, v := range it {
+		if !v.IsFunction() {
+			return invalid
+		}
+		var args [][]css.ComponentValue
+		for _, part := range splitOnComma(v.Values) {
+			args = append(args, items(part))
+		}
+		if len(args) == 1 && len(args[0]) == 0 {
+			args = nil
+		}
+		// each is the function's arguments, between lo and hi of them, each
+		// one component taken by t.
+		each := func(lo, hi int, t term) verdict {
+			if len(args) < lo || len(args) > hi {
+				return invalid
+			}
+			got := valid
+			for _, a := range args {
+				if len(a) != 1 {
+					return invalid
+				}
+				if got = got.and(t(a[0])); !got.ok {
+					return invalid
+				}
+			}
+			return got
+		}
+		var got verdict
+		switch ascii.Lower(v.Token.Value) {
+		case "matrix":
+			got = each(6, 6, number)
+		case "matrix3d":
+			got = each(16, 16, number)
+		case "translate":
+			got = each(1, 2, lp)
+		case "translatex", "translatey":
+			got = each(1, 1, lp)
+		case "translatez":
+			got = each(1, 1, length)
+		case "translate3d":
+			got = each(3, 3, lp)
+			if got.ok {
+				// The third is a <length>: a percentage of a depth no box has.
+				got = got.and(length(args[2][0]))
+			}
+		case "scale":
+			got = each(1, 2, factor)
+		case "scalex", "scaley", "scalez":
+			got = each(1, 1, factor)
+		case "scale3d":
+			got = each(3, 3, factor)
+		case "rotate", "rotatex", "rotatey", "rotatez", "skewx", "skewy":
+			got = each(1, 1, angle)
+		case "skew":
+			got = each(1, 2, angle)
+		case "rotate3d":
+			// Three numbers, the axis, and then the angle.
+			if len(args) != 4 {
+				return invalid
+			}
+			got = valid
+			for i, a := range args {
+				t := number
+				if i == 3 {
+					t = angle
+				}
+				if len(a) != 1 {
+					return invalid
+				}
+				got = got.and(t(a[0]))
+			}
+		case "perspective":
+			got = each(1, 1, either(kw("none"), num(lengthSlot.nonNeg())))
+		default:
+			return invalid
+		}
+		if out = out.and(got); !out.ok {
+			return invalid
+		}
+	}
+	return out
+}
+
+// transformOrigin is CSS Transforms 1 §7's value:
+//
+//	[ left | center | right | top | bottom | <length-percentage> ]
+//	| [ left | center | right | <length-percentage> ]
+//	  [ top | center | bottom | <length-percentage> ] <length>?
+//	| [ [ center | left | right ] && [ center | top | bottom ] ] <length>?
+func transformOrigin(it []css.ComponentValue) verdict {
+	lp := num(lengthPctSlot)
+	isX := either(kw("left", "center", "right"), lp)
+	isY := either(kw("top", "center", "bottom"), lp)
+	pair := func(a, b css.ComponentValue) verdict {
+		if got := isX(a).and(isY(b)); got.ok {
+			return got
+		}
+		return kw("center", "top", "bottom")(a).and(kw("center", "left", "right")(b))
+	}
+	switch len(it) {
+	case 1:
+		return either(kw("left", "center", "right", "top", "bottom"), lp)(it[0])
+	case 2:
+		return pair(it[0], it[1])
+	case 3:
+		return pair(it[0], it[1]).and(num(lengthSlot)(it[2]))
+	}
+	return invalid
 }

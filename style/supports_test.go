@@ -26,7 +26,7 @@ func TestASupportsBlockAppliesWhenTheEngineUnderstandsTheDeclaration(t *testing.
 	}{
 		// A property the engine implements.
 		{"an implemented property", `(color: red)`, true},
-		{"a property it does not", `(transform: rotate(1deg))`, false},
+		{"a property it does not", `(perspective: 10px)`, false},
 		{"a property nothing has ever heard of", `(zzz-not-a-property: 1)`, false},
 		// A custom property is supported by anything that parses CSS, which §2
 		// says in as many words.
@@ -34,21 +34,21 @@ func TestASupportsBlockAppliesWhenTheEngineUnderstandsTheDeclaration(t *testing.
 
 		// not
 		{"not, of something it has", `not (color: red)`, false},
-		{"not, of something it has not", `not (transform: rotate(1deg))`, true},
+		{"not, of something it has not", `not (perspective: 10px)`, true},
 
 		// and
 		{"and, both known", `(color: red) and (display: block)`, true},
-		{"and, one unknown", `(color: red) and (transform: rotate(1deg))`, false},
+		{"and, one unknown", `(color: red) and (perspective: 10px)`, false},
 
 		// or
-		{"or, one known", `(transform: rotate(1deg)) or (color: red)`, true},
-		{"or, neither known", `(transform: rotate(1deg)) or (clip-path: circle(40%))`, false},
+		{"or, one known", `(perspective: 10px) or (color: red)`, true},
+		{"or, neither known", `(perspective: 10px) or (clip-path: circle(40%))`, false},
 		// filter is known now: layout draws blur() and opacity().
-		{"or, the filter known", `(transform: rotate(1deg)) or (filter: blur(1px))`, true},
+		{"or, the filter known", `(perspective: 10px) or (filter: blur(1px))`, true},
 
 		// Grouping, which is the only way "and" and "or" may be mixed.
-		{"a group", `((color: red) or (transform: x)) and (display: block)`, true},
-		{"a group that fails", `((transform: x) or (filter: y)) and (color: red)`, false},
+		{"a group", `((color: red) or (perspective: x)) and (display: block)`, true},
+		{"a group that fails", `((perspective: x) or (filter: y)) and (color: red)`, false},
 
 		// A declaration with no value does not parse, so nothing supports it.
 		{"an empty value", `(color:)`, false},
@@ -74,7 +74,7 @@ func TestASupportsBlockAppliesWhenTheEngineUnderstandsTheDeclaration(t *testing.
 // Reporting that would be reporting the rule working, on every stylesheet that
 // uses one.
 func TestASupportsConditionThatIsFalseSaysNothing(t *testing.T) {
-	_, findings := styledBy(t, `@supports (transform: rotate(1deg)) { #target { color: red } }`)
+	_, findings := styledBy(t, `@supports (perspective: 10px) { #target { color: red } }`)
 	for _, f := range findings {
 		if f.Property == "@supports" {
 			t.Errorf("a condition this engine answered reported %q; the answer is "+

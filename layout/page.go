@@ -309,13 +309,17 @@ func compose(ctx context.Context, in Input, opts Options, budget *shape.ShapingB
 		return Composed{}, err
 	}
 
-	natural := naturalSize(root)
+	// Painted before the page is measured, because a transform is applied by
+	// the paint, and only where what the box painted can be drawn under it:
+	// the natural size is of the boxes where they were drawn.
+	ops, applied := paintApplying(root, rec)
+
+	natural := naturalSize(root, applied)
 
 	scale := fitScale(natural, avail, opts.AllowScaleUp)
 	checkScale(rec, scale, opts.MinScale)
-	checkFontSizes(rec, root, scale, opts.MinFontSizePt)
+	checkFontSizes(rec, root, applied, scale, opts.MinFontSizePt)
 
-	ops := PaintReporting(root, rec)
 	checkPageOverflow(rec, ops, avail, scale)
 
 	return Composed{
@@ -354,17 +358,32 @@ func compose(ctx context.Context, in Input, opts Options, budget *shape.ShapingB
 // something it deliberately hid. Layout has already resolved every clip onto
 // the fragments by the time this runs, so the answer here is the same one the
 // painter uses rather than a second reading of the same properties.
-func naturalSize(root *Fragment) Size {
+//
+// A transformed box counts where it was drawn: applied is the transforms the
+// paint drew, and each rectangle is taken through them, and then through the
+// clip outside them, as the painter took the box's marks. See transform.go.
+func naturalSize(root *Fragment, applied transformsApplied) Size {
 	if root == nil {
 		return Size{}
 	}
 	var w, h style.Unit
+	var through *affine
+	var outer Clip
 	take := func(r Rect, c Clip) {
 		if c.Active {
 			r = c.Rect.Intersect(r)
 		}
 		if r.Empty() {
 			return
+		}
+		if through != nil {
+			r = through.rect(r)
+		}
+		if outer.Active {
+			r = outer.Rect.Intersect(r)
+			if r.Empty() {
+				return
+			}
 		}
 		if r.Right() > w {
 			w = r.Right()
@@ -373,8 +392,8 @@ func naturalSize(root *Fragment) Size {
 			h = r.Bottom()
 		}
 	}
-	var walk func(f *Fragment)
-	walk = func(f *Fragment) {
+	underTransforms(root, applied, func(f *Fragment, m *affine, o Clip) {
+		through, outer = m, o
 		take(f.BorderRect, f.clipSelf)
 		content := f.ContentRect()
 		for _, line := range f.Lines {
@@ -411,11 +430,7 @@ func naturalSize(root *Fragment) Size {
 				take(box.BorderRect, f.clipContent)
 			}
 		}
-		for _, c := range f.Children {
-			walk(c)
-		}
-	}
-	walk(root)
+	})
 	return Size{W: w, H: h}
 }
 
@@ -586,20 +601,26 @@ func checkScale(rec *Recorder, scale, floor float64) {
 // its text inherits, and any inline box inside it may set another: a paragraph
 // at 20px holding a two-pixel span was checked at twenty and drawn at two. The
 // runs are what is drawn, and each carries the size it will be drawn at.
-func checkFontSizes(rec *Recorder, root *Fragment, scale, floorPt float64) {
+func checkFontSizes(rec *Recorder, root *Fragment, applied transformsApplied, scale, floorPt float64) {
 	if root == nil {
 		return
 	}
 	seen := map[style.Unit]bool{}
-	var walk func(*Fragment)
-	walk = func(f *Fragment) {
+	// A size is seen as the transforms around it drew it, so a run in a box
+	// drawn at half its size is set at half its size; and asked once per size
+	// as drawn, which is what the reader sees.
+	underTransforms(root, applied, func(f *Fragment, m *affine, _ Clip) {
+		k := m.lengthScale()
+		// As the painter scales a font size: to the nearest unit.
+		drawn := func(u style.Unit) style.Unit { return toUnit(float64(u) * k) }
 		for _, line := range f.Lines {
 			for _, run := range line.Runs {
-				if run.Text == "" || seen[run.Size] {
+				size := drawn(run.Size)
+				if run.Text == "" || seen[size] {
 					continue
 				}
-				seen[run.Size] = true
-				effective := run.Size.Mul(scale).Pt()
+				seen[size] = true
+				effective := size.Mul(scale).Pt()
 				if effective >= floorPt {
 					continue
 				}
@@ -608,7 +629,7 @@ func checkFontSizes(rec *Recorder, root *Fragment, scale, floorPt float64) {
 					Message: fmt.Sprintf(
 						"text would be set at %.2fpt, below the floor of %.2fpt"+
 							" (%.2fpt before the page scaling of %.0f%%)",
-						effective, floorPt, run.Size.Pt(), scale*100),
+						effective, floorPt, size.Pt(), scale*100),
 					Source: sourceOf(boxElement(run.Box)),
 					Path:   PathOf(boxElement(run.Box)),
 				})
@@ -616,25 +637,22 @@ func checkFontSizes(rec *Recorder, root *Fragment, scale, floorPt float64) {
 		}
 		// A list item's marker is text a box draws that is on no line of its
 		// own, so it is asked about separately and at its own size.
-		if m := f.Marker; m != nil && m.Text != "" && m.Image == nil && !seen[m.Size] {
-			seen[m.Size] = true
-			if effective := m.Size.Mul(scale).Pt(); effective < floorPt {
+		if mk := f.Marker; mk != nil && mk.Text != "" && mk.Image == nil && !seen[drawn(mk.Size)] {
+			size := drawn(mk.Size)
+			seen[size] = true
+			if effective := size.Mul(scale).Pt(); effective < floorPt {
 				rec.ReportDetail(Finding{
 					Rule: RuleMinFontSize,
 					Message: fmt.Sprintf(
 						"a list marker would be set at %.2fpt, below the floor of %.2fpt"+
 							" (%.2fpt before the page scaling of %.0f%%)",
-						effective, floorPt, m.Size.Pt(), scale*100),
+						effective, floorPt, size.Pt(), scale*100),
 					Source: sourceOf(boxElement(f.Box)),
 					Path:   PathOf(boxElement(f.Box)),
 				})
 			}
 		}
-		for _, c := range f.Children {
-			walk(c)
-		}
-	}
-	walk(root)
+	})
 }
 
 // roundTripSlack is what the page-overflow self-check forgives: one layout

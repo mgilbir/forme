@@ -157,17 +157,19 @@ func (p PositionScheme) outOfFlow() bool {
 func containsAbsolutes(b *Box) bool { return b.Position.positioned() || containsOtherwise(b) }
 
 // containsFixed reports whether a box is the containing block of the fixed
-// positioned boxes inside it, which a filter makes it, and a will-change
-// naming a property that would.
+// positioned boxes inside it, which a filter and a transform make it (Filter
+// Effects 1 §5, CSS Transforms 1 §2), and a will-change naming a property
+// that would.
 func containsFixed(b *Box) bool {
-	return filterContains(b) || willChangeAsksOf(b)&asksFixedContainer != 0
+	return filterContains(b) || transformsItsPaint(b) || willChangeAsksOf(b)&asksFixedContainer != 0
 }
 
 // containsOtherwise reports whether a box is the containing block of the
 // absolutely positioned boxes inside it for a reason other than its position:
-// a filter, or its will-change.
+// a filter, a transform, or its will-change.
 func containsOtherwise(b *Box) bool {
-	return filterContains(b) || willChangeAsksOf(b)&(asksAbsoluteContainer|asksFixedContainer) != 0
+	return filterContains(b) || transformsItsPaint(b) ||
+		willChangeAsksOf(b)&(asksAbsoluteContainer|asksFixedContainer) != 0
 }
 
 // filterContains reports whether a box's filter makes it a containing block:
