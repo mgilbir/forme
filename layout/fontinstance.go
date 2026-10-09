@@ -398,6 +398,14 @@ func variationAskOf(cs style.ComputedStyle, r FontRequest, sizePx float64) (ask 
 func styledFace(set FontSet, in *instancer, rec *Recorder, src Source, family, text string,
 	ask variationAsk) (*shape.Face, bool) {
 
+	return styledFaceMemo(set, in, rec, src, family, text, ask, nil)
+}
+
+// styledFaceMemo is styledFace with the instances already found for the same
+// request, where memo is not nil. See boxFamilies.
+func styledFaceMemo(set FontSet, in *instancer, rec *Recorder, src Source, family, text string,
+	ask variationAsk, memo map[instancedFor]*shape.Face) (*shape.Face, bool) {
+
 	if d := documentFontsOf(set); d != nil {
 		df, m, defined := d.documentFaceFor(family, text, ask.r)
 		if defined {
@@ -405,7 +413,7 @@ func styledFace(set FontSet, in *instancer, rec *Recorder, src Source, family, t
 				return nil, false
 			}
 			ask.df, ask.match = df, m
-			return in.instanced(df.face, ask, rec, src), true
+			return in.instancedOnce(df.face, ask, rec, src, memo), true
 		}
 	}
 	var face *shape.Face
@@ -418,5 +426,30 @@ func styledFace(set FontSet, in *instancer, rec *Recorder, src Source, family, t
 	if !ok {
 		return nil, false
 	}
-	return in.instanced(face, ask, rec, src), true
+	return in.instancedOnce(face, ask, rec, src, memo), true
+}
+
+// instancedFor is what an instance depends on beyond the request a box makes:
+// the face, and the @font-face rule that offered it with how it matched.
+type instancedFor struct {
+	face  *shape.Face
+	df    *documentFace
+	match faceMatch
+}
+
+// instancedOnce is instanced, remembered in memo for one box's request. A nil
+// memo remembers nothing.
+func (in *instancer) instancedOnce(face *shape.Face, ask variationAsk, rec *Recorder, src Source,
+	memo map[instancedFor]*shape.Face) *shape.Face {
+
+	if memo == nil {
+		return in.instanced(face, ask, rec, src)
+	}
+	key := instancedFor{face: face, df: ask.df, match: ask.match}
+	if got, ok := memo[key]; ok {
+		return got
+	}
+	got := in.instanced(face, ask, rec, src)
+	memo[key] = got
+	return got
 }

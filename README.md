@@ -211,7 +211,7 @@ that removes invisible characters it leaves a mark positioned across one of them
 It is listed with its reason in `shape/harfbuzz_test.go` and pinned in the
 corpus, so a difference that stops being deliberate fails the test.
 
-Beyond the suites: 35 fuzz targets, thirty-five of them scheduled weekly, a
+Beyond the suites: 36 fuzz targets, thirty-six of them scheduled weekly, a
 differential fuzzer against HarfBuzz that generates text rather than listing it,
 and a CoreText harness for the questions two implementations cannot settle
 between them.

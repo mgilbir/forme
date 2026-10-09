@@ -286,10 +286,15 @@ func TestAFaceRecordsOneDocumentsGlyphs(t *testing.T) {
 		t.Fatalf("the library's face already records %d glyphs", n)
 	}
 
+	// The face a document's text is set in, once the text is drawn: a glyph
+	// is recorded when a backend shapes the run to draw it (ShapedGlyphs), and
+	// not by layout asking whether the face has it — see TestAFaceOnlyAsked-
+	// RecordsNoGlyph.
 	faceOf := func(src string) *shape.Face {
 		t.Helper()
 		for _, op := range Compose(Input{HTML: src, Fonts: set}, Options{}).Ops {
 			if d, ok := op.(DrawText); ok && d.Face != nil {
+				ShapedGlyphs(d)
 				return d.Face
 			}
 		}

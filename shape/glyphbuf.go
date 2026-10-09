@@ -248,6 +248,24 @@ func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
 	return f.shapeGlyphsWith(s, nil, shapeContext{})
 }
 
+// MissingGlyphs is the count ShapeGlyphs reports for s, without the shaping.
+//
+// The count is decided before any of the font's rules run: by which characters
+// the face is asked for, after the run is cut by direction and by script,
+// mirrored, rearranged where the script is (Thai, Lao, Hangul), and normalised
+// into the spelling the face draws best. That is all done here, by the same
+// code, and then nothing else is — no substitution, no positioning — so the
+// answer is the same and costs what a cmap lookup per character costs rather
+// than what shaping does.
+//
+// It also records nothing. ShapeGlyphs marks every glyph it makes as used,
+// which is what decides the subset a face is embedded with, and a face that is
+// only being asked whether it could set some text has not set any of it.
+func (f *Face) MissingGlyphs(s string) int {
+	_, missing := f.shapeGlyphsWith(s, nil, shapeContext{countOnly: true})
+	return missing
+}
+
 // ShapeGlyphsInContext is ShapeGlyphs with the text either side of the run.
 //
 // A cursive script chooses each letter's shape from its neighbours, and a run is
@@ -369,6 +387,12 @@ type shapeContext struct {
 	// starts, so that the piece's first glyphs are of its cluster as
 	// HarfBuzz's would be.
 	within int
+	// countOnly asks for the missing count and nothing else: each run is
+	// taken as far as the characters the face is asked for — mirrored,
+	// rearranged, normalised, exactly as a run that is drawn — and no further.
+	// No glyph is made, no rule is applied and none is recorded as used. See
+	// MissingGlyphs.
+	countOnly bool
 }
 
 // keptAhead is whether anything of the piece's buffer is drawn before it on
@@ -614,6 +638,7 @@ func (f *Face) shapeGlyphsWith(s string, extra []string, ctx shapeContext) ([]Gl
 			keptBefore: ctx.keptBefore,
 			keptAfter:  ctx.keptAfter,
 			dropped:    ctx.dropped,
+			countOnly:  ctx.countOnly,
 		}
 		inner = scan.context(inner, r.Start, r.End)
 		// The sides that may contribute *glyphs* belong to the pieces they
@@ -653,7 +678,7 @@ func (f *Face) shapeDirection(s string, behind, ahead uint16, rtl bool, extra []
 	if !f.composite() {
 		// A face set by character code has no rules to read per script, and
 		// nothing to merge a neighbour's glyphs into.
-		return f.shapeByCode(s, rtl, ctx.features.Vertical)
+		return f.shapeByCode(s, rtl, ctx.features.Vertical, ctx.countOnly)
 	}
 	if ctx.mergeBefore != "" || ctx.mergeAfter != "" {
 		return f.shapeMerged(s, rtl, extra, ctx)
@@ -708,7 +733,7 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	f.runWork.checkInput(f, s, extra, ctx)
 	f.runWork.spend(int64(len(s)) + 1)
 	if !f.composite() {
-		return f.shapeByCode(s, rtl, ctx.features.Vertical)
+		return f.shapeByCode(s, rtl, ctx.features.Vertical, ctx.countOnly)
 	}
 	// The face's own settings, which every run it shapes is asked with. This
 	// is the one place every way of shaping a run passes through — the public
@@ -795,9 +820,12 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		return nil, 0
 	}
 	var (
-		buf     = make([]Glyph, 0, len(runes))
+		buf     []Glyph
 		missing int
 	)
+	if !ctx.countOnly {
+		buf = make([]Glyph, 0, len(runes))
+	}
 	for i, r := range runes {
 		gid, ok := f.GlyphID(r)
 		var space spaceKind
@@ -838,6 +866,9 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 			}
 			gid = 0
 		}
+		if ctx.countOnly {
+			continue
+		}
 		g := Glyph{
 			GID: gid, Cluster: offsets[i], XAdvance: f.advanceGID(gid),
 			class: classOfRune(runes[i]), umark: unicodeMarkOf(runes[i]),
@@ -849,7 +880,10 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 		f.runWork.size(len(buf) + 1)
 		buf = append(buf, g)
 	}
-	if len(buf) == 0 {
+	if ctx.countOnly || len(buf) == 0 {
+		// Everything after this is about the glyphs, and nothing after it
+		// changes the count: a substitution may replace a glyph, but the
+		// characters the face was asked for have all been asked.
 		return nil, missing
 	}
 	// Each grapheme is one cluster from here on, a grapheme the run starts in
@@ -1065,7 +1099,10 @@ const fractionSlash = 0x2044
 // fallback stack do not have to know which kind of face they were given — and
 // a run set upright gets its vertical metrics here too, by the same rules and
 // from the same tables where the face has them. See verticalRune.
-func (f *Face) shapeByCode(s string, rtl, vertical bool) ([]Glyph, int) {
+//
+// countOnly is shapeContext's: the count of the characters the face has no
+// drawing for, and no glyph made or recorded.
+func (f *Face) shapeByCode(s string, rtl, vertical, countOnly bool) ([]Glyph, int) {
 	runes, offsets := bidiRunCharacters(s, rtl)
 	// A simple face draws nothing for these either. It is more visible here, if
 	// anything: WinAnsi gives U+00AD a code of its own, so a soft hyphen without
@@ -1077,11 +1114,21 @@ func (f *Face) shapeByCode(s string, rtl, vertical bool) ([]Glyph, int) {
 	// left in they take the substitution an unmapped character gets and reach the
 	// page as a space.
 	runes, offsets = dropHiddenBeforeDrawing(runes, offsets)
+	var parts []rune
+	if countOnly {
+		missing := 0
+		for _, r := range runes {
+			var drawn bool
+			if parts, drawn = f.drawnAs(r, 0, parts[:0]); !drawn {
+				missing++
+			}
+		}
+		return nil, missing
+	}
 	var (
 		buf     = make([]Glyph, 0, len(runes))
 		missing int
 	)
-	var parts []rune
 	// drew records what was drawn, as Encode records it. For a simple face
 	// that is the glyph the character is drawn with, which is what its subset
 	// has to keep: the codes in buf are not glyph indices, and they were
