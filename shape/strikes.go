@@ -2,6 +2,7 @@ package shape
 
 import (
 	"math"
+	"sort"
 
 	"github.com/mgilbir/forme/font"
 )
@@ -32,7 +33,7 @@ import (
 // every strike of two faces built for it to what FreeType loads
 // (testdata/freetype/strikes.py).
 //
-//   - The strike is chosen for a size as a CBDT one is (chooseStrike): the
+//   - The strike is chosen for a size as a CBDT one is (strikeIndex): the
 //     smallest at least that large, or failing any the largest. FreeType
 //     selects only a strike of the size asked for; a caller that wants that
 //     can tell an image of one apart by Image.Exact.
@@ -79,6 +80,8 @@ type ebdtStrikes struct {
 	// tag is the table the bitmaps are in, EBDT or Apple's bdat, which is
 	// what Strike.Table says.
 	tag string
+	// index is EBLC's strikes by size, for strikeFor.
+	index strikeIndex
 }
 
 // The tables, in the order they are looked for: EBLC and EBDT, and failing
@@ -116,34 +119,69 @@ func newEBDTStrikes(tables map[string][]byte, upem int) *ebdtStrikes {
 		if n == 0 || n >= 0x10000 || 8+bitmapSizeTableSize*n > int64(len(loc)) {
 			return nil
 		}
-		return &ebdtStrikes{loc: loc, dat: dat, upem: upem, tag: pair[1]}
+		return &ebdtStrikes{loc: loc, dat: dat, upem: upem, tag: pair[1], index: newStrikeIndex(loc)}
 	}
 	return nil
 }
 
-// chooseStrike is HarfBuzz's choose_strike over the BitmapSizeTables a CBLC or
-// EBLC table begins with: the offset of the one for a size in pixels per em,
-// the smallest at least that large, or failing any the largest, the first of
-// equals. A strike's size is the larger of its ppem across and down. Asked at
-// no size, which it takes as 2^30, it is the largest.
-func chooseStrike(loc []byte, requested int) (int, bool) {
+// strikeIndex is the BitmapSizeTables a CBLC or EBLC table begins with, by
+// size, for choosing one: each size a strike has, smallest first, and the
+// offset of the first strike of it. A strike's size is the larger of its ppem
+// across and down. It is made once, as the face is loaded, so that choosing
+// a strike for a glyph is a search of it rather than a walk of every strike,
+// which a table can make as many of as it holds 48 bytes: a megabyte of CBLC
+// was 21,000 strikes walked at every glyph measured, 30 microseconds a glyph
+// at 20,000.
+type strikeIndex struct {
+	ppems, ats []int
+}
+
+// newStrikeIndex is the index of a table's strikes, and an empty one for a
+// table whose strikes do not fit in it, which has none to choose.
+func newStrikeIndex(loc []byte) strikeIndex {
+	if len(loc) < 8 {
+		return strikeIndex{}
+	}
 	n := int64(font.Be32(loc, 4))
 	if n == 0 || 8+bitmapSizeTableSize*n > int64(len(loc)) {
+		return strikeIndex{}
+	}
+	order := make([]int, n)
+	for i := range order {
+		order[i] = i
+	}
+	ppem := func(i int) int {
+		at := 8 + bitmapSizeTableSize*i
+		return max(int(loc[at+44]), int(loc[at+45]))
+	}
+	sort.SliceStable(order, func(a, b int) bool { return ppem(order[a]) < ppem(order[b]) })
+	var x strikeIndex
+	for _, i := range order {
+		if p := ppem(i); len(x.ppems) == 0 || x.ppems[len(x.ppems)-1] != p {
+			x.ppems = append(x.ppems, p)
+			x.ats = append(x.ats, 8+bitmapSizeTableSize*i)
+		}
+	}
+	return x
+}
+
+// choose is HarfBuzz's choose_strike over the strikes: the offset of the
+// BitmapSizeTable for a size in pixels per em, the smallest at least that
+// large, or failing any the largest, the first of equals. Asked at no size,
+// which it takes as 2^30, it is the largest. choose_strike walks the strikes
+// keeping the best so far, and that is what it finds; strikes_test.go holds
+// the two to each other.
+func (x strikeIndex) choose(requested int) (int, bool) {
+	if len(x.ppems) == 0 {
 		return 0, false
 	}
 	if requested <= 0 {
 		requested = 1 << 30
 	}
-	best := 8
-	bestPPEM := max(int(loc[best+44]), int(loc[best+45]))
-	for i := 1; i < int(n); i++ {
-		at := 8 + bitmapSizeTableSize*i
-		ppem := max(int(loc[at+44]), int(loc[at+45]))
-		if requested <= ppem && ppem < bestPPEM || requested > bestPPEM && ppem > bestPPEM {
-			best, bestPPEM = at, ppem
-		}
+	if i := sort.SearchInts(x.ppems, requested); i < len(x.ppems) {
+		return x.ats[i], true
 	}
-	return best, true
+	return x.ats[len(x.ats)-1], true
 }
 
 // exactStrike reports whether a strike of a ppem across and down was drawn for
@@ -184,10 +222,10 @@ type strike struct {
 	depth        int
 }
 
-// strikeFor is the strike chooseStrike picks for a size, and false where its
-// bit depth is not one EBDT has.
+// strikeFor is the strike choose picks for a size, and false where its bit
+// depth is not one EBDT has.
 func (s *ebdtStrikes) strikeFor(ppem int) (strike, bool) {
-	at, ok := chooseStrike(s.loc, ppem)
+	at, ok := s.index.choose(ppem)
 	if !ok {
 		return strike{}, false
 	}

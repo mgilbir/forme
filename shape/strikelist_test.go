@@ -2,6 +2,7 @@ package shape
 
 import (
 	"bytes"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/mgilbir/forme/font"
@@ -156,5 +157,110 @@ func TestAStrikeImageIsReadOnlyInTheFacesOwnStrikes(t *testing.T) {
 	}
 	if _, ok := f.StrikeImage(f.NumGlyphs(), f.Strikes()[0]); ok {
 		t.Error("a glyph the face does not have has an image")
+	}
+}
+
+// chooseStrikeByWalk is HarfBuzz's choose_strike as it is written: the
+// strikes walked in order, keeping the best so far. strikeIndex.choose is
+// held to it.
+func chooseStrikeByWalk(loc []byte, requested int) (int, bool) {
+	n := int64(font.Be32(loc, 4))
+	if n == 0 || 8+bitmapSizeTableSize*n > int64(len(loc)) {
+		return 0, false
+	}
+	if requested <= 0 {
+		requested = 1 << 30
+	}
+	best := 8
+	bestPPEM := max(int(loc[best+44]), int(loc[best+45]))
+	for i := 1; i < int(n); i++ {
+		at := 8 + bitmapSizeTableSize*i
+		ppem := max(int(loc[at+44]), int(loc[at+45]))
+		if requested <= ppem && ppem < bestPPEM || requested > bestPPEM && ppem > bestPPEM {
+			best, bestPPEM = at, ppem
+		}
+	}
+	return best, true
+}
+
+// strikesTable is a CBLC or EBLC of strikes of the given sizes across and
+// down, holding no glyphs.
+func strikesTable(sizes [][2]int) []byte {
+	b := u32(nil, 0x00030000, len(sizes))
+	for _, s := range sizes {
+		rec := make([]byte, bitmapSizeTableSize)
+		rec[44], rec[45], rec[strikeBitDepth] = byte(s[0]), byte(s[1]), 32
+		b = append(b, rec...)
+	}
+	return b
+}
+
+// TestAStrikeIsChosenAsHarfBuzzChoosesIt: the strike chosen for a size from
+// the index made of them is the one choose_strike's walk keeps, over tables
+// of sizes drawn from a few, so that strikes of equal size, of none, and of
+// different sizes across and down are common, at every size asked and none.
+func TestAStrikeIsChosenAsHarfBuzzChoosesIt(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	for range 2000 {
+		sizes := make([][2]int, 1+rng.IntN(12))
+		for i := range sizes {
+			sizes[i] = [2]int{rng.IntN(6) * 8, rng.IntN(6) * 8}
+		}
+		loc := strikesTable(sizes)
+		index := newStrikeIndex(loc)
+		for requested := -1; requested <= 48; requested++ {
+			got, gotOK := index.choose(requested)
+			want, wantOK := chooseStrikeByWalk(loc, requested)
+			if got != want || gotOK != wantOK {
+				t.Fatalf("strikes %v at %d: chose the one at %d (%v), and choose_strike %d (%v)",
+					sizes, requested, got, gotOK, want, wantOK)
+			}
+		}
+	}
+	// A table whose strikes do not fit has none to choose.
+	short := strikesTable([][2]int{{12, 12}, {16, 16}})
+	if _, ok := newStrikeIndex(short[:len(short)-1]).choose(12); ok {
+		t.Error("a strike was chosen from a table its strikes do not fit")
+	}
+}
+
+// manyStrikesFace is a face of costGlyphs with a CBLC of n strikes of sizes
+// from 1 to 200, holding no glyphs.
+func manyStrikesFace(t *testing.T, n int) *Face {
+	t.Helper()
+	sizes := make([][2]int, n)
+	for i := range sizes {
+		sizes[i] = [2]int{i%200 + 1, i%200 + 1}
+	}
+	return costFace(t, map[string][]byte{"CBLC": strikesTable(sizes), "CBDT": u32(nil, 0x00030000)})
+}
+
+// TestChoosingAStrikeDoesNotWalkEveryStrike: measuring a glyph chooses a
+// strike for it, and does so in time that does not follow how many strikes
+// the face has. It walked every one, and a megabyte of CBLC holds 21,000: 6
+// microseconds a glyph at 5,000 strikes and 30 at 20,000.
+func TestChoosingAStrikeDoesNotWalkEveryStrike(t *testing.T) {
+	growth(t, "measuring a glyph among strikes", func(n int) func() {
+		f := manyStrikesFace(t, n)
+		return func() { f.GlyphExtents(1) }
+	}, 5000, 20000, 2)
+}
+
+// TestAStrikeImageDoesNotListTheStrikesAgain: StrikeImage asks whether the
+// strike it is given is one of the face's, which it did by listing and
+// sorting all of them at every call: 2.4 milliseconds an image at 5,000
+// strikes and 15 at 20,000, for a caller asking each strike in turn.
+func TestAStrikeImageDoesNotListTheStrikesAgain(t *testing.T) {
+	growth(t, "asking a strike for an image", func(n int) func() {
+		f := manyStrikesFace(t, n)
+		s := f.Strikes()[n/2]
+		return func() { f.StrikeImage(1, s) }
+	}, 5000, 20000, 2)
+	// What Strikes returns is the caller's to change.
+	f := manyStrikesFace(t, 10)
+	listed := f.Strikes()
+	listed[0] = Strike{}
+	if f.Strikes()[0] == (Strike{}) {
+		t.Error("changing what Strikes returned changed the face's strikes")
 	}
 }

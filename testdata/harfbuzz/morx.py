@@ -74,8 +74,13 @@ FIXTURE += [("MorxLanguage.ttf", "GHIJK", "." + lang) for lang in
              "@en"]]
 FIXTURE += [("MorxLanguage.ttf", "GHIJK", "+liga@tr")]
 
+# MorxRunaway.ttf: its two machines that never advance, after the glyph each
+# marks, which HarfBuzz gives up on; and before it, and each letter alone,
+# which it sets.
+FIXTURE += [("MorxRunaway.ttf", t, ".") for t in ["BA", "AB", "EF", "FE", "A", "B"]]
+
 FIXTURE_FONTS = {"MorxCases.ttf", "MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFeat.ttf",
-                 "MortCases.ttf", "MorxLanguage.ttf"}
+                 "MortCases.ttf", "MorxLanguage.ttf", "MorxRunaway.ttf"}
 
 
 def cases():
@@ -144,6 +149,7 @@ for test, name, text, expected, features in cases():
         buf.guess_segment_properties()
     buf.flags = hb.BufferFlags.REMOVE_DEFAULT_IGNORABLES
     codes = ",".join(f"{ord(c):04X}" for c in text)
+    failed = False
     try:
         hb.shape(font, buf, hb_features(spec))
     except MemoryError:
@@ -151,16 +157,24 @@ for test, name, text, expected, features in cases():
         # allowance, which uharfbuzz reports as running out of memory.
         if expected != "*":
             sys.exit(f"{test}: HarfBuzz could not set {text!r} in {name}")
-        out.append(f"{test} {name} {digest} {codes} {features} fails")
-        continue
-    got = names(font, buf)
-    if expected != "*" and got != expected:
-        sys.exit(f"{test}: HarfBuzz sets {text!r} in {name} as {got}, and the suite expects {expected}")
+        failed = True
+    if not failed:
+        got = names(font, buf)
+        if expected != "*" and got != expected:
+            sys.exit(f"{test}: HarfBuzz sets {text!r} in {name} as {got}, and the suite expects {expected}")
     # uharfbuzz numbers clusters by code point; a byte offset into the UTF-8
     # string is what a Glyph's Cluster is.
     at = [len(text[:k].encode("utf-8")) for k in range(len(text) + 1)]
     glyphs = " ".join(f"{i.codepoint},{at[i.cluster]},{p.x_advance},{p.x_offset},{p.y_offset}"
                       for i, p in zip(buf.glyph_infos, buf.glyph_positions))
+    if failed:
+        # What HarfBuzz left in the buffer when it gave up, which is what a
+        # caller of hb_shape that does not ask whether it succeeded is handed:
+        # how many glyphs, and the SHA-256 of them written as below, since
+        # one run is 62,066 glyphs.
+        sum_ = hashlib.sha256(glyphs.encode("ascii")).hexdigest()
+        out.append(f"{test} {name} {digest} {codes} {features} fails {len(buf.glyph_infos)} {sum_}")
+        continue
     out.append(f"{test} {name} {digest} {codes} {features} {glyphs}")
 
 with open(out_path, "w", encoding="utf-8") as w:
@@ -173,7 +187,8 @@ with open(out_path, "w", encoding="utf-8") as w:
     w.write("# index, cluster (a byte offset into the UTF-8 string), x advance,\n")
     w.write("# x offset and y offset, in font units — which for the suite are the\n")
     w.write("# glyphs it expects, by name and position; or fails, where HarfBuzz\n")
-    w.write("# gives up.\n")
+    w.write("# gives up, with how many glyphs it left in the buffer and the SHA-256\n")
+    w.write("# of them written as above.\n")
     w.write(f"# harfbuzz {hb.version_string()}\n")
     w.write(f"# uharfbuzz {hb.__version__}\n")
     w.write(f"# cases {len(out)}\n")

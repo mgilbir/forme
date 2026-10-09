@@ -24,13 +24,15 @@ import "github.com/mgilbir/forme/font"
 type cbdtInk struct {
 	cblc, cbdt []byte
 	upem       int
+	// index is CBLC's strikes by size, for strikeFor.
+	index strikeIndex
 }
 
 func newCBDTInk(tables map[string][]byte, upem int) *cbdtInk {
 	if len(tables["CBLC"]) < 8 || len(tables["CBDT"]) == 0 {
 		return nil
 	}
-	return &cbdtInk{cblc: tables["CBLC"], cbdt: tables["CBDT"], upem: upem}
+	return &cbdtInk{cblc: tables["CBLC"], cbdt: tables["CBDT"], upem: upem, index: newStrikeIndex(tables["CBLC"])}
 }
 
 // The layout of what is read: a BitmapSizeTable is 48 bytes, its ppem at 44
@@ -152,7 +154,7 @@ func (c *cbdtInk) metricsIn(gid, strike int) (m []byte, format, ppemX, ppemY int
 // largest, the first of equals. Asked at no size, which it takes as 2^30, it is
 // the largest. EBLC's strikes are chosen the same way (strikes.go).
 func (c *cbdtInk) strikeFor(requested int) (int, bool) {
-	return chooseStrike(c.cblc, requested)
+	return c.index.choose(requested)
 }
 
 // imageData is where a glyph's image is in CBDT, how long it is, and its

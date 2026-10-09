@@ -6,7 +6,9 @@ import (
 	"fmt"
 )
 
-// ErrRunLimit identifies a rejected input, glyph expansion or shaping work limit.
+// ErrRunLimit identifies a rejected input, glyph expansion or shaping work
+// limit, or a run whose AAT state machines spent the allowance HarfBuzz gives
+// them, where HarfBuzz gives up on the run.
 var ErrRunLimit = errors.New("shape: run limit exceeded")
 
 // RunLimits bounds one ShapeGlyphsContext or ShapeGlyphsBounded call. Zero fields select defaults;
@@ -183,8 +185,10 @@ func (limits RunLimits) withDefaults() (RunLimits, error) {
 
 // ShapeGlyphsContext shapes a bounded run without changing the receiver's used
 // glyph record. It returns no glyphs on cancellation, work exhaustion, glyph
-// expansion, recursion exhaustion, or a limit reading the layout tables the run
-// was shaped with ran into; bounds other runs met on the face do not count. A
+// expansion, recursion exhaustion, a limit reading the layout tables the run
+// was shaped with ran into, or a morx, mort or kerx that spent the allowance
+// HarfBuzz gives the run's state machines, where HarfBuzz gives up on it; bounds
+// other runs met on the face do not count. A
 // private clone shares the receiver's locked font caches. Font programs must remain
 // immutable during calls. Cancellation is checked between shaping phases and
 // lookup steps; font parsing and Unicode preprocessing use their own bounds.
@@ -437,8 +441,10 @@ func (b *ShapingBudget) Bound(f *Face) error {
 // Run calls fn, which shapes and measures on faces put under the budget —
 // before it is called or while it runs — and reports the work they did.
 //
-// A run that reaches a limit, or finds the context done, stops fn where it
-// is, and Run reports why: an error wrapping ErrRunLimit, or the context's.
+// A run that reaches a limit, or whose AAT state machines spend the
+// allowance HarfBuzz gives them, or that finds the context done, stops fn
+// where it is, and Run reports why: an error wrapping ErrRunLimit, or the
+// context's.
 // So does reading a layout table the faces shaped with running into one of
 // the font's own limits, as for WithShapingLimits. fn's own error is returned
 // as it is. Work is zero on any error. Every face is taken off the budget when

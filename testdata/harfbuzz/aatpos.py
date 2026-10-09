@@ -58,8 +58,13 @@ STRINGS = {
     "TrakCases.ttf": ["AA", "A" + ACUTE + "A", "\U0001F600‍❤", "\U0001F1EF\U0001F1F5",
                       "A\U0001F1EF\U0001F1F5\U0001F1EF"],
     "TrakNoSTAT.ttf": ["AA"],
+    "TrakTracksPastEnd.ttf": ["AA"],
+    "TrakSizesPastEnd.ttf": ["AA"],
+    "TrakValuesPastEnd.ttf": ["AA"],
 }
-SIZES = {"TrakCases.ttf": [0, 6, 9, 10.5, 12, 24, 100], "TrakNoSTAT.ttf": [0, 6]}
+SIZES = {"TrakCases.ttf": [0, 6, 9, 10.5, 12, 24, 100], "TrakNoSTAT.ttf": [0, 6],
+         "TrakTracksPastEnd.ttf": [0, 6, 30], "TrakSizesPastEnd.ttf": [0, 6, 30],
+         "TrakValuesPastEnd.ttf": [0, 6, 30]}
 
 
 def cases():

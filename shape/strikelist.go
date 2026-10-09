@@ -43,6 +43,25 @@ func (s Strike) PPEM() int { return max(s.PPEMX, s.PPEMY) }
 // one of a bit depth the table does not have. EBDT strikes are listed for a
 // face with outlines too; see PaintOptions.Bitmaps.
 func (f *Face) Strikes() []Strike {
+	if f.strikeList == nil {
+		return nil
+	}
+	return append([]Strike(nil), f.strikeList.strikes...)
+}
+
+// strikeList is the face's strikes, as Strikes lists them, and the same as a
+// set, for StrikeImage to ask whether a strike is one of them. It is made
+// once, as the face is loaded: listing the strikes again for every image
+// asked for, and sorting them, was 15 milliseconds an image for a face of
+// 20,000 strikes, and a caller asking each strike in turn for a glyph asks
+// for that many.
+type strikeList struct {
+	strikes []Strike
+	set     map[Strike]bool
+}
+
+// listStrikes is the face's strikeList, nil for a face with none.
+func (f *Face) listStrikes() *strikeList {
 	var out []Strike
 	if c := f.bitmap; c != nil {
 		n := int64(font.Be32(c.cblc, 4))
@@ -74,8 +93,15 @@ func (f *Face) Strikes() []Strike {
 			}
 		}
 	}
+	if len(out) == 0 {
+		return nil
+	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].PPEM() < out[j].PPEM() })
-	return out
+	l := &strikeList{strikes: out, set: make(map[Strike]bool, len(out))}
+	for _, s := range out {
+		l.set[s] = true
+	}
+	return l
 }
 
 // public is an EBDT strike as Strikes lists it.
@@ -135,12 +161,7 @@ func (f *Face) StrikeImage(gid int, s Strike) (Image, bool) {
 // hasStrike reports whether a strike is one Strikes lists for the face, which
 // is what makes its offset one StrikeImage may read at.
 func (f *Face) hasStrike(s Strike) bool {
-	for _, have := range f.Strikes() {
-		if have == s {
-			return true
-		}
-	}
-	return false
+	return f.strikeList != nil && f.strikeList.set[s]
 }
 
 // extentsBox is the box a bitmap glyph's image is drawn in, from its extents:

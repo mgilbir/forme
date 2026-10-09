@@ -426,8 +426,56 @@ def build_mort(directory):
     save(os.path.join(directory, "MortCases.ttf"), "MortCases", MORT_GLYPHS, "GHIJKLMNOP", {"mort": mort()})
 
 
+# MorxRunaway.ttf: two machines that never advance, each spending the run's
+# allowance (max_ops) where HarfBuzz charges for marking glyphs it may not
+# break between, so that where HarfBuzz gives up on the run depends on those
+# charges being made as it makes them:
+#
+#   - a contextual subtable: B marks itself; A, after it, substitutes the
+#     marked glyph (B, C, D and round again) and does not advance, which
+#     HarfBuzz charges as unsafe to break from the mark to past A;
+#   - an insertion subtable: E marks itself; F, after it, inserts X after the
+#     marked glyph and does not advance, which HarfBuzz charges as unsafe to
+#     break from the mark, in the output, to past F.
+#
+# A alone, before any B, stays on itself doing nothing, which spends the
+# allowance without anything charged for marking; and B and E alone do
+# nothing at all.
+RUNAWAY_GLYPHS = [".notdef", "A", "B", "C", "D", "E", "F", "X"]
+RUNAWAY_GID = {name: i for i, name in enumerate(RUNAWAY_GLYPHS)}
+DONT_ADVANCE = 0x4000
+SET_MARK = 0x8000
+
+
+def runaway():
+    g = RUNAWAY_GID
+    row = [0, 0, 0, 0, 1, 2]
+    entries = [
+        (0, 0, FFFF, FFFF),  # nothing
+        (0, SET_MARK, FFFF, FFFF),  # B: mark it
+        (0, DONT_ADVANCE, 0, FFFF),  # A: substitute the mark through lookup 0, and stay
+    ]
+    lookup = single_lookup([(g["B"], g["C"]), (g["C"], g["D"]), (g["D"], g["B"])])
+    contextual = subtable(1, 1, state_table({g["B"]: 4, g["A"]: 5}, [row, row], entries, [None],
+                                            [struct.pack(">I", 4) + lookup]))
+    entries = [
+        (0, 0, FFFF, FFFF),  # nothing
+        (0, SET_MARK, FFFF, FFFF),  # E: mark it
+        (0, DONT_ADVANCE | 1, FFFF, 0),  # F: insert list[0] after the mark, and stay
+    ]
+    insertion = subtable(5, 1, state_table({g["E"]: 4, g["F"]: 5}, [row, row], entries, [None],
+                                           [struct.pack(">H", g["X"])]))
+    return struct.pack(">HHI", 2, 0, 2) + chain(1, [contextual]) + chain(1, [insertion])
+
+
+def build_runaway(directory):
+    save(os.path.join(directory, "MorxRunaway.ttf"), "MorxRunaway", RUNAWAY_GLYPHS, "ABEF",
+         {"morx": runaway()})
+
+
 if __name__ == "__main__":
     build(os.path.join(sys.argv[1], "MorxCases.ttf"))
     build_features(sys.argv[1])
     build_mort(sys.argv[1])
     build_language(sys.argv[1])
+    build_runaway(sys.argv[1])

@@ -32,6 +32,9 @@
 #                     emoji sequence and a pair of regional indicators, each
 #                     tracked once; TrakNoSTAT.ttf is it without STAT, which
 #                     HarfBuzz does not track
+#   Trak*PastEnd.ttf  its table stating more tracks or sizes than it holds, or
+#                     the normal track's values past its end, which HarfBuzz's
+#                     sanitizer refuses, and does not track
 #
 # They are built with fontTools and their timestamps fixed, so that building
 # them again produces the same bytes and the checksums the expectations record
@@ -299,7 +302,11 @@ def ankr():
     return struct.pack(">HHII", 0, 0, lookup_at, data_at) + pad(look) + data_a + data_acute
 
 
-def trak():
+def trak(n_tracks=None, n_sizes=None, past_end=0):
+    """The tracking table. n_tracks and n_sizes state more tracks or sizes
+    than it holds, and past_end moves the normal track's values that many
+    bytes on, past the end of the table: a TrackData that does not fit,
+    which HarfBuzz's sanitizer refuses, leaving the direction untracked."""
     sizes = [9.0, 12.0, 24.0]
     tracks = [(-1.0, [-50, -60, -70]), (0.0, [30, 10, -40]), (1.0, [100, 100, 100])]
     head = 12
@@ -308,9 +315,10 @@ def trak():
     sizes_at = entries_at + 8 * len(tracks)
     values_at = sizes_at + 4 * len(sizes)
     out = struct.pack(">IHHHH", 0x00010000, 0, data, 0, 0)
-    out += struct.pack(">HHI", len(tracks), len(sizes), sizes_at)
+    out += struct.pack(">HHI", n_tracks or len(tracks), n_sizes or len(sizes), sizes_at)
     for i, (t, _) in enumerate(tracks):
-        out += struct.pack(">iHH", int(t * 65536), 256 + i, values_at + 2 * len(sizes) * i)
+        values = values_at + 2 * len(sizes) * i + (past_end if t == 0 else 0)
+        out += struct.pack(">iHH", int(t * 65536), 256 + i, values)
     out += b"".join(struct.pack(">i", int(s * 65536)) for s in sizes)
     for _, values in tracks:
         out += struct.pack(">%dh" % len(sizes), *values)
@@ -435,6 +443,9 @@ def build(directory):
          "KerxPlanLegacyKern.ttf")
     save(base("TrakCases", {"trak": trak()}, stat=True), "TrakCases.ttf")
     save(base("TrakNoSTAT", {"trak": trak()}), "TrakNoSTAT.ttf")
+    save(base("TrakTracksPastEnd", {"trak": trak(n_tracks=60000)}, stat=True), "TrakTracksPastEnd.ttf")
+    save(base("TrakSizesPastEnd", {"trak": trak(n_sizes=60000)}, stat=True), "TrakSizesPastEnd.ttf")
+    save(base("TrakValuesPastEnd", {"trak": trak(past_end=10)}, stat=True), "TrakValuesPastEnd.ttf")
 
 
 if __name__ == "__main__":

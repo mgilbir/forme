@@ -769,6 +769,12 @@ type shaper struct {
 	// its bit and matches its input only over such glyphs. See glyphMask.
 	lookupMask glyphMask
 
+	// aat is the run's share of HarfBuzz's buffer for its AAT tables: the
+	// allowance its morx and kerx spend between them, and whether one of them
+	// stopped. A pointer for the reason ops is one. nil for a shaper that
+	// shapes no AAT table. See aatRun.
+	aat *aatRun
+
 	// ops is what is left of the run's allowance for applying one lookup from
 	// inside another. It is a pointer because a shaper is copied per lookup and
 	// the allowance belongs to the run, not to a lookup: a rule that names
@@ -1134,6 +1140,11 @@ func (c *layoutCache) layoutFor(gsubKey, gposKey string, build func() *layout) *
 // and to hang a glyph set upright — and the bounds that measuring runs into
 // are reported here with the rest, since a glyph left without its ink is
 // placed otherwise than the font says.
+//
+// So is a run this face shaped whose morx, mort or kerx ran out of the allowance
+// HarfBuzz gives it, where HarfBuzz gives up on the run: a run shaped without
+// limits is set as far as the table got, and this says so. Unlike the rest,
+// that is this face's own and not its clones': it names the run.
 func (f *Face) LayoutLimits() []string {
 	var out []string
 	seen := map[string]bool{}
@@ -1150,6 +1161,7 @@ func (f *Face) LayoutLimits() []string {
 	}
 	add(f.layout)
 	out = append(out, f.cff2Limits...)
+	out = append(out, f.aatRefused...)
 	if f.cff2 != nil {
 		out = append(out, f.cff2.limits()...)
 	}

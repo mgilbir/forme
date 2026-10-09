@@ -415,6 +415,56 @@ func (s *kerxSubtable) startsAt(gid, numGlyphs int) bool {
 // HB_BUFFER_SCRATCH_FLAG_HAS_GPOS_ATTACHMENT does.
 type kerxRun struct {
 	reversed, attached bool
+	// points are the outlines format 4 read last, the two it attaches by;
+	// recent is the one of them asked for last. See contourPoint.
+	points [2]glyphPoints
+	recent int
+}
+
+// glyphPoints is one glyph's outline points (outlinePoints), and whether they
+// were read.
+type glyphPoints struct {
+	gid    int
+	read   bool
+	points [][2]int
+}
+
+// contourPoint is a glyph's i-th outline point, and false for a point it does
+// not have, read for a run.
+//
+// Reading the points decodes the whole glyph — a TrueType composite's
+// components, a CFF glyph's charstring — and a state machine asks for two at
+// every transition, which an entry that does not advance repeats on one glyph
+// four thousand times. So the two glyphs read last are kept, which is every
+// glyph a machine staying put asks for, and a glyph is read again only once
+// the machine has moved past it; and what a reading does is charged to the
+// run, a unit for each component and each point of a TrueType glyph and each
+// unit of a CFF one's allowance spent. Unkept and uncharged, one character
+// of a composite of sixteen hundred squares took thirty-seven seconds and was
+// charged 65,544 units.
+func (r *kerxRun) contourPoint(sh shaper, gid, i int) (x, y int, ok bool) {
+	if i < 0 {
+		return 0, 0, false
+	}
+	slot := -1
+	for j := range r.points {
+		if r.points[j].read && r.points[j].gid == gid {
+			slot = j
+			break
+		}
+	}
+	if slot < 0 {
+		slot = 1 - r.recent
+		points, work := sh.f.outlinePoints(gid)
+		sh.work().spend(int64(work) + 1)
+		r.points[slot] = glyphPoints{gid: gid, read: true, points: points}
+	}
+	r.recent = slot
+	points := r.points[slot].points
+	if i >= len(points) {
+		return 0, 0, false
+	}
+	return points[i][0], points[i][1], true
 }
 
 // reverse turns the run round, and its attachments with it, unchanged: a
@@ -437,18 +487,27 @@ func (sh shaper) applyKerx(buf []Glyph, pairs bool) bool {
 	vertical := sh.features.Vertical
 	run := &kerxRun{}
 	crossed := false
+	work := sh.work()
+	// The allowance is the run's, what its morx left of it, and a run its
+	// morx stopped in is walked by no state machine of the kerx: HarfBuzz's
+	// buffer is the same one, unsuccessful. Its pairs are still kerned.
+	aat := sh.aatRun(len(buf))
+	spent := aat.spent
 	for i := range k.subtables {
 		s := &k.subtables[i]
-		if vertical != (s.coverage&kerxVertical != 0) {
-			continue
-		}
-		intersects := false
-		for _, g := range buf {
-			if s.startsAt(g.GID, k.numGlyphs) {
-				intersects = true
-				break
+		// A subtable tried, and each glyph asked whether it can start it,
+		// charged once the asking is done, as morx's are (applyMorx).
+		intersects, looked := false, 0
+		if vertical == (s.coverage&kerxVertical != 0) {
+			for _, g := range buf {
+				looked++
+				if s.startsAt(g.GID, k.numGlyphs) {
+					intersects = true
+					break
+				}
 			}
 		}
+		work.spend(int64(looked) + 1)
 		if !intersects {
 			continue
 		}
@@ -481,17 +540,20 @@ func (sh shaper) applyKerx(buf []Glyph, pairs bool) bool {
 			if pairs || cross {
 				m := s.machine(k.numGlyphs)
 				t := &kerxFormat1{sh: sh, s: s, m: m, actions: int(font.Be32(m.t, 16)), cross: cross, pairs: pairs, run: run}
-				sh.driveKerx(buf, m, t)
+				sh.driveKerx(buf, m, t, aat)
 			}
 		case 4:
 			m := s.machine(k.numGlyphs)
 			flags := font.Be32(m.t, 16)
 			t := &kerxFormat4{sh: sh, k: k, m: m, action: int(flags >> 30), data: int(flags & 0x00FFFFFF), run: run}
-			sh.driveKerx(buf, m, t)
+			sh.driveKerx(buf, m, t, aat)
 		}
 	}
 	if run.reversed {
 		sh.reverseRun(buf)
+	}
+	if spent == aatNotSpent && aat.spent != aatNotSpent {
+		sh.refuseAAT(aat, "kerx", aat.spent)
 	}
 	return run.attached
 }
@@ -533,10 +595,15 @@ func (sh shaper) kernPairs(buf []Glyph, s *kerxSubtable, numGlyphs int, cross bo
 	}
 }
 
-// driveKerx walks a state machine subtable over the run, in place.
-func (sh shaper) driveKerx(buf []Glyph, m aatMachine, t morxTransition) {
-	b := &aatBuf{info: buf, ok: true, f: sh.f, maxOps: max(len(buf)*morxOpsPerGlyph, morxOpsFloor)}
-	sh.drive(b, m, 0, t)
+// driveKerx walks a state machine subtable over the run, in place, on what is
+// left of the run's allowance.
+func (sh shaper) driveKerx(buf []Glyph, m aatMachine, t morxTransition, aat *aatRun) {
+	b := &aatBuf{info: buf, ok: aat.spent == aatNotSpent, f: sh.f, maxOps: aat.ops}
+	sh.drive(b, m, kerxStateMachine, t)
+	aat.ops = b.maxOps
+	if !b.ok && aat.spent == aatNotSpent {
+		aat.spent = b.spent
+	}
 }
 
 // kerxFormat1 is format 1's transition: a stack of up to eight glyphs, and a
@@ -649,11 +716,11 @@ func (k *kerxFormat4) transition(b *aatBuf, flags, data int) {
 			if p < 0 || len(t)-p < 4 {
 				return
 			}
-			mx, my, ok := k.sh.f.contourPoint(b.info[k.mark].GID, font.Be16(t, p))
+			mx, my, ok := k.run.contourPoint(k.sh, b.info[k.mark].GID, font.Be16(t, p))
 			if !ok {
 				return
 			}
-			cx, cy, ok := k.sh.f.contourPoint(b.info[b.idx].GID, font.Be16(t, p+2))
+			cx, cy, ok := k.run.contourPoint(k.sh, b.info[b.idx].GID, font.Be16(t, p+2))
 			if !ok {
 				return
 			}
@@ -695,45 +762,42 @@ func (k *kerxFormat4) transition(b *aatBuf, flags, data int) {
 	}
 }
 
-// contourPoint is a point of a glyph's outline as FreeType loads it, which is
-// what HarfBuzz over FreeType hands kerx (hb_ft_get_glyph_contour_point): the
-// i-th of the glyph's points, in font units, and false for a point the glyph
-// does not have.
+// outlinePoints is a glyph's outline points as FreeType loads them, which is
+// what HarfBuzz over FreeType hands kerx (hb_ft_get_glyph_contour_point): in
+// font units, in order, none for a glyph that has none or cannot be read;
+// and the work reading them did.
 //
 // For a TrueType glyph it is the glyph's own points, a composite's components
 // resolved in order, with the outline moved so that its left phantom point is
-// the origin, as FreeType's TrueType loader moves it. For a CFF glyph, and a
-// CFF2 one, which states curves rather than numbered points, it is the points
-// FreeType's CFF loader builds the outline of (cffContourPoints).
-func (f *Face) contourPoint(gid, i int) (x, y int, ok bool) {
-	if i < 0 {
-		return 0, 0, false
-	}
+// the origin, as FreeType's TrueType loader moves it; the work is a unit for
+// each component and each point. For a CFF glyph, and a CFF2 one, which
+// states curves rather than numbered points, it is the points FreeType's CFF
+// loader builds the outline of (cffContourPoints), and the work is what
+// running the charstring spent.
+func (f *Face) outlinePoints(gid int) (points [][2]int, work int) {
 	g := f.glyfOut
 	if g == nil {
 		if f.ink == nil {
-			return 0, 0, false
+			return nil, 0
 		}
-		points := f.cffContourPoints(gid)
-		if i >= len(points) {
-			return 0, 0, false
-		}
-		return points[i][0], points[i][1], true
+		return f.cffContourPoints(gid)
 	}
 	if gid < 0 || gid >= g.glyfNumGlyphs() {
-		return 0, 0, false
+		return nil, 0
 	}
 	w := &glyfWalk{dec: decycler{tortoise: -1}}
-	if !g.glyfPoints(gid, 0, w) || len(w.points) < 4 {
-		return 0, 0, false
+	ok := g.glyfPoints(gid, 0, w)
+	work = w.edges + len(w.points)
+	if !ok || len(w.points) < 4 {
+		return nil, work
 	}
 	n := len(w.points) - 4
-	if i >= n {
-		return 0, 0, false
-	}
 	shift := w.points[n].x
-	p := w.points[i]
-	return int(math.Round(float64(p.x - shift))), int(math.Round(float64(p.y))), true
+	points = make([][2]int, n)
+	for i, p := range w.points[:n] {
+		points[i] = [2]int{int(math.Round(float64(p.x - shift))), int(math.Round(float64(p.y)))}
+	}
+	return points, work
 }
 
 // cffContourPoints is a CFF glyph's outline points as FreeType's CFF loader
@@ -753,10 +817,11 @@ func (f *Face) contourPoint(gid, i int) (x, y int, ok bool) {
 // numbers past what a 16.16 holds, a stack fuller than FreeType's — gives the
 // points HarfBuzz's reading draws. Every glyph of Source Sans 3 and Source
 // Serif 4, static and variable, gives FreeType's; see cffpoints_test.go.
-func (f *Face) cffContourPoints(gid int) [][2]int {
-	segs := f.cffPointSegments(gid)
+//
+// work is what running the charstring spent of its allowance.
+func (f *Face) cffContourPoints(gid int) (points [][2]int, work int) {
+	segs, work := f.cffPointSegments(gid)
 	round := func(p Point) [2]int { return [2]int{int(math.Floor(p.X)), int(math.Floor(p.Y))} }
-	var points [][2]int
 	var at Point
 	first, lastOn := -1, false
 	closeContour := func() {
@@ -798,5 +863,5 @@ func (f *Face) cffContourPoints(gid int) [][2]int {
 		}
 	}
 	closeContour()
-	return points
+	return points, work
 }

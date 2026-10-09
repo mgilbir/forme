@@ -184,6 +184,9 @@ type Face struct {
 	// EBDT or bloc and bdat, for a face that has no outlines to draw it from
 	// instead: nil for every other face. See strikes.go.
 	strikes *ebdtStrikes
+	// strikeList is the strikes of bitmap, sbix and strikes, listed once. See
+	// Strikes.
+	strikeList *strikeList
 	// varc measures and draws a glyph through the VARC table, which is asked
 	// after COLR and before the outline: nil for a face with none, or one
 	// HarfBuzz would refuse. See varc.go.
@@ -286,6 +289,15 @@ type Face struct {
 	// run does not allocate it again. Not shared by Clone, for the reason
 	// used is not. See runScratch.
 	scratch *runScratch
+	// aatRefused is what an unbounded run's morx, mort or kerx ran out of: a
+	// sentence for each table and allowance, naming the first run it
+	// happened to, which LayoutLimits reports. Not shared by Clone: it names
+	// a run's text, and the runs a clone shapes are its document's. See
+	// refuseAAT.
+	aatRefused []string
+	// aatRefusedKeys are the tables and allowances aatRefused has a
+	// sentence for.
+	aatRefusedKeys []string
 }
 
 // faceName is the face's PostScript name, and "Embedded" for a font that
@@ -610,6 +622,7 @@ func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face,
 	// a face with outlines is measured from those, whatever strikes it
 	// carries.
 	f.strikes = newEBDTStrikes(tables, f.unitsPerEm)
+	f.strikeList = f.listStrikes()
 	f.varc = newVARCFace(f, tables, prog.NumGlyphs)
 	f.vert = readVerticalTables(tables, prog.NumGlyphs, budget)
 	if err := budget.Err(); err != nil {
@@ -1339,6 +1352,7 @@ func (f *Face) Clone() *Face {
 	out.runWork = nil
 	out.spareWork = nil
 	out.scratch = nil
+	out.aatRefused, out.aatRefusedKeys = nil, nil
 	// The cache is deliberately *kept*, not reset: it holds readings of the
 	// font's own tables, which no document can change. A layout is written only
 	// by its readers, so what is shared is a value; the mutex is there because
