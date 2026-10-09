@@ -2,8 +2,11 @@ package shape
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"maps"
 	"math"
 	"os"
@@ -35,13 +38,17 @@ type morxCase struct {
 	// lang says it does, and language may be empty, which is no language.
 	language string
 	lang     bool
-	fails    bool
-	glyphs   [][5]int
+	// fails says HarfBuzz gave up on the case, and left, how many glyphs and
+	// the SHA-256 of them written as morx.py writes a case's glyphs.
+	fails  bool
+	left   int
+	leftOf string
+	glyphs [][5]int
 }
 
 // morxFixtures are the faces of morx.expected.txt that morx_fixture.py builds
 // into testdata/harfbuzz/fonts; the rest are the suite's, in aat/fonts.
-var morxFixtures = []string{"MorxCases.ttf", "MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFeat.ttf", "MortCases.ttf", "MorxLanguage.ttf"}
+var morxFixtures = []string{"MorxCases.ttf", "MorxFeatures.ttf", "MorxFeaturesDeprecated.ttf", "MorxFeaturesNoFeat.ttf", "MortCases.ttf", "MorxLanguage.ttf", "MorxRunaway.ttf"}
 
 func readMorxGolden(t *testing.T) []morxCase {
 	t.Helper()
@@ -82,8 +89,14 @@ func readMorxGolden(t *testing.T) []morxCase {
 				}
 			}
 		}
-		if len(f) == 6 && f[5] == "fails" {
-			c.fails = true
+		if len(f) > 5 && f[5] == "fails" {
+			if len(f) != 8 {
+				t.Fatalf("%q: a case HarfBuzz fails states the glyphs it left and their sum; run `make hbmorx`", line)
+			}
+			c.fails, c.leftOf = true, f[7]
+			if c.left, err = strconv.Atoi(f[6]); err != nil {
+				t.Fatalf("%q: %v", line, err)
+			}
 		} else {
 			for _, g := range f[5:] {
 				var v [5]int
@@ -125,6 +138,14 @@ func shapeMorxCase(f *Face, c morxCase) []Glyph {
 	return glyphs
 }
 
+// morxRunInput is a case as RunInput states it: its features turned off and
+// on, which does not keep the order a case that only turns them on names
+// them in.
+func morxRunInput(c morxCase) RunInput {
+	return RunInput{Text: c.text, Features: Features{Tags: strings.Join(c.on, ","),
+		TagsOff: strings.Join(c.off, ","), Language: c.language}}
+}
+
 func TestMorxAgreesWithHarfBuzz(t *testing.T) {
 	cases := readMorxGolden(t)
 	if len(cases) < 230 {
@@ -155,15 +176,37 @@ func TestMorxAgreesWithHarfBuzz(t *testing.T) {
 			faces[c.font] = f
 		}
 		glyphs := shapeMorxCase(f, c)
-		if c.fails {
-			continue
-		}
 		units := func(v float64) int { return int(math.Round(v * float64(f.unitsPerEm) / 1000)) }
 		var got [][5]int
 		for _, g := range glyphs {
 			got = append(got, [5]int{g.GID, g.Cluster, units(g.XAdvance), units(g.XOffset), units(g.YOffset)})
 		}
 		label := c.test + " " + c.font + " " + strconv.Quote(c.text) + " +" + strings.Join(c.on, ",+") + " -" + strings.Join(c.off, ",-")
+		// The bounded entry points fail where HarfBuzz gives up, and only
+		// there: a run HarfBuzz sets whole is not refused.
+		_, err := f.Clone().ShapeGlyphsBounded(context.Background(), morxRunInput(c), RunLimits{})
+		switch {
+		case c.fails && !errors.Is(err, ErrRunLimit):
+			t.Errorf("%s: HarfBuzz gives up on the run, and ShapeGlyphsBounded returned %v", label, err)
+		case !c.fails && err != nil:
+			t.Errorf("%s: HarfBuzz sets the run, and ShapeGlyphsBounded refused it: %v", label, err)
+		}
+		if c.fails {
+			// Unbounded, the run is what HarfBuzz left in its buffer.
+			var b strings.Builder
+			for i, g := range got {
+				if i > 0 {
+					b.WriteByte(' ')
+				}
+				fmt.Fprintf(&b, "%d,%d,%d,%d,%d", g[0], g[1], g[2], g[3], g[4])
+			}
+			sum := sha256.Sum256([]byte(b.String()))
+			if len(got) != c.left || hex.EncodeToString(sum[:]) != c.leftOf {
+				t.Errorf("%s: unbounded, %d glyphs (%s), and HarfBuzz left %d (%s) when it gave up",
+					label, len(got), hex.EncodeToString(sum[:8]), c.left, c.leftOf[:16])
+			}
+			continue
+		}
 		if len(got) != len(c.glyphs) {
 			t.Errorf("%s: %d glyphs %v, HarfBuzz %d %v", label, len(got), got, len(c.glyphs), c.glyphs)
 			continue

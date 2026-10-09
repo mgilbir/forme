@@ -223,10 +223,12 @@ func Compose(in Input, opts Options) Composed {
 //
 // It fails with the context's error, or an error wrapping shape.ErrRunLimit
 // — a run too long, a document's shaping over its budget, a font whose layout
-// tables ran into one of its own limits — and a zero Composed: never a
-// composition that stopped part way presented as one that finished. A
-// document its own findings refuse is not an error; Composed.Refused says so,
-// as Compose's does.
+// tables ran into one of its own limits, a run a font's morx, mort or kerx
+// spent HarfBuzz's allowance on, which HarfBuzz gives up on — and a zero
+// Composed: never a composition that stopped part way presented as one that
+// finished. A document its own findings refuse is not an error;
+// Composed.Refused says so, as Compose's does. Compose sets that run as far as
+// the font got, and says so in a finding under RuleLimit.
 //
 // What is not bounded here is what Compose bounds without it: the size of
 // the document, the faces it may load and what they may cost, and the work

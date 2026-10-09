@@ -3,6 +3,7 @@ package shape
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -136,16 +137,48 @@ func TestAGlyphsOutlinePointsAreChargedToTheRun(t *testing.T) {
 }
 
 // TestAMachineStayingOnAGlyphReadsItsPointsOnce: an entry that does not
-// advance keeps the machine on a glyph for four thousand transitions, each
+// advance keeps the machine on a glyph for thousands of transitions, each
 // attaching it by its points, and the glyph is decoded once for all of them
-// rather than twice at each: its size moves the run's work by what one
-// decoding costs, not by sixty-five thousand of them.
+// rather than twice at each: its size moves the time the run takes by what
+// one decoding costs, not by thousands of them.
+//
+// The machine stays until the run's allowance is spent, where HarfBuzz gives
+// up on the run, and a bounded call is refused for it; so the run is timed
+// unbounded, which sets it as far as the machine got.
 func TestAMachineStayingOnAGlyphReadsItsPointsOnce(t *testing.T) {
-	small, large := pointsWork(t, 100, true, "aa"), pointsWork(t, 400, true, "aa")
-	t.Logf("%d units at 100 components, %d at 400", small, large)
-	if float64(large) > 1.5*float64(small) {
-		t.Errorf("a glyph of 400 components cost %d units and one of 100 cost %d: "+
-			"the glyph is decoded at every transition", large, small)
+	small, large := pointsFace(t, 100, true), pointsFace(t, 400, true)
+	if glyphs, _ := small.ShapeGlyphs("aa"); glyphs[1].XOffset == 0 {
+		t.Fatalf("nothing was attached, so the points were never read: %v", glyphs)
+	}
+	run := func(f *Face) func() { return func() { f.ShapeGlyphs("aa") } }
+	c := costtest.Time(t, "a machine staying on a glyph of n components, attaching it by its points",
+		run(small), run(large))
+	if c.Ratio > 2 {
+		t.Errorf("a glyph of four times the components cost %s: the glyph is decoded at every transition", c)
+	}
+}
+
+// TestAKerxMachineThatNeverAdvancesIsRefused: a kerx whose entry does not
+// advance spends the run's allowance, as a morx's does, and HarfBuzz 14.5.0
+// gives up on the run (uharfbuzz raises MemoryError for "aa" and "aaaa" on
+// pointsFace's font). A bounded call is refused, naming the table; an
+// unbounded one is set, and the face says what it ran out of. The same kerx
+// advancing is not refused.
+func TestAKerxMachineThatNeverAdvancesIsRefused(t *testing.T) {
+	f := pointsFace(t, 1, true)
+	_, err := f.ShapeGlyphsBounded(context.Background(), RunInput{Text: "aa"}, RunLimits{})
+	if !errors.Is(err, ErrRunLimit) || !strings.Contains(err.Error(), "the kerx table of \"Points\" ran out of the 65536 operations") {
+		t.Errorf("the bounded run returned %v", err)
+	}
+	if limits := f.LayoutLimits(); len(limits) != 0 {
+		t.Errorf("a refused bounded run left the face reporting %q", limits)
+	}
+	f.ShapeGlyphs("aa")
+	if limits := f.LayoutLimits(); len(limits) != 1 || !strings.Contains(limits[0], "its kerx table ran out of") {
+		t.Errorf("unbounded, the face reports %q", limits)
+	}
+	if _, err := pointsFace(t, 1, false).ShapeGlyphsBounded(context.Background(), RunInput{Text: "aaaa"}, RunLimits{}); err != nil {
+		t.Errorf("the kerx advancing was refused: %v", err)
 	}
 }
 
@@ -202,6 +235,31 @@ func aatFonts(t *testing.T) []string {
 	return files
 }
 
+// harfBuzzGivesUp are HarfBuzz's fixtures of a morx whose machine rewinds,
+// inserts or stays without end, and morx_fixture.py's MorxRunaway, on whose
+// characters HarfBuzz 14.5.0 gives up (uharfbuzz raises MemoryError): each,
+// by the length in bytes of the shortest of the two runs
+// TestNoRealAATFontReachesTheAllowance sets, all of the characters as one run
+// of 4 KB and that sixteen times, that HarfBuzz gives up on.
+// TestMORXThirtytwo's rewinds cost more the longer the run, and HarfBuzz sets
+// 8 KB of it and not 16. No other AAT font of the tree's fixtures or of
+// Google Fonts is given up on, at either length.
+var harfBuzzGivesUp = map[string]int{
+	"TestMORXFourteen.ttf":   4096,
+	"TestMORXTwentyfour.ttf": 4096,
+	"TestMORXThirtyfour.ttf": 4096,
+	"TestMORXThirtysix.ttf":  4096,
+	"TestMORXThirtytwo.ttf":  65536,
+	"MorxRunaway.ttf":        4096,
+}
+
+// givesUp says HarfBuzz gives up on a run of a font's characters n bytes
+// long; see harfBuzzGivesUp.
+func givesUp(path string, n int) bool {
+	at, ok := harfBuzzGivesUp[filepath.Base(path)]
+	return ok && n > at/2
+}
+
 // TestNoRealAATFontsTextIsRefusedForItsSubtables: charging the subtables a
 // morx or kerx tries, and the glyphs each is asked about, leaves a run of
 // every AAT font's characters, as long as a run may be, far inside the
@@ -212,12 +270,7 @@ func TestNoRealAATFontsTextIsRefusedForItsSubtables(t *testing.T) {
 	files := aatFonts(t)
 	shaped, most, mostFont := 0, 0.0, ""
 	for _, path := range files {
-		switch filepath.Base(path) {
-		case "TestMORXTwentyfour.ttf", "TestMORXThirtyfour.ttf", "TestMORXThirtysix.ttf":
-			// HarfBuzz's fixtures of a morx that rewinds or inserts without
-			// end, which the limits stop whatever the subtables cost: their
-			// runs were refused, or cost 4,100 units a byte, before the
-			// subtables were charged.
+		if givesUp(path, 4096) {
 			continue
 		}
 		data, _ := os.ReadFile(path)
@@ -441,5 +494,161 @@ func TestOneCharacterOfARunawayMorxIsQuick(t *testing.T) {
 		if took > 500*time.Millisecond {
 			t.Errorf("%q took %v", text, took)
 		}
+	}
+}
+
+// aatCharacters is every character a face maps from U+0021 to U+FFFF but for
+// the C1 controls and the surrogates, as many as fit in n bytes.
+func aatCharacters(f *Face, n int) []rune {
+	var out []rune
+	size := 0
+	for r := rune(0x21); r < 0x10000 && size < n-4; r++ {
+		if _, ok := f.GlyphID(r); ok && (r < 0x7F || r > 0x9F) && (r < 0xD800 || r > 0xDFFF) {
+			out = append(out, r)
+			size += len(string(r))
+		}
+	}
+	return out
+}
+
+// TestNoRealAATFontReachesTheAllowance: the allowance HarfBuzz gives a run's
+// state machines, whose spending refuses the run (refuseAAT), is not reached
+// by any AAT font of the tree's fixtures or of Google Fonts on its own
+// characters: each alone, then all of them as one run of as many bytes as
+// RunLimits admits, and as one run sixteen times that, which a ShapingBudget
+// admits, as layout shapes a long paragraph. The most any of them spends of
+// it is logged, so that a font coming near it is seen before it is refused.
+// Where HarfBuzz gives up on a run (harfBuzzGivesUp), it is refused.
+func TestNoRealAATFontReachesTheAllowance(t *testing.T) {
+	shaped, refused, worst, worstFont, worstGF, worstGFFont := 0, 0, 0.0, "", 0.0, "none"
+	for _, path := range aatFonts(t) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := Load(data)
+		if err != nil || f.morx == nil && f.kerx == nil {
+			continue
+		}
+		name := filepath.Base(path)
+		chars := aatCharacters(f, 4096)
+		if len(chars) == 0 {
+			continue
+		}
+		run := string(chars)
+		long := strings.Repeat(run, 4096/len(run))
+		if !givesUp(path, 4096) {
+			owned := f.Clone()
+			for _, r := range chars {
+				if _, err := owned.ShapeGlyphsBounded(context.Background(), RunInput{Text: string(r), Kerns: true}, RunLimits{}); err != nil {
+					t.Errorf("%s: %U alone was refused: %v", name, r, err)
+				}
+			}
+		}
+		for _, text := range []string{long, strings.Repeat(long, 16)} {
+			budget, err := NewShapingBudget(context.Background(), RunLimits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := f.Clone()
+			if err := budget.Bound(g); err != nil {
+				t.Fatal(err)
+			}
+			_, err = budget.Run(func() error { g.ShapeGlyphsMerged(text, "", "", "", "", true, Features{}); return nil })
+			if givesUp(path, len(text)) {
+				if !errors.Is(err, ErrRunLimit) {
+					t.Errorf("%s: HarfBuzz gives up on %d bytes of its characters, and they were not refused: %v", name, len(text), err)
+				}
+				refused++
+				continue
+			}
+			if err != nil {
+				t.Errorf("%s: %d bytes of its characters were refused: %v", name, len(text), err)
+				continue
+			}
+			// What the run spent of the allowance, read where the run's
+			// shaper left it: the last run of the text, which for a text of
+			// one script is the whole of it.
+			a := g.runScratch().aat
+			allowance := max(a.glyphs*morxOpsPerGlyph, morxOpsFloor)
+			spent := float64(allowance-a.ops) / float64(allowance)
+			if spent > worst {
+				worst, worstFont = spent, name
+			}
+			if strings.Contains(path, "googlefonts") && spent > worstGF {
+				worstGF, worstGFFont = spent, name
+			}
+		}
+		shaped++
+	}
+	// The tree's fixtures hold more than this; fewer means the walk found
+	// nothing, and a test that shapes nothing passes whatever it bounds.
+	if shaped < 40 || refused != 11 {
+		t.Fatalf("%d AAT fonts were shaped and %d runs refused, which proves little", shaped, refused)
+	}
+	t.Logf("%d AAT fonts shaped; of the runs HarfBuzz sets, the most of the allowance spent was %.4f of it, by %s, "+
+		"and in Google Fonts %.4f, by %s", shaped, worst, worstFont, worstGF, worstGFFont)
+}
+
+// stayingMorx is a morx of one contextual subtable whose entry for glyph 1
+// sets the mark, which substitutes nothing, and does not advance: the machine
+// stays on the glyph until the run's allowance is spent, and then moves on.
+// Nothing it does to the run is charged, so it spends the allowance without
+// running out of it. (Setting the mark is what puts the glyph in the
+// subtable's initial set; without it the subtable is not tried.)
+func stayingMorx() []byte {
+	const classes = 5
+	classTable := u16(nil, 8, 1, 1, 4) // format 8: glyph 1 is class 4
+	states := u16(nil, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+	entries := u16(nil, 0, 0, 0xFFFF, 0xFFFF, 0, 0xC000, 0xFFFF, 0xFFFF)
+	const header = 20
+	classAt := header
+	statesAt := classAt + len(classTable)
+	entriesAt := statesAt + len(states)
+	subsAt := entriesAt + len(entries)
+	body := u32(nil, classes, classAt, statesAt, entriesAt, subsAt)
+	body = append(append(append(body, classTable...), states...), entries...)
+	sub := append(u32(nil, 12+len(body), 0x20000001, 1), body...)
+	chain := append(u32(nil, 1, 16+len(sub), 0, 1), sub...)
+	return append(u32(u16(nil, 2, 0), 1), chain...)
+}
+
+// TestAKerxHasWhatTheMorxLeftOfTheAllowance: a run's morx and kerx spend one
+// allowance between them, as HarfBuzz's buffer has one max_ops for the whole
+// of a shaping. A morx that stays on a glyph until the allowance is gone
+// leaves the kerx none, and the run is refused at the kerx's first mark,
+// where HarfBuzz 14.5.0 gives up on it too (uharfbuzz raises MemoryError for
+// "aa" in this font, and sets it in a font of either table alone). Each table
+// alone, on the same run, is not refused. With an allowance of its own, the
+// kerx was not refused either.
+func TestAKerxHasWhatTheMorxLeftOfTheAllowance(t *testing.T) {
+	face := func(tables ...string) *Face {
+		glyf, loca := pointsGlyf(1)
+		extra := map[string][]byte{"glyf": glyf, "loca": loca}
+		for _, tag := range tables {
+			extra[tag] = map[string][]byte{"morx": stayingMorx(), "kerx": pointsKerx(false)}[tag]
+		}
+		f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{
+			Name:   "Staying",
+			Glyphs: []fonttest.Glyph{{Rune: 'a', Advance: 500, HasShape: true}, {Rune: 'b', Advance: 500, HasShape: true}},
+			Extra:  extra,
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	for _, tables := range [][]string{{"morx"}, {"kerx"}} {
+		if _, err := face(tables...).ShapeGlyphsBounded(context.Background(), RunInput{Text: "aa"}, RunLimits{}); err != nil {
+			t.Errorf("a %s alone was refused: %v", tables[0], err)
+		}
+	}
+	both := face("morx", "kerx")
+	if both.morx == nil || both.kerx == nil {
+		t.Fatal("the morx or the kerx was not read")
+	}
+	_, err := both.ShapeGlyphsBounded(context.Background(), RunInput{Text: "aa"}, RunLimits{})
+	if !errors.Is(err, ErrRunLimit) || !strings.Contains(err.Error(), "the kerx table of") {
+		t.Errorf("the run was not refused at its kerx: %v", err)
 	}
 }

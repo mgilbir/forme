@@ -488,6 +488,11 @@ func (sh shaper) applyKerx(buf []Glyph, pairs bool) bool {
 	run := &kerxRun{}
 	crossed := false
 	work := sh.work()
+	// The allowance is the run's, what its morx left of it, and a run its
+	// morx stopped in is walked by no state machine of the kerx: HarfBuzz's
+	// buffer is the same one, unsuccessful. Its pairs are still kerned.
+	aat := sh.aatRun(len(buf))
+	spent := aat.spent
 	for i := range k.subtables {
 		s := &k.subtables[i]
 		// A subtable tried, and each glyph asked whether it can start it,
@@ -535,17 +540,20 @@ func (sh shaper) applyKerx(buf []Glyph, pairs bool) bool {
 			if pairs || cross {
 				m := s.machine(k.numGlyphs)
 				t := &kerxFormat1{sh: sh, s: s, m: m, actions: int(font.Be32(m.t, 16)), cross: cross, pairs: pairs, run: run}
-				sh.driveKerx(buf, m, t)
+				sh.driveKerx(buf, m, t, aat)
 			}
 		case 4:
 			m := s.machine(k.numGlyphs)
 			flags := font.Be32(m.t, 16)
 			t := &kerxFormat4{sh: sh, k: k, m: m, action: int(flags >> 30), data: int(flags & 0x00FFFFFF), run: run}
-			sh.driveKerx(buf, m, t)
+			sh.driveKerx(buf, m, t, aat)
 		}
 	}
 	if run.reversed {
 		sh.reverseRun(buf)
+	}
+	if spent == aatNotSpent && aat.spent != aatNotSpent {
+		sh.refuseAAT(aat, "kerx", aat.spent)
 	}
 	return run.attached
 }
@@ -587,10 +595,15 @@ func (sh shaper) kernPairs(buf []Glyph, s *kerxSubtable, numGlyphs int, cross bo
 	}
 }
 
-// driveKerx walks a state machine subtable over the run, in place.
-func (sh shaper) driveKerx(buf []Glyph, m aatMachine, t morxTransition) {
-	b := &aatBuf{info: buf, ok: true, f: sh.f, maxOps: max(len(buf)*morxOpsPerGlyph, morxOpsFloor)}
-	sh.drive(b, m, 0, t)
+// driveKerx walks a state machine subtable over the run, in place, on what is
+// left of the run's allowance.
+func (sh shaper) driveKerx(buf []Glyph, m aatMachine, t morxTransition, aat *aatRun) {
+	b := &aatBuf{info: buf, ok: aat.spent == aatNotSpent, f: sh.f, maxOps: aat.ops}
+	sh.drive(b, m, kerxStateMachine, t)
+	aat.ops = b.maxOps
+	if !b.ok && aat.spent == aatNotSpent {
+		aat.spent = b.spent
+	}
 }
 
 // kerxFormat1 is format 1's transition: a stack of up to eight glyphs, and a

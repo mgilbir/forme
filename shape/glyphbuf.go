@@ -244,6 +244,12 @@ type ligatureRef struct {
 // is written in: Hebrew and Arabic read the other way, and a PDF text-showing
 // operator has no way to say so. Package bidi decides where each stretch
 // belongs.
+//
+// A run whose AAT state machines — a morx or mort, or a kerx — spend the
+// allowance HarfBuzz gives them, where HarfBuzz gives up on the run, is
+// returned as the machine left it, which is what HarfBuzz leaves in its
+// buffer; LayoutLimits says so afterwards. The bounded entry points
+// (ShapeGlyphsBounded, ShapeGlyphsContext, ShapingBudget) refuse such a run.
 func (f *Face) ShapeGlyphs(s string) ([]Glyph, int) {
 	return f.shapeGlyphsWith(s, nil, shapeContext{})
 }
@@ -876,9 +882,10 @@ func (f *Face) shapeGlyphsIn(s string, script uint16, rtl bool, extra []string, 
 	// below reads the tables through it.
 	// The run's two counters are the face's, started again (runScratch).
 	scratch.ligIDs, scratch.ops = 0, lookupAllowance(len(buf))
+	scratch.aat = newAATRun(len(buf), s)
 	sh := shaper{f: f, l: l, rtl: rtl, ligIDs: &scratch.ligIDs, morx: morx, keptAhead: ctx.keptAhead(rtl),
 		zeroMarks: model.zeroMarks(), features: ctx.features, lang: lang,
-		ops: &scratch.ops}
+		ops: &scratch.ops, aat: &scratch.aat}
 	// What the run applies, and in which stages: see plan.go. It covers every
 	// entry point — the features a document turned off or asked for, and the
 	// ones a caller named by tag, are requests to the same plan and not passes

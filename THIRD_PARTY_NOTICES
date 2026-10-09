@@ -2223,6 +2223,7 @@ Files:   testdata/harfbuzz/fonts/MorxCases.ttf
          testdata/harfbuzz/fonts/MorxFeaturesNoFeat.ttf
          testdata/harfbuzz/fonts/MortCases.ttf
          testdata/harfbuzz/fonts/MorxLanguage.ttf
+         testdata/harfbuzz/fonts/MorxRunaway.ttf
 Source:  testdata/harfbuzz/morx_fixture.py, in this repository, which builds
          them with fontTools
 Licence: the licence in LICENSE; they are not anyone else's work
@@ -2232,9 +2233,10 @@ states what the suite above does not reach — a chain's flags, a subtable
 nothing in the run can start, and a substitution at the end of the text with
 nothing marked; three whose morx chain names features, with a feat table
 offering them, one offering small capitals under their deprecated type, and
-none; and one with a mort, the morx's predecessor. They are listed here
-because every font the repository keeps is, and for where they came from; no
-third party's work is in them.
+none; one with a mort, the morx's predecessor; one whose ltag names
+languages; and one whose machines never advance, which HarfBuzz gives up on.
+They are listed here because every font the repository keeps is, and for
+where they came from; no third party's work is in them.
 
 ============================================================================
 Fonts built for the colour paint oracle

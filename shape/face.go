@@ -281,6 +281,15 @@ type Face struct {
 	// run does not allocate it again. Not shared by Clone, for the reason
 	// used is not. See runScratch.
 	scratch *runScratch
+	// aatRefused is what an unbounded run's morx, mort or kerx ran out of: a
+	// sentence for each table and allowance, naming the first run it
+	// happened to, which LayoutLimits reports. Not shared by Clone: it names
+	// a run's text, and the runs a clone shapes are its document's. See
+	// refuseAAT.
+	aatRefused []string
+	// aatRefusedKeys are the tables and allowances aatRefused has a
+	// sentence for.
+	aatRefusedKeys []string
 }
 
 // faceName is the face's PostScript name, and "Embedded" for a font that
@@ -1309,6 +1318,7 @@ func (f *Face) Clone() *Face {
 	out.runWork = nil
 	out.spareWork = nil
 	out.scratch = nil
+	out.aatRefused, out.aatRefusedKeys = nil, nil
 	// The cache is deliberately *kept*, not reset: it holds readings of the
 	// font's own tables, which no document can change. A layout is written only
 	// by its readers, so what is shared is a value; the mutex is there because

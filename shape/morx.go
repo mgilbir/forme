@@ -1,9 +1,11 @@
 package shape
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/mgilbir/forme/font"
+	"github.com/mgilbir/forme/internal/diag"
 )
 
 // Apple's extended glyph metamorphosis table, morx: the substitutions of an AAT
@@ -86,6 +88,9 @@ const (
 	morxLigature      = 2
 	morxNoncontextual = 4
 	morxInsertion     = 5
+	// kerxStateMachine is a kerx subtable's state machine, format 1 or 4,
+	// to drive and morxActs.
+	kerxStateMachine = -1
 )
 
 // The coverage bits of a subtable, the top byte of its coverage word.
@@ -506,6 +511,9 @@ func morxActs(kind int, m aatMachine, flags, data int) bool {
 		return flags&0x2000 != 0
 	case morxInsertion:
 		return flags&(0x3E0|0x1F) != 0 && (m.data16(data, 0) != 0xFFFF || m.data16(data, 1) != 0xFFFF)
+	case kerxStateMachine:
+		// Format 1's kernActionIndex, or format 4's ankrActionIndex.
+		return m.data16(data, 0) != 0xFFFF
 	}
 	return false
 }
@@ -548,13 +556,39 @@ type aatBuf struct {
 	// and a run a hostile font grew to that many glyphs was megabytes.
 	maxLen int
 	ok     bool
-	f      *Face
+	// spent is what made ok false: the allowance of operations, the length
+	// the run may grow to, or a move the run has no glyphs for.
+	spent aatSpent
+	f     *Face
 	// seen is every glyph the run has held since the morx began, which is
 	// what HarfBuzz asks whether a subtable can start in a run of four or
 	// more; nil for a shorter run, which is asked itself.
 	seen *glyphSet
 	// hasDeleted says a glyph was deleted, so that they are taken out.
 	hasDeleted bool
+}
+
+// aatSpent is what stopped a morx run's state machine before its end, where
+// something did; HarfBuzz's buffer is then unsuccessful, and its shaping
+// fails.
+type aatSpent int
+
+const (
+	aatNotSpent aatSpent = iota
+	// aatSpentOps is max_ops: the operations the run is allowed, spent.
+	aatSpentOps
+	// aatSpentLen is max_len: the run grown as long as it may.
+	aatSpentLen
+	// aatSpentRun is a move past the end of the run, which HarfBuzz asserts
+	// cannot happen.
+	aatSpentRun
+)
+
+// fail stops the machine for why, the first reason given.
+func (b *aatBuf) fail(why aatSpent) {
+	if b.ok {
+		b.ok, b.spent = false, why
+	}
 }
 
 func (b *aatBuf) cur() *Glyph { return &b.info[b.idx] }
@@ -607,8 +641,12 @@ func (b *aatBuf) moveTo(i int) bool {
 	switch n := len(b.out); {
 	case n < i:
 		count := i - n
-		if b.maxOps -= count; b.maxOps < 0 || count > len(b.info)-b.idx {
-			b.ok = false
+		if count > len(b.info)-b.idx {
+			b.fail(aatSpentRun)
+			return false
+		}
+		if b.maxOps -= count; b.maxOps < 0 {
+			b.fail(aatSpentOps)
 			return false
 		}
 		b.out = append(b.out, b.info[b.idx:b.idx+count]...)
@@ -622,7 +660,7 @@ func (b *aatBuf) moveTo(i int) bool {
 			// run by a glyph a transition and moves all of it each time, and
 			// one "A" of TestMORXThirtysix took three seconds.
 			if b.maxOps -= len(b.info) - b.idx; b.maxOps < 0 {
-				b.ok = false
+				b.fail(aatSpentOps)
 				return false
 			}
 			grow, n := count-b.idx, len(b.info)
@@ -631,7 +669,7 @@ func (b *aatBuf) moveTo(i int) bool {
 			b.idx += grow
 		}
 		if b.maxOps -= count; b.maxOps < 0 {
-			b.ok = false
+			b.fail(aatSpentOps)
 			return false
 		}
 		b.idx -= count
@@ -650,7 +688,7 @@ func (b *aatBuf) outputGlyph(gid int) {
 		return
 	}
 	if len(b.out)+len(b.info)-b.idx+1 > b.maxLen {
-		b.ok = false
+		b.fail(aatSpentLen)
 		return
 	}
 	var g Glyph
@@ -701,7 +739,7 @@ func (b *aatBuf) mergeClusters(start, end int) {
 		return
 	}
 	if b.maxOps -= end - start; b.maxOps < 0 {
-		b.ok = false
+		b.fail(aatSpentOps)
 	}
 	info := b.info
 	cluster := info[start].Cluster
@@ -735,7 +773,7 @@ func (b *aatBuf) mergeOutClusters(start, end int) {
 		return
 	}
 	if b.maxOps -= end - start; b.maxOps < 0 {
-		b.ok = false
+		b.fail(aatSpentOps)
 	}
 	out := b.out
 	cluster := out[start].Cluster
@@ -819,9 +857,9 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) 
 	// run (runScratch). The output is taken while the morx runs, and what is
 	// handed back is whichever of the two arrays the run did not end in.
 	scratch := sh.f.runScratch()
-	b := &aatBuf{info: buf, out: scratch.morxOut[:0], ok: true, f: sh.f,
-		maxOps: max(len(buf)*morxOpsPerGlyph, morxOpsFloor),
-		maxLen: max(len(buf)*morxLenPerGlyph, morxLenFloor)}
+	run := sh.aatRun(len(buf))
+	b := &aatBuf{info: buf, out: scratch.morxOut[:0], ok: run.spent == aatNotSpent, f: sh.f,
+		maxOps: run.ops, maxLen: max(run.glyphs*morxLenPerGlyph, morxLenFloor)}
 	scratch.morxOut = nil
 	if len(buf) >= 4 {
 		b.seen = &scratch.morxSeen
@@ -832,7 +870,11 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) 
 	}
 	reversed := false
 	work := sh.work()
+	var failed *morxSubtable
 	for _, chain := range m.chains {
+		if !b.ok {
+			break
+		}
 		flags := chain.flagsFor(settings, lang, sh.f.ltag)
 		for i := range chain.subtables {
 			s := &chain.subtables[i]
@@ -859,11 +901,9 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) 
 			}
 			sh.applyMorxSubtable(b, s, m.numGlyphs)
 			if !b.ok {
+				failed = s
 				break
 			}
-		}
-		if !b.ok {
-			break
 		}
 	}
 	if reversed {
@@ -875,7 +915,92 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) 
 	if cap(b.out) <= morxKeptOutput {
 		scratch.morxOut = b.out[:0]
 	}
+	run.ops = b.maxOps
+	if failed != nil {
+		run.spent = b.spent
+		table := "mort"
+		if failed.extended {
+			table = "morx"
+		}
+		sh.refuseAAT(run, table, b.spent)
+	}
 	return b.info
+}
+
+// aatRun is what a run's AAT tables share of HarfBuzz's buffer, which one
+// hb_shape call shapes: the operations left of its allowance, max_ops, which
+// its morx or mort spends and its kerx spends after, and what stopped a
+// state machine, after which no state machine walks the run again, as none
+// walks a buffer that is no longer successful.
+type aatRun struct {
+	// glyphs is how many the run started with, which the allowances are for,
+	// and text is the run's, for saying which run a table gave up on.
+	glyphs int
+	text   string
+	ops    int
+	spent  aatSpent
+}
+
+// newAATRun is a run of n glyphs' allowance.
+func newAATRun(n int, text string) aatRun {
+	return aatRun{glyphs: n, text: text, ops: max(n*morxOpsPerGlyph, morxOpsFloor)}
+}
+
+// aatRun is the run's, or for a shaper made without one, an allowance of
+// its own for a run of n glyphs.
+func (sh shaper) aatRun(n int) *aatRun {
+	if sh.aat != nil {
+		return sh.aat
+	}
+	r := newAATRun(n, "")
+	return &r
+}
+
+// refuseAAT answers a run whose morx, mort or kerx stopped before its end,
+// for want of an allowance HarfBuzz gives the run (see aatSpent). HarfBuzz
+// gives up on such a run: its buffer is unsuccessful, and uharfbuzz raises
+// MemoryError (morx.expected.txt's "fails").
+//
+// A run shaped under limits (RunLimits, ShapingBudget) is refused as one over
+// them is: an error wrapping ErrRunLimit, naming the face, the table and the
+// allowance. An unbounded run has no error to return, and is kept as the
+// machine left it, which is what HarfBuzz leaves in the buffer of a shaping
+// that failed: not the run's nominal glyphs, since HarfBuzz does not undo the
+// subtables that ran before the one that stopped. What happened is recorded
+// on the face, once for each table and allowance, for LayoutLimits to report.
+func (sh shaper) refuseAAT(run *aatRun, table string, spent aatSpent) {
+	n := run.glyphs
+	var what string
+	switch spent {
+	case aatSpentOps:
+		what = fmt.Sprintf("the %d operations HarfBuzz allows a run of %s", max(n*morxOpsPerGlyph, morxOpsFloor), glyphsWord(n))
+	case aatSpentLen:
+		what = fmt.Sprintf("the %d glyphs HarfBuzz lets a run of %s grow to", max(n*morxLenPerGlyph, morxLenFloor), glyphsWord(n))
+	default:
+		what = fmt.Sprintf("the %s of its run, moving past its end", glyphsWord(n))
+	}
+	if w := sh.work(); w != nil {
+		panic(runAbort{fmt.Errorf("%w: the %s table of %q ran out of %s", ErrRunLimit, table, sh.f.Name(), what)})
+	}
+	// Once for each table and allowance, so that what is kept is bounded
+	// however many runs a face gives up on.
+	key := table + string(rune('0'+spent))
+	if slices.Contains(sh.f.aatRefusedKeys, key) {
+		return
+	}
+	sh.f.aatRefusedKeys = append(sh.f.aatRefusedKeys, key)
+	sh.f.aatRefused = append(sh.f.aatRefused, fmt.Sprintf(
+		"its %s table ran out of %s, shaping %s, where HarfBuzz gives up on the run; "+
+			"the run is set as the table's state machine left it when it stopped",
+		table, what, diag.Quote(run.text, 40)))
+}
+
+// glyphsWord is "1 glyph", or "n glyphs".
+func glyphsWord(n int) string {
+	if n == 1 {
+		return "1 glyph"
+	}
+	return fmt.Sprintf("%d glyphs", n)
 }
 
 // morxKeptOutput is the most glyphs an output kept for the next run may hold:
@@ -996,6 +1121,9 @@ func (sh shaper) drive(b *aatBuf, m aatMachine, kind int, t morxTransition) {
 			class = m.class(b.info[b.idx].GID)
 		}
 		next, flags, data := m.entry(state, class)
+		if b.idx < len(b.info) && b.backtrackLen() > 0 && !safeToBreak(m, kind, state, class, next, flags, data) {
+			b.unsafeFromOutput(b.backtrackLen()-1, b.idx+1)
+		}
 		t.transition(b, flags, data)
 		state = next
 		if b.idx >= len(b.info) {
@@ -1013,6 +1141,66 @@ func (sh shaper) drive(b *aatBuf, m aatMachine, kind int, t morxTransition) {
 	}
 	if !t.inPlace() {
 		b.sync()
+	}
+}
+
+// safeToBreak is the driver's is_safe_to_break: whether the run would be set
+// the same broken before the glyph at the position. HarfBuzz marks the glyphs
+// either side of a position where it would not, and the marking is charged to
+// the run's allowance (unsafeFromOutput); a machine that does not advance
+// spends it there as surely as by its own count. class is the glyph's, and
+// next, flags and data the entry the machine takes from state on it.
+func safeToBreak(m aatMachine, kind, state, class, next, flags, data int) bool {
+	if morxActs(kind, m, flags, data) {
+		return false
+	}
+	if _, eotFlags, eotData := m.entry(state, aatClassEndOfText); morxActs(kind, m, eotFlags, eotData) {
+		return false
+	}
+	if state == 0 || flags&aatDontAdvance != 0 && next == 0 {
+		return true
+	}
+	wouldBe, wFlags, wData := m.entry(0, class)
+	return !morxActs(kind, m, wFlags, wData) && next == wouldBe && flags&aatDontAdvance == wFlags&aatDontAdvance
+}
+
+// unsafeFromOutput is unsafe_to_break_from_outbuffer's charge: HarfBuzz
+// marks the glyphs from start, in the output where the run writes one, to
+// end, and charges the allowance a unit for each glyph of the run and of the
+// output it marks. A stretch of more than 255 it leaves alone, uncharged, as
+// it does one that ends before it starts.
+func (b *aatBuf) unsafeFromOutput(start, end int) {
+	if end < start || end-start > 255 {
+		return
+	}
+	end = min(end, len(b.info))
+	if !b.haveOutput {
+		b.chargeFlags(end - start)
+		return
+	}
+	b.chargeFlags(len(b.out) - start)
+	b.chargeFlags(end - b.idx)
+}
+
+// unsafe is unsafe_to_break's charge, for the subtables that edit the run in
+// place: the glyphs from start to end, where there are two or more.
+func (b *aatBuf) unsafe(start, end int) {
+	if end < start || end-start > 255 {
+		return
+	}
+	if end = min(end, len(b.info)); end-start >= 2 {
+		b.chargeFlags(end - start)
+	}
+}
+
+// chargeFlags is _infos_set_glyph_flags's charge: n glyphs marked, and the
+// machine stopped where that is more than is left.
+func (b *aatBuf) chargeFlags(n int) {
+	if n == 0 {
+		return
+	}
+	if b.maxOps -= n; b.maxOps < 0 {
+		b.fail(aatSpentOps)
 	}
 }
 
@@ -1117,6 +1305,7 @@ func (c *aatContextual) transition(b *aatBuf, flags, data int) {
 	}
 	if c.mark < len(b.info) {
 		if v, ok := c.substitute(c.m.data16(data, 0), b.info[c.mark].GID); ok {
+			b.unsafe(c.mark, min(b.idx+1, len(b.info)))
 			b.replaceInPlace(c.mark, v)
 		}
 	}
@@ -1298,6 +1487,7 @@ func (n *aatInsertion) transition(b *aatBuf, flags, data int) {
 		if !b.moveTo(end + count) {
 			return
 		}
+		b.unsafeFromOutput(n.mark, min(b.idx+1, len(b.info)))
 	}
 	if flags&0x8000 != 0 {
 		n.mark = markLoc
