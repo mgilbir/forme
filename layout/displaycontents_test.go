@@ -161,30 +161,159 @@ func TestDisplayContentsIsSilentWhereItIsHonoured(t *testing.T) {
 	}
 }
 
-// TestDisplayContentsIsNotHonouredOnAnUnusualElement is the containment half.
+// TestDisplayContentsOnAnUnusualElementIsNone is css-display-3's Appendix B:
+// on a replaced element or a form control, "display: contents computes to
+// display: none". The cascade gives the element that value (see
+// style.unusualDisplayContents), and what this pins is what layout makes of
+// it: no box for the element, nothing of what it holds, and nothing reported,
+// since the value was applied as the specification says it applies.
 //
-// css-display-3's appendix on unusual elements: an element whose layout is not
-// decided by CSS box generation has no contents to be replaced by. A replaced
-// element's content is a picture and a form control's is a widget the engine
-// draws, and neither is a subtree of boxes — so the declaration cannot be
-// honoured, and going quiet about it would be the silent wrongness the finding
-// exists to prevent.
-func TestDisplayContentsIsNotHonouredOnAnUnusualElement(t *testing.T) {
+// The replaced elements and the controls used to keep an inline box and a
+// finding that the value was not implemented — the picture or the widget drawn
+// where the author had said there was no box. And a MathML element was the
+// other way about: neither replaced nor a control to the predicate that
+// decided, so the value was honoured on it and its <mi> stood on the page as a
+// block of its own, outside any formula. The Appendix's answer is none for
+// both: "For all MathML elements, display: contents computes to display:
+// none."
+func TestDisplayContentsOnAnUnusualElementIsNone(t *testing.T) {
 	for _, src := range []string{
-		`<img src="x.png" style="display: contents">`,
-		`<input style="display: contents">`,
-		`<textarea style="display: contents"></textarea>`,
-		`<select style="display: contents"><option>a</option></select>`,
+		`<img id="e" src="x.png" style="display: contents">`,
+		`<input id="e" value="gone" style="display: contents">`,
+		`<input id="e" type="submit" value="gone" style="display: contents">`,
+		`<textarea id="e" style="display: contents">gone</textarea>`,
+		`<select id="e" style="display: contents"><option>gone</option></select>`,
+		`<canvas id="e" style="display: contents"><p>gone</p></canvas>`,
+		`<video id="e" style="display: contents">gone</video>`,
+		`<object id="e" style="display: contents">gone</object>`,
+		`<iframe id="e" style="display: contents"></iframe>`,
+		`<svg id="e" style="display: contents"><text>gone</text></svg>`,
+		`<math id="e" style="display: contents"><mi>gone</mi></math>`,
+		`<math><mrow id="e" style="display: contents"><mi>gone</mi></mrow></math>`,
+		`kept<br id="e" style="display: contents">kept`,
 	} {
-		if got := displayFindings(t, src); len(got) != 1 {
-			t.Errorf("%s produced %d findings, want one — the value is not applied "+
-				"to it and nothing else about the page says so", src, len(got))
+		got := bodyBoxes(t, `<div>kept`+src+`</div>`)
+		if strings.Contains(got, "gone") {
+			t.Errorf("%s: what the element holds reached the page:\n%s", src, got)
+		}
+		if !strings.Contains(got, "kept") {
+			t.Errorf("%s: the element's siblings were lost:\n%s", src, got)
+		}
+		built := build(t, `<div>kept`+src+`</div>`)
+		var walk func(*Box)
+		walk = func(b *Box) {
+			if b.Element != nil {
+				if id, _ := b.Element.Attr("id"); id == "e" {
+					t.Errorf("%s: the element has a box:\n%s", src, sketchBox(built.Root))
+				}
+			}
+			for _, c := range b.Children {
+				walk(c)
+			}
+		}
+		walk(built.Root)
+		if got := displayFindings(t, src); len(got) != 0 {
+			t.Errorf("%s was reported as %q; the value was applied", src, got[0].Message)
 		}
 	}
-	// The root is the other one, and is not an exception this engine chose:
-	// §2.7 blockifies the root element, so the value never reaches it.
-	if got := displayFindings(t, `<p>x</p>`, `html { display: contents }`); len(got) != 1 {
-		t.Errorf("display:contents on the root produced %d findings, want one", len(got))
+
+	// A <br> is the one whose absence shows without content: with no box there
+	// is no forced break, so the two words share a line as they would under
+	// "display: none".
+	got := bodyBoxes(t, `<div>a<br style="display: contents">b</div>`)
+	if strings.Contains(got, "br ") {
+		t.Errorf("the <br> has a box, which is a forced break:\n%s", got)
+	}
+}
+
+// TestDisplayContentsOnAButtonIsHonoured. The Appendix names <button>,
+// <details> and <fieldset> to say they are not unusual: "display: contents
+// simply removes their principal box, and their contents render as normal".
+// And a <legend> "reacts to display: contents normally". A <button> was
+// refused with the form controls before, because it is one to the engine.
+func TestDisplayContentsOnAButtonIsHonoured(t *testing.T) {
+	for _, src := range []string{
+		`<button id="e" style="display: contents">kept</button>`,
+		`<fieldset id="e" style="display: contents"><legend>kept</legend></fieldset>`,
+		`<fieldset><legend id="e" style="display: contents">kept</legend></fieldset>`,
+	} {
+		built := build(t, `<div>`+src+`</div>`)
+		if !strings.Contains(textOfTree(built.Root), "kept") {
+			t.Errorf("%s: the contents were lost:\n%s", src, sketchBox(built.Root))
+		}
+		var walk func(*Box)
+		walk = func(b *Box) {
+			if b.Element != nil {
+				if id, _ := b.Element.Attr("id"); id == "e" {
+					t.Errorf("%s: the element kept its box:\n%s", src, sketchBox(built.Root))
+				}
+			}
+			for _, c := range b.Children {
+				walk(c)
+			}
+		}
+		walk(built.Root)
+		if got := displayFindings(t, src); len(got) != 0 {
+			t.Errorf("%s was reported as %q; the value was applied", src, got[0].Message)
+		}
+	}
+	// No control is drawn for a button that has no box: its text is the
+	// enclosing block's.
+	if b := boxFor(build(t, `<button style="display: contents">x</button>`).Root,
+		"button"); b != nil {
+		t.Errorf("a contents button has a box")
+	}
+}
+
+// TestDisplayContentsOnTheRootIsBlock is §2.8: "a display of contents
+// computes to block on the root element". The root used to keep the inline
+// box the value read as everywhere, and a finding.
+func TestDisplayContentsOnTheRootIsBlock(t *testing.T) {
+	built := build(t, `<p>x</p>`, `html { display: contents }`)
+	if built.Root == nil || built.Root.Element == nil || built.Root.Element.Name != "html" {
+		t.Fatalf("the root has no box of its own:\n%s", sketchBox(built.Root))
+	}
+	if built.Root.Outer != OuterBlock || built.Root.Inner != InnerFlow {
+		t.Errorf("the root is %v/%v, want block/flow", built.Root.Outer, built.Root.Inner)
+	}
+	if got := displayFindings(t, `<p>x</p>`, `html { display: contents }`); len(got) != 0 {
+		t.Errorf("the root was reported as %q; the value was applied", got[0].Message)
+	}
+}
+
+// TestContentsAroundAndInsideUnusualElements: the value is the element's, and
+// changes nothing about the elements around it or inside it. A contents list
+// item is still none of its own; an <img> inside a contents element still has
+// its box; and a table part inside a contents element still finds its table,
+// because the contents element is not there for §17.2.1 to wrap.
+func TestContentsAroundAndInsideUnusualElements(t *testing.T) {
+	built := build(t, `<div style="display: contents"><img id="i" src="x.png"></div>`)
+	if b := boxWithID(t, built.Root, "i"); b == nil {
+		t.Errorf("an <img> inside a contents element lost its box")
+	}
+
+	got := bodyBoxes(t, `<table><tbody><tr id="r"><td>a</td>`+
+		`<td style="display: contents">b</td></tr></tbody></table>`)
+	// The cell is gone and its text is a run inside a row, which §17.2.1
+	// wraps in an anonymous cell of its own.
+	if strings.Count(got, "td block/table-cell") != 1 ||
+		!strings.Contains(got, "anonymous block/table-cell") || !strings.Contains(got, `"b"`) {
+		t.Errorf("the contents cell kept its box, or its text no anonymous cell:\n%s", got)
+	}
+	got = bodyBoxes(t, `<table><tbody style="display: contents"><tr><td>a</td></tr>`+
+		`</tbody></table>`)
+	if strings.Contains(got, "tbody") || !strings.Contains(got, "tr block/table-row") {
+		t.Errorf("a contents row group kept its box or lost its row:\n%s", got)
+	}
+
+	// A list whose items are images is the list-item case of the rule: the
+	// image is none, the item around it is untouched.
+	got = bodyBoxes(t, `<ul><li>a<img src="x.png" style="display: contents"></li></ul>`)
+	if !strings.Contains(got, "li block list-item") {
+		t.Errorf("the list item around a contents image changed:\n%s", got)
+	}
+	if strings.Contains(got, "img") {
+		t.Errorf("the contents image has a box:\n%s", got)
 	}
 }
 

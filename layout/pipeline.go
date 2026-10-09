@@ -431,17 +431,12 @@ func ruleForStyleFinding(f style.Finding) Rule {
 // reportUnsupportedDisplays names the display and position values the box tree
 // recognised and could not honour.
 //
-// "display: contents" is the one that matters, and what is left of it is the
-// elements it cannot be honoured on. An element whose layout is not decided by
-// CSS box generation — a replaced element, a form control — has no contents to
-// be replaced by, and the root is blockified by §2.7 before the value is
-// reached. Those keep the box they had, and the box they had is an inline one,
-// which takes part in layout when the author asked for it not to.
-//
-// Which elements those are is contentsIsHonoured's answer and not a second copy
-// of it. A guardrail that decided for itself which declarations the engine
-// applies would go stale in the direction that matters: silent about a value
-// that had stopped being honoured.
+// "display: contents" is not among them on an element. Where it holds, the
+// element has no box and the value was honoured; where it does not — the root,
+// a replaced element, a form control — css-display-3 makes it compute to
+// "block" or "none", and the cascade has already given the element that value.
+// See style.unusualDisplayContents. What is left of it is a pseudo-element
+// whose content is one picture, which addGenerated reports where it decides it.
 //
 // The display gaps of a ::before and an ::after are reported beside their
 // element's, from the same reading of the value: a pseudo-element is a box
@@ -463,15 +458,6 @@ func reportUnsupportedDisplays(doc *html.Node, styles map[*html.Node]style.Compu
 		}
 		if displayIsNone(cs) {
 			return false
-		}
-		if cs.Get("display") == "contents" && !contentsIsHonoured(n, cs, root) {
-			rec.ReportDetail(Finding{
-				Rule:     RuleUnsupportedValue,
-				Source:   AtHTML(n.Offset),
-				Message:  "\"display: contents\" is not implemented; the element was laid out as an inline box",
-				Path:     PathOf(n),
-				Property: "display",
-			})
 		}
 		if gap := parseDisplay(cs.Get("display")).gap; gap != displayGapNone &&
 			unlaidBoxIsNotTheBoxAsked(n, cs, styles, pseudo, gap, &scope, n == root) {
