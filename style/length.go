@@ -156,18 +156,20 @@ func ParseLength(vals []css.ComponentValue, ctx LengthContext) (l Length, unsupp
 	}
 	v := parts[0][0]
 	if !v.IsToken() {
-		if v.IsFunction() && ascii.EqualFold(v.Token.Value, "calc") {
+		if isMathFunction(v) {
 			// A calc() is arithmetic over lengths, and everything in it but the
 			// percentages can be settled here — the font-relative units against
 			// the context the caller supplied, the operators against each other.
-			// See calc.go.
+			// So can min() and the rest of CSS Values 4's functions, unless a
+			// percentage is under one, which needs the containing block. See
+			// calc.go and mathfn.go.
 			//
 			// An expression that does not typecheck is not reported as
 			// unsupported: it is invalid CSS, and the declaration holding it is
 			// dropped so that the one before it stands, exactly as a browser
 			// does with any other value it cannot parse.
-			l, ok := evalCalc(v.Values, ctx)
-			return l, false, ok
+			l, deferred, ok := evalLength(v, ctx)
+			return l, deferred, ok
 		}
 		return Length{}, false, false
 	}
@@ -413,6 +415,19 @@ func ResolveFontSizeIn(vals []css.ComponentValue, ctx LengthContext) (u Unit, un
 				return 0, false, false
 			}
 			return parent.Mul(t.Number / 100), false, true
+		}
+	}
+
+	// A math function with a percentage under min() or the like cannot be
+	// carried as a length plus a percentage, and here does not need to be: the
+	// percentage is of the parent's size, which is known.
+	if len(parts) == 1 && len(parts[0]) == 1 && isMathFunction(parts[0][0]) {
+		if _, deferred, _ := evalLength(parts[0][0], ctx); deferred {
+			size, ok := resolveMathLength(parts[0][0], ctx, parent)
+			if !ok || size < 0 {
+				return 0, false, false
+			}
+			return size, false, true
 		}
 	}
 

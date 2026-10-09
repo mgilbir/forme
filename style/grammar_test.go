@@ -111,6 +111,12 @@ func TestTheValueGrammarAgreesWithTheSpecifications(t *testing.T) {
 		{"aspect-ratio", "16 / 9"}, {"aspect-ratio", "auto 1"},
 		{"display", "inline flex"},
 		{"margin-inline-start", "3px"}, {"border-inline-start-color", "green"},
+		{"width", "clamp(1px, 2vw, 3px)"}, {"width", "calc(min(1px, 2px) + 1px)"},
+		{"opacity", "calc(50%)"}, {"opacity", "min(50%, 30%)"}, {"opacity", "clamp(0, 2, 1)"},
+		{"width", "max(10px, 1em, 2rem)"}, {"margin-top", "round(up, 11px, 5px)"},
+		{"width", "calc(10px * sign(-3em))"}, {"font-size", "min(150%, 20px)"},
+		{"font-size", "clamp(10px, 120%, 30px)"}, {"width", "calc(1px / 0)"},
+		{"width", "calc(infinity * 1px)"}, {"width", "calc(100% - min(10px, 2em))"},
 	}
 	for _, tc := range validCases {
 		if got := judge(t, tc.name, tc.value); !got.ok || got.unsupported != "" {
@@ -142,6 +148,12 @@ func TestTheValueGrammarAgreesWithTheSpecifications(t *testing.T) {
 		{"border-spacing", "1px 2px 3px"}, {"clip", "rect(1px, 2px, 3px)"},
 		{"display", "absolute"}, {"visibility", "gone"}, {"word-break", "loose"},
 		{"width", "calc(1px + 2)"}, {"width", "calc(1px * 2px)"},
+		{"width", "min(1px, 2)"}, {"width", "clamp(1px, 2px)"}, {"width", "round(1.5px)"},
+		{"width", "mod(1px, 2deg)"}, {"width", "calc(1px +-2px)"}, {"width", "min()"},
+		{"width", "sin(1px)"}, {"width", "calc(1px * 1deg)"},
+		{"line-height", "calc(1 + 10%)"}, {"border-top-width", "min(1px, 10%)"},
+		{"opacity", "calc(0.5 + 10%)"}, {"opacity", "min(50%, 0.3)"},
+		{"width", "clamp(1px, none, 3px)"}, {"width", "pow(2px, 2)"},
 		{"margin-inline-start", "wide"}, {"border-inline-start-color", "'x'"},
 		{"width", "-webkit-fill-available"},
 	}
@@ -158,8 +170,10 @@ func TestTheValueGrammarAgreesWithTheSpecifications(t *testing.T) {
 		{"color", "color-mix(in srgb, red, blue)", "color-mix()"},
 		{"color", "Canvas", "the system colour Canvas"},
 		{"color", "rgb(calc(255) 0 0)", "rgb()"}, {"color", "light-dark(red, blue)", "light-dark()"},
-		{"width", "min(10px, 50%)", "min()"}, {"width", "clamp(1px, 2vw, 3px)", "clamp()"},
-		{"width", "calc(min(1px, 2px) + 1px)", "calc()"}, {"width", "10lh", "the unit lh"},
+		{"width", "min(10px, 50%)", "min()"}, {"width", "clamp(1px, 50%, 3px)", "clamp()"},
+		{"width", "calc(min(1px, 50%) + 1px)", "calc()"}, {"width", "10lh", "the unit lh"},
+		{"width", "min(1lh, 2px)", "min()"}, {"width", "round(line-width, 1.5px)", "round()"},
+		{"line-height", "max(1, 2)", "max()"},
 		{"line-height", "calc(1.5)", "calc()"}, {"z-index", "calc(2)", "calc()"},
 		{"margin-top", "env(safe-area-inset-top)", "env()"},
 		{"border-inline-start-color", "oklch(0.5 0.1 20)", "oklch()"},

@@ -50,7 +50,7 @@ func TestAnInvalidValueDoesNotWinTheCascade(t *testing.T) {
 }
 
 // TestAValueThisEngineDoesNotEvaluateIsReportedAsSuch is audit C28 and C59: a
-// modern colour, a math function other than calc() and a system colour are
+// modern colour, a min() over a percentage and a system colour are
 // correct CSS. The declaration is dropped so that the fallback written before
 // it stands, and the finding claims the gap — it used to call each of them the
 // author's mistake, which the reftest ratchet counts as a page with nothing
@@ -266,7 +266,8 @@ func TestSupportsIsAnsweredAboutTheValue(t *testing.T) {
 	}{
 		{`(position: bogus)`, false},
 		{`(position: sticky)`, true},
-		{`(width: min(1px, 2px))`, false},
+		{`(width: min(1px, 2px))`, true},
+		{`(width: min(1px, 50%))`, false},
 		{`(color: oklch(0.5 0.1 20))`, false},
 		{`(word-wrap: break-word)`, true},
 		{`(font: condensed 12px serif)`, true},

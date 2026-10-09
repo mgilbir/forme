@@ -85,7 +85,10 @@ func init() {
 
 	// css-fonts-4.
 	g["font-family"] = commaList(familyName)
-	g["font-size"] = single(either(fontSizeKeyword, lpNonNeg))
+	// A percentage in a font-size is of the parent's size, which is known
+	// when the size is computed: see ResolveFontSizeIn.
+	fontSize := numeric{length: true, percent: true, resolvesPercent: true}.nonNeg()
+	g["font-size"] = single(either(fontSizeKeyword, num(fontSize)))
 	g["font-style"] = fontStyle
 	g["font-weight"] = single(fontWeight)
 	// normal | <percentage [0,∞]> | the eight width keywords.
@@ -263,7 +266,9 @@ func init() {
 	g["overflow-y"] = g["overflow-x"]
 	g["clip"] = single(either(kw("auto"), rectFn))
 	// css-color-4 §11.2.
-	g["opacity"] = single(num(numeric{number: true, percent: true}))
+	// Read by layout's opacityNumber, which evaluates a math function of
+	// either.
+	g["opacity"] = single(num(numeric{number: true, percent: true, readsCalc: true}))
 	// filter-effects-1 §5: none | <filter-value-list>.
 	g["filter"] = filterValue
 	// css-will-change-1 §3: auto | <animateable-feature>#, a feature being
