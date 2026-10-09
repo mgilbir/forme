@@ -2206,11 +2206,8 @@ func sfntTablesAt(data []byte, at int) map[string][]byte {
 // directory, and nil for data that is not a collection or whose header states
 // more fonts than it has room for.
 func CollectionOffsets(data []byte) []int {
-	if len(data) < 12 || Be32(data, 0) != 0x74746366 { // 'ttcf'
-		return nil
-	}
-	n := uint64(Be32(data, 8))
-	if n == 0 || 12+4*n > uint64(len(data)) {
+	n := collectionSize(data)
+	if n == 0 {
 		return nil
 	}
 	offsets := make([]int, n)
@@ -2220,14 +2217,31 @@ func CollectionOffsets(data []byte) []int {
 	return offsets
 }
 
+// collectionSize is how many fonts a collection's header states, and zero for
+// data that is not a collection or whose header states more fonts than it has
+// room for.
+func collectionSize(data []byte) int {
+	if len(data) < 12 || Be32(data, 0) != 0x74746366 { // 'ttcf'
+		return 0
+	}
+	n := uint64(Be32(data, 8))
+	if 12+4*n > uint64(len(data)) {
+		return 0
+	}
+	return int(n)
+}
+
 // CollectionTables is SFNTTables for one font of a collection: its tables, each
 // a slice of data, so that the tables the fonts share are not copied. It is nil
 // for an index the collection does not have and for a directory SFNTTables
 // would refuse.
+//
+// It reads the one offset it is asked for: reading all of them for each font,
+// as it did, made describing every font of a collection quadratic in its
+// header, which may state a font for every four bytes of the file.
 func CollectionTables(data []byte, index int) map[string][]byte {
-	offsets := CollectionOffsets(data)
-	if index < 0 || index >= len(offsets) {
+	if index < 0 || index >= collectionSize(data) {
 		return nil
 	}
-	return sfntTablesAt(data, offsets[index])
+	return sfntTablesAt(data, int(Be32(data, 12+4*index)))
 }
