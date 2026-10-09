@@ -399,3 +399,29 @@ func TestNoRealFontsTablesAreMoreThanItsFile(t *testing.T) {
 	}
 	t.Logf("%d directories within their files, and read", dirs)
 }
+
+// TestAFontRefusedForItsTablesSaysSo is the error a refused directory gets: a
+// font whose tables overlap past twice its size is an sfnt, and calling it
+// "not an sfnt" would send someone looking for a corrupt file.
+func TestAFontRefusedForItsTablesSaysSo(t *testing.T) {
+	small := fonttest.SFNT(fonttest.SFNTOptions{Name: "Cost", Glyphs: costGlyphs})
+	data := aliasedSFNT(small, 8, 4*len(small), false)
+	if font.SFNTTables(data) != nil {
+		t.Fatal("the font's directory was read, so it says nothing about the refusal")
+	}
+	for _, c := range []struct {
+		path string
+		load func() error
+	}{
+		{"Load", func() error { _, err := Load(data); return err }},
+		{"LoadInstance", func() error { _, err := LoadInstance(data, nil); return err }},
+	} {
+		err := c.load()
+		if err == nil || !strings.Contains(err.Error(), "overlap") {
+			t.Errorf("%s: %v, want the overlap named", c.path, err)
+		}
+	}
+	if _, err := Load([]byte("this is not a font")); err == nil || !strings.Contains(err.Error(), "not an sfnt") {
+		t.Errorf("Load of text: %v, want \"not an sfnt\"", err)
+	}
+}

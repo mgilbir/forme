@@ -422,7 +422,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 			return nil, errors.New("fonts: a font collection (.ttc or .otc) holds several fonts; " +
 				"LoadCollection loads one of them")
 		}
-		return nil, errors.New("fonts: not an sfnt font program (TrueType or OpenType)")
+		return nil, notSFNT(data)
 	}
 	return loadTables(data, tables, coords)
 }
@@ -1174,6 +1174,21 @@ func isFixedPitch(p *font.Program) bool {
 // allowance is four times, and the format's longest string once more, so that a
 // small table may still hold one.
 func nameReadAllowance(name []byte) int { return 4*len(name) + 0xFFFF }
+
+// notSFNT says why font.SFNTTables refused data: a file that does not start as
+// an sfnt is not one, and one that does has a table directory the file cannot
+// hold, or tables that between them are more than twice its bytes. Calling the
+// second "not an sfnt" sends someone looking for the wrong fault.
+func notSFNT(data []byte) error {
+	if len(data) >= 4 {
+		switch font.Be32(data, 0) {
+		case 0x00010000, 0x74727565, 0x4F54544F: // 1.0, 'true', 'OTTO'
+			return errors.New("fonts: an sfnt font program whose table directory runs past the file, " +
+				"or whose tables overlap to more than twice its size")
+		}
+	}
+	return errors.New("fonts: not an sfnt font program (TrueType or OpenType)")
+}
 
 // postScriptName reads name ID 6 from an sfnt name table, preferring the
 // Windows/Unicode record a modern font carries and falling back to the

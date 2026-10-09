@@ -196,7 +196,7 @@ func LoadInstance(data []byte, coords map[string]float64) (*Face, error) {
 func instanceProgram(data []byte, want map[string]float64, varcInk *map[int]extents) ([]byte, []float64, error) {
 	tables := font.SFNTTables(data)
 	if tables == nil {
-		return nil, nil, errors.New("fonts: not an sfnt font program (TrueType or OpenType)")
+		return nil, nil, notSFNT(data)
 	}
 	fvar := tables["fvar"]
 	if fvar == nil {
