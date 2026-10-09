@@ -189,6 +189,10 @@ type runScratch struct {
 	// ligIDs and ops are the run's shaper's counters: see shaper.ligIDs and
 	// lookupBudget.
 	ligIDs, ops int
+	// morxOut is the output a morx's subtables write into, and morxSeen the
+	// glyphs the run has held; see applyMorx.
+	morxOut  []Glyph
+	morxSeen glyphSet
 }
 
 // runScratch is f's, made the first time it is asked for.

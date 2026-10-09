@@ -1,6 +1,10 @@
 package shape
 
-import "github.com/mgilbir/forme/font"
+import (
+	"slices"
+
+	"github.com/mgilbir/forme/font"
+)
 
 // Apple's extended glyph metamorphosis table, morx: the substitutions of an AAT
 // font, which Apple's fonts state there and not in GSUB. Apple Color Emoji
@@ -548,7 +552,7 @@ type aatBuf struct {
 	// seen is every glyph the run has held since the morx began, which is
 	// what HarfBuzz asks whether a subtable can start in a run of four or
 	// more; nil for a shorter run, which is asked itself.
-	seen map[int]bool
+	seen *glyphSet
 	// hasDeleted says a glyph was deleted, so that they are taken out.
 	hasDeleted bool
 }
@@ -682,7 +686,7 @@ func (b *aatBuf) setGlyph(g *Glyph, gid int) {
 		b.hasDeleted = true
 	}
 	if b.seen != nil {
-		b.seen[gid] = true
+		b.seen.add(gid)
 	}
 	g.GID = gid
 	g.substituted = true
@@ -811,13 +815,19 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) 
 	m := sh.f.morx
 	settings := sh.f.aatSettings(user)
 	lang := hbLanguage(sh.features.Language)
-	b := &aatBuf{info: buf, ok: true, f: sh.f,
+	// The output and the set of glyphs held are the face's, kept from run to
+	// run (runScratch). The output is taken while the morx runs, and what is
+	// handed back is whichever of the two arrays the run did not end in.
+	scratch := sh.f.runScratch()
+	b := &aatBuf{info: buf, out: scratch.morxOut[:0], ok: true, f: sh.f,
 		maxOps: max(len(buf)*morxOpsPerGlyph, morxOpsFloor),
 		maxLen: max(len(buf)*morxLenPerGlyph, morxLenFloor)}
+	scratch.morxOut = nil
 	if len(buf) >= 4 {
-		b.seen = map[int]bool{}
+		b.seen = &scratch.morxSeen
+		b.seen.reset()
 		for _, g := range buf {
-			b.seen[g.GID] = true
+			b.seen.add(g.GID)
 		}
 	}
 	reversed := false
@@ -862,7 +872,53 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) 
 	if b.hasDeleted {
 		b.info = removeDeleted(b.info)
 	}
+	if cap(b.out) <= morxKeptOutput {
+		scratch.morxOut = b.out[:0]
+	}
 	return b.info
+}
+
+// morxKeptOutput is the most glyphs an output kept for the next run may hold:
+// RunLimits' default MaxGlyphs. A morx that inserts without end grows an
+// unbounded run to 65,536 glyphs and more, megabytes the face would otherwise
+// keep for as long as it lives.
+const morxKeptOutput = 32768
+
+// glyphSet is a set of glyph ids, as a bit for each id and a list of those
+// added, in the order they were. Asking whether it holds an id is a bit, and
+// it is walked, and emptied, in the time its list takes.
+type glyphSet struct {
+	bits []uint64
+	gids []int
+}
+
+// add puts a glyph id in the set. Every id a run holds is a cmap's or a
+// table's sixteen bits; one outside them is looked for in the list.
+func (s *glyphSet) add(gid int) {
+	if gid < 0 || gid > 0xFFFF {
+		if !slices.Contains(s.gids, gid) {
+			s.gids = append(s.gids, gid)
+		}
+		return
+	}
+	if s.bits == nil {
+		s.bits = make([]uint64, 0x10000/64)
+	}
+	w, m := gid>>6, uint64(1)<<(gid&63)
+	if s.bits[w]&m == 0 {
+		s.bits[w] |= m
+		s.gids = append(s.gids, gid)
+	}
+}
+
+// reset empties the set.
+func (s *glyphSet) reset() {
+	for _, gid := range s.gids {
+		if gid >= 0 && gid <= 0xFFFF {
+			s.bits[gid>>6] = 0
+		}
+	}
+	s.gids = s.gids[:0]
 }
 
 // intersects is buffer_intersects_machine: whether any glyph of the run, or
@@ -871,7 +927,7 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) 
 func (b *aatBuf) intersects(s *morxSubtable, numGlyphs int) (bool, int) {
 	n := 0
 	if b.seen != nil {
-		for gid := range b.seen {
+		for _, gid := range b.seen.gids {
 			n++
 			if s.startsAt(gid, numGlyphs) {
 				return true, n

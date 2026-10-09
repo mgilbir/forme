@@ -34,3 +34,25 @@ func TestAMorxRunGrowsNoLongerThanHarfBuzzLetsIt(t *testing.T) {
 		t.Fatal("no run grew, so this test measures nothing")
 	}
 }
+
+// TestARunawayMorxsOutputIsNotKept: the output a morx writes into is kept on
+// the face for the next run, but not one a runaway insertion grew: two
+// characters set in TestMORXThirtyfour come back as some sixty thousand
+// glyphs, and the face would hold their array for as long as it lives.
+func TestARunawayMorxsOutputIsNotKept(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(harfbuzzDir, "aat", "fonts", "TestMORXThirtyfour.ttf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	glyphs, _ := f.ShapeGlyphs("ha")
+	if len(glyphs) <= morxKeptOutput {
+		t.Fatalf("the run grew to %d glyphs, which the face may keep", len(glyphs))
+	}
+	if kept := cap(f.runScratch().morxOut); kept > morxKeptOutput {
+		t.Errorf("a run of %d glyphs left the face keeping an output of %d", len(glyphs), kept)
+	}
+}

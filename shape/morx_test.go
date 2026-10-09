@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -172,6 +173,87 @@ func TestMorxAgreesWithHarfBuzz(t *testing.T) {
 				t.Errorf("%s glyph %d: %v, HarfBuzz %v\n  forme    %v\n  HarfBuzz %v", label, i, got[i], c.glyphs[i], got, c.glyphs)
 				break
 			}
+		}
+	}
+}
+
+// TestAMorxRunsGlyphsAreItsOwn: the output a morx writes into is the face's,
+// kept from run to run, and a run's glyphs may end in it; so it is handed
+// back only once the run is done with it, and the array a run returns is
+// never written by the next. Every case of morx.expected.txt is shaped on one
+// face per font, and each run's glyphs are what they were once every other
+// case has been shaped on its face.
+func TestAMorxRunsGlyphsAreItsOwn(t *testing.T) {
+	type kept struct {
+		label         string
+		glyphs, saved []Glyph
+	}
+	var runs []kept
+	faces := map[string]*Face{}
+	for _, c := range readMorxGolden(t) {
+		f, ok := faces[c.font]
+		if !ok {
+			dir := filepath.Join(harfbuzzDir, "aat", "fonts")
+			if slices.Contains(morxFixtures, c.font) {
+				dir = filepath.Join(harfbuzzDir, "fonts")
+			}
+			data, err := os.ReadFile(filepath.Join(dir, c.font))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f, err = Load(data); err != nil {
+				t.Fatalf("%s: %v", c.font, err)
+			}
+			faces[c.font] = f
+		}
+		glyphs := shapeMorxCase(f, c)
+		runs = append(runs, kept{c.font + " " + strconv.Quote(c.text), glyphs, slices.Clone(glyphs)})
+	}
+	for _, r := range runs {
+		if !slices.Equal(r.glyphs, r.saved) {
+			t.Errorf("%s: the run's glyphs became %v once later runs were shaped, and were %v",
+				r.label, r.glyphs, r.saved)
+		}
+	}
+}
+
+// TestAGlyphSetHoldsWhatAMapWould: the set of glyphs a morx run has held,
+// which decides whether a subtable is tried at all, holds each id added once
+// and no other, across the whole sixteen-bit range and outside it, and is
+// empty again once reset, as the map it replaced was. The morx comparison
+// with HarfBuzz runs few glyphs of low ids, which no two bits of a word
+// would tell apart.
+func TestAGlyphSetHoldsWhatAMapWould(t *testing.T) {
+	var s glyphSet
+	seed := uint32(7)
+	for round := range 50 {
+		s.reset()
+		want := map[int]bool{}
+		for range 1 + round*20 {
+			seed = seed*1664525 + 1013904223
+			gid := int(seed>>8) % 0x10000
+			switch seed % 7 {
+			case 0:
+				gid = 0xFFFF
+			case 1:
+				gid = 0x10000 + int(seed%5)
+			case 2:
+				gid = -1 - int(seed%3)
+			case 3:
+				gid &^= 63 // the first bit of a word
+			}
+			s.add(gid)
+			want[gid] = true
+		}
+		got := map[int]bool{}
+		for _, gid := range s.gids {
+			if got[gid] {
+				t.Fatalf("round %d: %d is in the set twice", round, gid)
+			}
+			got[gid] = true
+		}
+		if !maps.Equal(got, want) {
+			t.Fatalf("round %d: the set holds %d ids, and %d were added", round, len(got), len(want))
 		}
 	}
 }
