@@ -2137,7 +2137,8 @@ func extractType1FontMatrix(data []byte) float64 {
 
 // SFNTTables reads an sfnt table directory and returns each table's bytes by
 // tag, sharing the caller's backing array. It returns nil when data is not an
-// sfnt at all or the directory itself is truncated.
+// sfnt at all or the directory itself is truncated, and for a directory whose
+// tables between them are more than twice the bytes the file has.
 //
 // A table whose stated length runs past the end of the file is the bytes that
 // are there: from its offset to the end of the file. That is what HarfBuzz
@@ -2152,6 +2153,24 @@ func extractType1FontMatrix(data []byte) float64 {
 //
 // Each table's capacity ends where the table does, so that nothing appending
 // to one can write over the table after it.
+//
+// A table finds its bytes by an offset, and nothing in a single record stops
+// every table from naming the same bytes, or bytes that overlap. Read in
+// place, that costs nothing; written out, as a face of a collection's program
+// is, an instance is, and a CFF2 font's program is, each table is copied, so n
+// tables on one range of length L were n×L bytes, quadratic in the file: a
+// 33 KB collection of 400 tables on one range made a ten-megabyte program.
+// Tables that do not overlap are at most the file's bytes between them. Every
+// directory in the tree and the corpora is within that (3,957 of them, with
+// Google Fonts), and so are the 619 faces of 153 collection files measured
+// besides — macOS's, Windows's, Noto Sans CJK's and others — none of whose
+// tables overlap at all. A table stated as running past the end of the file
+// does overlap every table after it, read as the bytes there, and adds at
+// most the file once more. So a directory whose tables are more than twice
+// the file is refused whole, and every table map this returns is at most
+// twice len(data), which is what a writer copying each table out is bounded
+// by. HarfBuzz reads such a directory; no font that is not built to cost has
+// one.
 //
 // This is the one thing a font reader and a font writer share. ParseSFNT reads
 // tables to answer questions about the font; shape's subsetter rewrites them.
@@ -2193,6 +2212,13 @@ func sfntTablesAt(data []byte, at int) map[string][]byte {
 			end = uint64(len(data))
 		}
 		tables[name] = data[off:end:end]
+	}
+	left := 2 * uint64(len(data))
+	for _, t := range tables {
+		if uint64(len(t)) > left {
+			return nil
+		}
+		left -= uint64(len(t))
 	}
 	return tables
 }

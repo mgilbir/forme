@@ -62,7 +62,11 @@ func (f *Face) sfntTables() map[string][]byte {
 }
 
 // programSize is how large a face's font is, for the budgets sized by it: its
-// program's length, or a face of a collection's tables'.
+// program's length, or a face of a collection's tables'. Those are at most
+// twice the collection's length, however its tables overlap, since
+// font.SFNTTables refuses a directory whose tables are more: summed as they
+// were stated, n tables on one range sized the outline allowance
+// (newOutlineCache) by n times the range.
 func programSize(data []byte, tables map[string][]byte) int {
 	if data != nil {
 		return len(data)

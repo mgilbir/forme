@@ -2,6 +2,7 @@ package shape
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mgilbir/forme/font"
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/internal/costtest"
 )
 
@@ -21,7 +23,7 @@ import (
 // names each table by one, and a name table each string; nothing stops many
 // of them from naming one place. Read in place, that costs nothing more; read
 // or written once per name, it costs the place times the names, quadratic in
-// the file. See CollectionFaces and describeAllowance.
+// the file. See font.SFNTTables, CollectionFaces and describeAllowance.
 
 // rawCollection is a collection header naming a directory at each of at, each
 // an offset into body, which follows the header.
@@ -229,4 +231,171 @@ func TestNoRealCollectionIsDescribedPastTheAllowance(t *testing.T) {
 		t.Fatalf("%d collections were read, which proves little", collections)
 	}
 	t.Logf("%d faces of %d collections described as read alone", faces, collections)
+}
+
+// aliasedSFNT is src's tables written out again with n more tables, X000 on,
+// every one of them naming one range of size bytes after the rest, and as a
+// collection of that one face where collection is set.
+func aliasedSFNT(src []byte, n, size int, collection bool) []byte {
+	tables := font.SFNTTables(src)
+	tags := make([]string, 0, len(tables))
+	for tag := range tables {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	dirAt := 0
+	if collection {
+		dirAt = 16
+	}
+	count := len(tags) + n
+	out := make([]byte, dirAt+12+16*count)
+	if collection {
+		copy(out, "ttcf")
+		binary.BigEndian.PutUint32(out[4:], 0x00010000)
+		binary.BigEndian.PutUint32(out[8:], 1)
+		binary.BigEndian.PutUint32(out[12:], uint32(dirAt))
+	}
+	copy(out[dirAt:], src[:4])
+	binary.BigEndian.PutUint16(out[dirAt+4:], uint16(count))
+	record := func(i int, tag string, off, length int) {
+		rec := dirAt + 12 + 16*i
+		copy(out[rec:], tag)
+		binary.BigEndian.PutUint32(out[rec+8:], uint32(off))
+		binary.BigEndian.PutUint32(out[rec+12:], uint32(length))
+	}
+	for i, tag := range tags {
+		for len(out)%4 != 0 {
+			out = append(out, 0)
+		}
+		record(i, tag, len(out), len(tables[tag]))
+		out = append(out, tables[tag]...)
+	}
+	for len(out)%4 != 0 {
+		out = append(out, 0)
+	}
+	at := len(out)
+	for i := 0; i < size; i++ {
+		out = append(out, byte(i))
+	}
+	for i := 0; i < n; i++ {
+		record(len(tags)+i, fmt.Sprintf("X%03d", i), at, size)
+	}
+	return out
+}
+
+// TestTablesNamingOneRangeAreWrittenWithinTheFile writes out a font whose n
+// extra tables all name one range of 64n bytes, at 4n against n, along each
+// path that copies a font's tables into a font of its own: the program of a
+// face of a collection, an instance, and a CFF2 font's program. Each copied
+// every table it was given, so the copies grew as n×64n, sixteen times for
+// four: a 33 KB collection of 400 tables on one range of 25,600 bytes made a
+// program of ten megabytes, and writing it allocated 56. A directory
+// whose tables are more than twice its file is refused now (font.SFNTTables),
+// so what is copied is at most twice the file. Counted by the bytes
+// allocated, which every copy is.
+func TestTablesNamingOneRangeAreWrittenWithinTheFile(t *testing.T) {
+	small := fonttest.SFNT(fonttest.SFNTOptions{Name: "Cost", Glyphs: costGlyphs})
+	for _, c := range []struct {
+		path       string
+		src        []byte
+		collection bool
+		write      func(data []byte) error
+	}{
+		{"a face of a collection's program", small, true, func(data []byte) error {
+			f, err := LoadCollection(data, 0)
+			if err == nil && len(f.Program()) == 0 {
+				err = errors.New("no program")
+			}
+			return err
+		}},
+		{"an instance", harfbuzzFont(t, "VariedAxes.ttf"), false, func(data []byte) error {
+			_, err := LoadInstance(data, nil)
+			return err
+		}},
+		{"a CFF2 font's program", harfbuzzFont(t, "CFF2Blend.otf"), false, func(data []byte) error {
+			f, err := Load(data)
+			if err == nil && len(f.Program()) == 0 {
+				err = errors.New("no program")
+			}
+			return err
+		}},
+	} {
+		t.Run(c.path, func(t *testing.T) {
+			// The path works on the font as it is, so that a refusal below is
+			// about the aliasing and not about the font.
+			if err := c.write(aliasedSFNT(c.src, 0, 0, c.collection)); err != nil {
+				t.Fatalf("the font written out again: %v", err)
+			}
+			at := func(n int) func() {
+				data := aliasedSFNT(c.src, n, 64*n, c.collection)
+				return func() { c.write(data) }
+			}
+			what := c.path + " with n tables naming one range of 64n bytes, at 4n against n"
+			if r := costtest.Allocated(t, what, at(100), at(400)); r > 8 {
+				t.Errorf("%s: a factor of %.1f where 8 is the most the input allows", what, r)
+			}
+		})
+	}
+}
+
+// TestNoRealFontsTablesAreMoreThanItsFile is the other half of
+// TestTablesNamingOneRangeAreWrittenWithinTheFile: no font's honest tables
+// overlap past its file, so the refusal, at twice the file, touches none.
+// Every directory of every font in the tree and the corpora, single or a face
+// of a collection, is within its file once, and read.
+func TestNoRealFontsTablesAreMoreThanItsFile(t *testing.T) {
+	dirs := 0
+	for _, path := range realFonts(t) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := unwrapWOFF(raw)
+		if err != nil {
+			continue // a fixture of a malformed WOFF, refused before any directory
+		}
+		offsets := font.CollectionOffsets(data)
+		read := func(i int) map[string][]byte { return font.CollectionTables(data, i) }
+		if offsets == nil {
+			offsets = []int{0}
+			read = func(int) map[string][]byte { return font.SFNTTables(data) }
+		}
+		for i, at := range offsets {
+			if at < 0 || at > len(data)-12 || 12+16*font.Be16(data, at+4) > len(data)-at {
+				continue // a directory refused for running past the file
+			}
+			switch font.Be32(data, at) {
+			case 0x00010000, 0x74727565, 0x4F54544F:
+			default:
+				continue
+			}
+			dirs++
+			// What the records state, read here rather than by the reader under
+			// test: each tag's last record, cut at the end of the file.
+			lengths := map[string]int{}
+			for r := 0; r < font.Be16(data, at+4); r++ {
+				rec := at + 12 + 16*r
+				off, n := int(font.Be32(data, rec+8)), int(font.Be32(data, rec+12))
+				if off < len(data) {
+					lengths[string(data[rec:rec+4])] = min(n, len(data)-off)
+				}
+			}
+			sum := 0
+			for _, n := range lengths {
+				sum += n
+			}
+			if sum > len(data) {
+				t.Errorf("%s, face %d: its tables are %d bytes, in a file of %d", filepath.Base(path), i, sum, len(data))
+			}
+			if read(i) == nil {
+				t.Errorf("%s, face %d: its directory was refused", filepath.Base(path), i)
+			}
+		}
+	}
+	// The tree's own fonts are more than these; fewer means the walk found
+	// nothing, and a test that reads nothing passes whatever the bound.
+	if dirs < 100 {
+		t.Fatalf("%d directories were read, which proves little", dirs)
+	}
+	t.Logf("%d directories within their files, and read", dirs)
 }
