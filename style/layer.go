@@ -68,7 +68,9 @@ import (
 // layer each was written in. Higher wins, as with CascadeRank.
 //
 // Unlayered is zero and is not a layer: it is the band above all of them for a
-// normal declaration and below all of them for an important one.
+// normal declaration and below all of them for an important one. The layers are
+// numbered from one, so a presentational hint's hintLayer, minus one, is below
+// every one of them; a hint is never important.
 func layerRank(layer int, important bool) int {
 	if important {
 		if layer == 0 {

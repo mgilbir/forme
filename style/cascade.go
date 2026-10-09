@@ -2097,8 +2097,9 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 	})
 
 	// The presentational hints of hints.go, at the very bottom of the author
-	// origin: zero specificity and an order number below every declaration an
-	// author wrote, so any author rule at all beats them and no user-agent rule
+	// origin: zero specificity, a layer below every layer and an order number
+	// below every declaration an author wrote, so any author rule at all beats
+	// them, layered or not, and no user-agent rule
 	// ever does. They belong to the element and not to its pseudo-elements,
 	// which have no attributes of their own.
 	if pseudo == "" {
@@ -2133,7 +2134,8 @@ func (s *Styler) computeFor(n *html.Node, rules *ruleSet,
 			cands = append(cands, candidate{
 				property: property, value: value,
 				text:   s.interner().value(serialize(value)),
-				origin: OriginAuthor, order: hintOrder, offset: n.Offset,
+				origin: OriginAuthor, layer: hintLayer, order: hintOrder,
+				offset: n.Offset,
 			})
 		}
 	}

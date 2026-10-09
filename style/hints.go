@@ -25,11 +25,12 @@ import (
 // control of a document it did not write. CSS Cascade puts a hint in the author
 // origin with a specificity of zero, ahead of every declaration an author
 // actually wrote — which is what is done here: origin OriginAuthor, zero
-// specificity, and an order number below every real declaration's.
+// specificity, an order number below every real declaration's, and a layer
+// below every layer (see hintLayer).
 //
 // The consequences are worth stating, because both directions surprise someone:
 // a user-agent rule can never beat a hint, and any author rule at all can,
-// including "* { width: auto }".
+// including "* { width: auto }" and one written in a cascade layer.
 //
 // # Which ones are here
 //
@@ -58,6 +59,19 @@ import (
 // stating it as a constant is what keeps that relationship from being an
 // accident of two files agreeing.
 const hintOrder = -1
+
+// hintLayer is the cascade layer every hint carries, which is no layer an
+// author can write: CSS Cascade 5 §6.1 gives the hints an origin of their own,
+// between the user's and the author's. For the cascade that is the bottom of
+// the author origin — below every author declaration, layered or not — and
+// layerRank puts it there, since a normal declaration's rank is its layer's
+// number and the layers are numbered from one. For revert they are part of the author origin, which
+// is what OriginAuthor already says; for revert-layer they are their own layer,
+// which is what a number no @layer is given says.
+//
+// They were carried as unlayered author declarations, and unlayered beats every
+// layer, so "@layer base { img { width: 7px } }" lost to <img width=5>.
+const hintLayer = -1
 
 // hintedAttributes lists, per element, which attribute sets which property.
 //

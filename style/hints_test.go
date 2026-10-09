@@ -73,6 +73,26 @@ func TestTheWeakestAuthorRuleStillBeatsAHint(t *testing.T) {
 	}
 }
 
+// TestALayeredAuthorRuleBeatsAHint. CSS Cascade 5 §6.1 puts a hint in an origin
+// of its own, between the user's and the author's, so every author declaration
+// beats it — including one in a cascade layer. A hint was carried as an
+// unlayered author declaration, and unlayered beats every layer, so "@layer base
+// { img { width: 7px } }" lost to <img width=5>: a framework shipped in layers
+// could not size an image its markup had sized.
+func TestALayeredAuthorRuleBeatsAHint(t *testing.T) {
+	got := computed(t, `<img id="i" width="5">`,
+		sheet(t, OriginAuthor, `@layer base { img { width: 7px } }`))
+	if w := got["i"].Get("width"); w != "7px" {
+		t.Errorf("width is %q; a hint beat an author rule in a cascade layer", w)
+	}
+	// And still loses to a user rule, which is the other side of its origin.
+	got = computed(t, `<img id="i" width="5">`,
+		sheet(t, OriginUser, `img { width: 9px }`))
+	if w := got["i"].Get("width"); w != "5px" {
+		t.Errorf("width is %q; a user rule beat a presentational hint", w)
+	}
+}
+
 // TestInlineStyleBeatsHint, since a style attribute is above every author rule.
 func TestInlineStyleBeatsHint(t *testing.T) {
 	got := computed(t, `<img id="i" width="5" style="width: 11px">`)
