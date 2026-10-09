@@ -17,7 +17,9 @@ import (
 // and so rules out a bound on the clock tight enough to mean anything. Eight is
 // between the two with room on both sides rather than against either.
 //
-// The ratio is timed by costtest.Time, which says how a busy machine is kept
+// Where the work can be counted it is, because a count is the same on any
+// machine (see TestAParagraphEndingInHangingSpaceIsNotWalkedBackPerLine). The
+// rest are timed by costtest.Time, which says how a busy machine is kept
 // from deciding it: the thread's own processor clock, windows of equal length
 // measured in turn, each from a collected heap, and the least of many timings. One more thing is this package's own: the input is small
 // enough that four times it still sits in the cache. An Item is a large
@@ -256,21 +258,42 @@ func TestALineDoesNotWalkTheRestOfTheParagraph(t *testing.T) {
 // TestAParagraphEndingInHangingSpaceIsNotWalkedBackPerLine is the other half of
 // C50: the walk back from the end of the paragraph over the white space that
 // ends it, which a paragraph ending in a long run of ideographic spaces — an
-// item each — paid on every line before it. Planted: a factor of 13.7.
+// item each — paid on every line before it.
+//
+// It is counted and not timed: what is counted is the items asked whether they
+// are white space that ends a line (lineTailAsked), which every walk over that
+// white space asks of each item it passes. Preparing the paragraph asks it once
+// of each item, so four times the input is four times the count exactly, on
+// any machine; the walk asked it of every hanging space once per line. Timed,
+// this read 5.2 to 5.8 under the race detector on a workstation and 8.1 in
+// CI's race job, against a bound of 8. Planted (the walk back put into
+// Lines.tailFrom): a factor of 13.7 timed, and 15.3 counted.
 func TestAParagraphEndingInHangingSpaceIsNotWalkedBackPerLine(t *testing.T) {
 	face := courier(t)
 	br := NewBreaker(nil)
-	paragraph := cached(func(n int) []Item {
+	paragraph := func(n int) []Item {
 		items := words(t, br, face, strings.TrimSpace(strings.Repeat("ab ", n)))
 		for i := 0; i < n; i++ {
 			items = append(items, Item{Text: "\u3000", Face: face, Size: u(size20),
 				Width: u(24), Space: true, Hangs: true, BreakBefore: true})
 		}
 		return items
-	})
-	checkLinear(t, "breaking a paragraph that ends in hanging spaces", 500, func(n int) {
-		breakEveryLine(t, br.Lines(paragraph(n)), u(300))
-	})
+	}
+	asked := func(n int) int64 {
+		items := paragraph(n)
+		count := 0
+		lineTailAsked = &count
+		defer func() { lineTailAsked = nil }()
+		breakEveryLine(t, br.Lines(items), u(300))
+		return int64(count)
+	}
+	const what = "breaking a paragraph that ends in hanging spaces"
+	const n = 500
+	if ratio := costtest.Count(t, what, asked(n), asked(4*n)); ratio > 8 {
+		t.Errorf("%s: four times the input asked %.1f times as often whether an item "+
+			"is white space that ends a line; preparing the paragraph asks it once "+
+			"of each item, which is four, and a walk per line is sixteen", what, ratio)
+	}
 }
 
 // TestBalancingProbesDoNotWalkTheRestOfTheParagraph is C50 where the audit says

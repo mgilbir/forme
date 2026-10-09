@@ -1183,6 +1183,21 @@ func transparentAtLineEnd(item Item) bool {
 	return item.Inset || IsBidiControlOnly(item.Text)
 }
 
+// lineTailAsked, where a test points it at a count, counts the items
+// isLineTailSpace is asked about. It is nil everywhere else, and the engine
+// never sets it.
+//
+// It is how the cost of finding a line's trailing white space is counted
+// rather than timed: every walk over that white space asks this of each item
+// it passes, so a walk made once per line asks it once per line per item, and
+// the count says so on any machine. Timed, the guard on it read 8.1 against a
+// bound of 8 in the race job, for work that is linear. See
+// TestAParagraphEndingInHangingSpaceIsNotWalkedBackPerLine.
+//
+// Only a test in this package sets it, and none of them runs in parallel, so
+// the count has one writer.
+var lineTailAsked *int
+
 // isLineTailSpace reports whether an item can be part of the white space that
 // ends a line: the space itself, what the end of a line looks through (see
 // transparentAtLineEnd), and a box that is out of flow.
@@ -1193,6 +1208,9 @@ func transparentAtLineEnd(item Item) bool {
 // content — §4.1.2's rules are about the text — and none takes the line
 // anywhere.
 func isLineTailSpace(item Item) bool {
+	if lineTailAsked != nil {
+		*lineTailAsked++
+	}
 	if transparentAtLineEnd(item) || item.Abs != nil {
 		return true
 	}
