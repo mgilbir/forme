@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/mgilbir/forme/css"
@@ -81,9 +82,12 @@ func pagesOf(rules []style.AtRule) []pendingPage {
 // applied. They are gathered rather than applied as they are read because the
 // descriptors are not independent: a margin may be a percentage of the size,
 // and the size is not settled until the last rule has been seen.
+//
+// Every declaration is kept, and not only the strongest so far, because
+// "revert" and "revert-layer" are answered by the ones below the winner.
 type pageDeclarations struct {
-	sides [4]pageDeclaration
-	size  pageSizeDeclaration
+	sides [4][]pageDeclaration
+	size  []pageSizeDeclaration
 }
 
 // pageSizeDeclaration is the size descriptor as one rule declared it, already
@@ -92,6 +96,9 @@ type pageDeclarations struct {
 // rather than turning what an earlier one chose.
 type pageSizeDeclaration struct {
 	width, height style.Unit
+	// rollback is "revert" or "revert-layer" where the declaration was one,
+	// and the width and height mean nothing.
+	rollback string
 	pageTerms
 }
 
@@ -104,6 +111,12 @@ type pageTerms struct {
 	spec  int
 	order int
 	set   bool
+	// origin and group are what a roll-back removes: "revert" every
+	// declaration of the origin and those above it, "revert-layer" every
+	// declaration of the origin's cascade layer (group, unranked, zero for
+	// none). See cascaded.
+	origin style.Origin
+	group  int
 }
 
 // beats reports whether a declaration with these terms wins over one already
@@ -126,17 +139,84 @@ func (d pageTerms) beats(o pageTerms) bool {
 	return d.order > o.order
 }
 
-func takeSize(held *pageSizeDeclaration, d pageSizeDeclaration) {
-	if d.beats(held.pageTerms) {
-		*held = d
-	}
-}
-
 // pageDeclaration is one side's margin as one rule declared it, with what
 // deciding against another declaration of the same side needs.
 type pageDeclaration struct {
 	length style.Length
+	// rollback is "revert" or "revert-layer" where the declaration was one,
+	// and the length means nothing.
+	rollback string
 	pageTerms
+}
+
+// cascaded is which of one descriptor's declarations the cascade gives it, by
+// its index, or -1 where none: the strongest, and where that is a roll-back,
+// the strongest of those it leaves.
+//
+// CSS Page 3 §4.4: "Declarations in page and margin contexts cascade just like
+// declarations in style rule for elements", and §1.1 gives every descriptor
+// the CSS-wide keywords. "revert" is the value the descriptor would have had if
+// no rule of its origin or of one above it had been written, and
+// "revert-layer" if no rule of its own cascade layer had been (CSS Cascade 5
+// §7.3.3 and §7.3.4); in both, everything in the group goes, important or
+// not, and a roll-back the walk then meets rolls back again. Below every
+// origin is the sheet the caller asked for, which is this engine's user agent
+// default, so a roll-back with nothing left under it leaves the descriptor as
+// though nothing had declared it — not at its initial value, which is
+// "unset".
+//
+// It is one walk down the declarations in cascade order: a roll-back only
+// removes, so the strongest left only ever moves down.
+func cascaded(n int, terms func(int) pageTerms, rollback func(int) string) int {
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.Slice(idx, func(a, b int) bool { return terms(idx[a]).beats(terms(idx[b])) })
+	removedFrom := style.OriginAuthor + 1
+	var removed map[[2]int]bool
+	for _, i := range idx {
+		t := terms(i)
+		if t.origin >= removedFrom || removed[[2]int{int(t.origin), t.group}] {
+			continue
+		}
+		switch rollback(i) {
+		case kwRevert:
+			removedFrom = t.origin
+		case kwRevertLayer:
+			if removed == nil {
+				removed = map[[2]int]bool{}
+			}
+			removed[[2]int{int(t.origin), t.group}] = true
+		default:
+			return i
+		}
+	}
+	return -1
+}
+
+// The CSS-wide keywords, as a page descriptor's value is read for them.
+const (
+	kwInherit     = "inherit"
+	kwInitial     = "initial"
+	kwUnset       = "unset"
+	kwRevert      = "revert"
+	kwRevertLayer = "revert-layer"
+)
+
+// pageWideKeyword is the CSS-wide keyword a descriptor's whole value is, or "".
+// One among other values is not the keyword: "margin: 1cm initial" is a margin
+// with a stray word in it, and invalid.
+func pageWideKeyword(vals []css.ComponentValue) string {
+	name, ok := identName(nonWhitespace(vals))
+	if !ok {
+		return ""
+	}
+	switch name {
+	case kwInherit, kwInitial, kwUnset, kwRevert, kwRevertLayer:
+		return name
+	}
+	return ""
 }
 
 // applyPageRules returns the sheet the document is laid out on: the one the
@@ -167,8 +247,9 @@ func applyPageRules(page PageSize, pages []pendingPage, rec *Recorder) PageSize 
 	// for, not a tenth of the sheet the caller happened to pass in — the two
 	// descriptors are one statement about one page and reading them in the
 	// order they happen to be written would make the second depend on it.
-	if got.size.set {
-		page.Width, page.Height = got.size.width, got.size.height
+	if i := cascaded(len(got.size), func(i int) pageTerms { return got.size[i].pageTerms },
+		func(i int) string { return got.size[i].rollback }); i >= 0 {
+		page.Width, page.Height = got.size[i].width, got.size[i].height
 	}
 
 	// A percentage is of the page box, which is the whole sheet: the left and
@@ -179,11 +260,13 @@ func applyPageRules(page PageSize, pages []pendingPage, rec *Recorder) PageSize 
 	// where it was read rather than silently becoming nought here.
 	basis := [4]style.Unit{page.Height, page.Width, page.Height, page.Width}
 	out := [4]style.Unit{page.Margin.Top, page.Margin.Right, page.Margin.Bottom, page.Margin.Left}
-	for i, d := range got.sides {
-		if !d.set {
+	for i, ds := range got.sides {
+		w := cascaded(len(ds), func(k int) pageTerms { return ds[k].pageTerms },
+			func(k int) string { return ds[k].rollback })
+		if w < 0 {
 			continue
 		}
-		if u, ok := d.length.Resolve(basis[i], true); ok {
+		if u, ok := ds[w].length.Resolve(basis[i], true); ok {
 			out[i] = u
 		}
 	}
@@ -230,12 +313,37 @@ func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *in
 	for _, d := range decls {
 		*order++
 		terms := pageTerms{rank: style.CascadeRank(p.origin, d.Important),
-			layer: style.LayerRank(p.layer, d.Important), spec: spec, order: *order, set: true}
-		switch ascii.Lower(d.Name) {
+			layer: style.LayerRank(p.layer, d.Important), spec: spec, order: *order, set: true,
+			origin: p.origin, group: p.layer}
+		name := ascii.Lower(d.Name)
+		kw := pageWideKeyword(d.Value)
+		if kw == kwInherit && (name == "margin" || pageMarginSide(name)) {
+			// CSS Page 3 §6: "The page context inherits from the root element."
+			// The margins do not inherit, so this is the one way to ask for the
+			// root element's, and the page is settled before any element is
+			// styled; nothing here knows what the root's margin will be. It is
+			// valid CSS, so it is this engine's gap and not the author's
+			// mistake.
+			rec.ReportDetail(Finding{
+				Rule:   RuleUnsupportedValue,
+				Source: Source{HTMLOffset: -1, CSSOffset: d.Offset, Sheet: p.sheet},
+				Message: "the @page " + name + " \"inherit\" takes the root element's " +
+					"margin, which this engine does not know when it settles the page; " +
+					"the declaration was dropped and whatever it would have " +
+					"overridden stands",
+				Property: name,
+			})
+			continue
+		}
+		switch name {
 		case "margin":
-			if spread, ok := pageMarginShorthand(d.Value); ok {
+			if kw != "" {
+				for i := range got.sides {
+					got.sides[i] = append(got.sides[i], pageKeywordMargin(kw, terms))
+				}
+			} else if spread, ok := pageMarginShorthand(d.Value); ok {
 				for i, l := range spread {
-					take(&got.sides[i], pageDeclaration{length: l, pageTerms: terms})
+					got.sides[i] = append(got.sides[i], pageDeclaration{length: l, pageTerms: terms})
 				}
 			} else {
 				badPageMargin(rec, p, d)
@@ -247,14 +355,28 @@ func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *in
 				"margin-top": sideTop, "margin-right": sideRight,
 				"margin-bottom": sideBottom, "margin-left": sideLeft,
 			}[ascii.Lower(d.Name)]
-			if l, ok := pageMarginValue(d.Value); ok {
-				take(&got.sides[at], pageDeclaration{length: l, pageTerms: terms})
+			if kw != "" {
+				got.sides[at] = append(got.sides[at], pageKeywordMargin(kw, terms))
+			} else if l, ok := pageMarginValue(d.Value); ok {
+				got.sides[at] = append(got.sides[at], pageDeclaration{length: l, pageTerms: terms})
 			} else {
 				badPageMargin(rec, p, d)
 			}
 		case "size":
+			switch kw {
+			case kwInitial, kwUnset, kwInherit:
+				// "size" does not inherit and its initial value is "auto",
+				// which is the caller's sheet. Inherited, it is the root
+				// element's, and no element has a size but the initial one.
+				got.size = append(got.size, pageSizeDeclaration{width: base.Width,
+					height: base.Height, pageTerms: terms})
+				continue
+			case kwRevert, kwRevertLayer:
+				got.size = append(got.size, pageSizeDeclaration{rollback: kw, pageTerms: terms})
+				continue
+			}
 			if w, h, ok := pageSizeValue(d.Value, base); ok {
-				takeSize(&got.size, pageSizeDeclaration{width: w, height: h, pageTerms: terms})
+				got.size = append(got.size, pageSizeDeclaration{width: w, height: h, pageTerms: terms})
 			} else {
 				badPageSize(rec, p, d)
 			}
@@ -274,12 +396,26 @@ func readPageRule(p pendingPage, base PageSize, got *pageDeclarations, order *in
 	}
 }
 
-// take keeps whichever of two declarations for the same side the cascade
-// prefers.
-func take(held *pageDeclaration, d pageDeclaration) {
-	if d.beats(held.pageTerms) {
-		*held = d
+// pageMarginSide reports whether a descriptor is one side's margin.
+func pageMarginSide(name string) bool {
+	switch name {
+	case "margin-top", "margin-right", "margin-bottom", "margin-left":
+		return true
 	}
+	return false
+}
+
+// pageKeywordMargin is one side's declaration of a CSS-wide keyword other than
+// "inherit". The margins do not inherit, so "unset" is "initial", and the
+// initial value of a margin is zero (CSS Box 4, the margin properties) — not the caller's
+// margin, which stands in for the user agent's stylesheet, and which "initial"
+// does not consult. "revert" is what reaches the caller's margin.
+func pageKeywordMargin(kw string, terms pageTerms) pageDeclaration {
+	switch kw {
+	case kwRevert, kwRevertLayer:
+		return pageDeclaration{rollback: kw, pageTerms: terms}
+	}
+	return pageDeclaration{length: style.Zero, pageTerms: terms}
 }
 
 func badPageSize(rec *Recorder, p pendingPage, d css.Declaration) {
