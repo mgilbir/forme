@@ -697,6 +697,7 @@ func useFace(face *Face) {
 	_ = face.MeasureShapedMerged(text, 10, before, after, before, after, false, off)
 	_, _ = face.MeasureShapedMergedSpan(text, 10, before, after, before, after, true, off)
 	_, _ = face.ShapeGlyphsWith(text, "smcp", "zzzz")
+	_ = face.MissingGlyphs(text)
 	_, _ = face.ShapeGlyphsInContext(text, before, after, off)
 	_, _ = face.ShapeGlyphsAcrossFaces(text, before, after, off)
 	_, _ = face.ShapeGlyphsMerged(text, before, after, before, after, false, off)

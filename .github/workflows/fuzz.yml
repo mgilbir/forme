@@ -65,6 +65,12 @@ jobs:
           # keeps a font readable seldom makes its MATH table say anything.
           - package: ./shape
             target: FuzzMathTable
+          # The missing-glyph count read without shaping, held to the count
+          # shaping reports. The two share the code up to the cmap lookup, and
+          # what this searches for is a text whose characters some step before
+          # it treats differently when nothing is going to be drawn.
+          - package: ./shape
+            target: FuzzMissingGlyphsAgreesWithShaping
           - package: ./layout
             target: FuzzImageLoading
           # The numbers a caller hands the line breaker, rather than the text:
