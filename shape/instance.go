@@ -1329,7 +1329,32 @@ func replacePostScriptName(name []byte, psName string) []byte {
 	binary.BigEndian.PutUint16(out[0:], uint16(format))
 	binary.BigEndian.PutUint16(out[2:], uint16(count))
 	binary.BigEndian.PutUint16(out[4:], uint16(head))
+	// Each distinct string is written once, and every record or language tag
+	// stating it points at the one copy, as the fonts that share strings do.
+	// Written once per record, a table whose records all name one long string
+	// was built as that string times the records — sixty-four megabytes from a
+	// thousand records on one — before the check below refused it, and a table
+	// that shared strings honestly was refused for storage it did not need.
+	// Storage past what the sixteen-bit offsets reach is refused as it is
+	// reached rather than after it is built.
 	var strs []byte
+	strAt := map[string]int{}
+	place := func(v []byte) (int, bool) {
+		if off, ok := strAt[string(v)]; ok {
+			return off, true
+		}
+		if len(strs)+len(v) > 0xFFFF {
+			return 0, false
+		}
+		strAt[string(v)] = len(strs)
+		strs = append(strs, v...)
+		return strAt[string(v)], true
+	}
+	for i := range records {
+		if _, ok := place(records[i].value); !ok {
+			return nil
+		}
+	}
 	for i, r := range records {
 		rec := 6 + 12*i
 		binary.BigEndian.PutUint16(out[rec:], uint16(r.platform))
@@ -1337,8 +1362,7 @@ func replacePostScriptName(name []byte, psName string) []byte {
 		binary.BigEndian.PutUint16(out[rec+4:], uint16(r.language))
 		binary.BigEndian.PutUint16(out[rec+6:], uint16(r.id))
 		binary.BigEndian.PutUint16(out[rec+8:], uint16(len(r.value)))
-		binary.BigEndian.PutUint16(out[rec+10:], uint16(len(strs)))
-		strs = append(strs, r.value...)
+		binary.BigEndian.PutUint16(out[rec+10:], uint16(strAt[string(r.value)]))
 	}
 	for i := 0; i < langCount; i++ {
 		at := 6 + 12*count + 2 + 4*i
@@ -1347,9 +1371,12 @@ func replacePostScriptName(name []byte, psName string) []byte {
 		if off+length > len(name) {
 			return nil
 		}
+		tagAt, ok := place(name[off : off+length])
+		if !ok {
+			return nil
+		}
 		binary.BigEndian.PutUint16(out[at:], uint16(length))
-		binary.BigEndian.PutUint16(out[at+2:], uint16(len(strs)))
-		strs = append(strs, name[off:off+length]...)
+		binary.BigEndian.PutUint16(out[at+2:], uint16(tagAt))
 	}
 	if format == 1 {
 		binary.BigEndian.PutUint16(out[6+12*count:], uint16(langCount))

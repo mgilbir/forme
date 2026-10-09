@@ -1146,6 +1146,20 @@ func isFixedPitch(p *font.Program) bool {
 	return seen
 }
 
+// nameReadAllowance is how many bytes of string one reading of a name table
+// may take from it before the records left are passed over.
+//
+// A record's string is found by an offset, and nothing stops every record from
+// pointing at one string, or at strings that overlap: each is bytes the table
+// has, so no check on a single record refuses it. Five thousand records on one
+// string of 65,534 bytes made Load decode three hundred megabytes of it, four
+// times over, and take a second and a half. What honest records name is bounded
+// by the table they are in: across 3,874 fonts the records name at most 1.52
+// times the table's size between them, which is where strings are shared. The
+// allowance is four times, and the format's longest string once more, so that a
+// small table may still hold one.
+func nameReadAllowance(name []byte) int { return 4*len(name) + 0xFFFF }
+
 // postScriptName reads name ID 6 from an sfnt name table, preferring the
 // Windows/Unicode record a modern font carries and falling back to the
 // Macintosh/Roman one.
@@ -1162,6 +1176,7 @@ func nameByID(name []byte, id int) string {
 	count := font.Be16(name, 2)
 	storage := font.Be16(name, 4)
 	var mac string
+	left := nameReadAllowance(name)
 	for i := 0; i < count; i++ {
 		rec := 6 + 12*i
 		if rec+12 > len(name) {
@@ -1176,6 +1191,10 @@ func nameByID(name []byte, id int) string {
 		if off+length > len(name) {
 			continue
 		}
+		if length > left {
+			break
+		}
+		left -= length
 		raw := name[off : off+length]
 		switch platform {
 		case 3, 0: // Windows or Unicode: UTF-16BE
