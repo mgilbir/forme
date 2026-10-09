@@ -598,8 +598,7 @@ func (p *painter) filtering(b *Box, d dim, clip Clip, round *roundClip, paint fu
 		}
 		if d.dimmed() && len(cast) > 0 {
 			_, shadows := dimOps(cast, 0, 1)
-			g := p.groups[d.owners.box]
-			g.marks = append(g.marks, shadows...)
+			p.addMarks(p.groups[d.owners.box], shadows)
 		}
 		if len(out) == 1 {
 			if g, ok := out[0].(FilterGroup); ok {
@@ -736,6 +735,10 @@ func countOpsUpTo(ops []Op, limit int64) (int64, bool) {
 					return false
 				}
 			case FilterGroup:
+				if !count(v.Ops) {
+					return false
+				}
+			case TransformGroup:
 				if !count(v.Ops) {
 					return false
 				}

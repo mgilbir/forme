@@ -215,6 +215,12 @@ type Fragment struct {
 	// clip and the curves around the box, and its own "clip". See filter.go.
 	filterClip  Clip
 	filterRound *roundClip
+	// transform is the box's transform, where layout applies one: the matrix,
+	// and the clip around the box, which is applied after it rather than to
+	// what the box holds; transformRound is that clip's curves. See
+	// transform.go.
+	transform      boxTransform
+	transformRound *roundClip
 	// filters is, on the root fragment only, every filtered box's chain, which
 	// the painter wraps each such box's group in. See filter.go.
 	filters map[*Box][]FilterFunction
@@ -282,10 +288,16 @@ func (f *Fragment) MarginRect() Rect { return f.BorderRect.Outset(f.Margin) }
 // document. A caller that does not want the findings is entitled to say so once
 // rather than to be right about which documents raise them.
 func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
+	return layoutGrouping(root, avail, set, rec, false)
+}
+
+// layoutGrouping is Layout, with what Options.TransformGroups says.
+func layoutGrouping(root *Box, avail Size, set FontSet, rec *Recorder, transformGroups bool) *Fragment {
 	if root == nil {
 		return nil
 	}
 	l := newLayouter(root, avail, set, rec)
+	l.transformGroups = transformGroups
 	frag := l.layout()
 	l.reportFontLimits()
 	l.reportForcedBreaks(root)
@@ -394,6 +406,7 @@ func (l *layouter) layout() *Fragment {
 		}
 		frag := icb.Children[0]
 		l.resolveBackgrounds(frag, page)
+		l.resolveTransforms(frag)
 		l.resolveClips(frag)
 		l.resolveFilters(frag)
 		frag.paintLengths = l.paintLengths()
@@ -434,6 +447,10 @@ func (l *layouter) layout() *Fragment {
 	// anything the walk above computed.
 	l.resolveBackgrounds(frag, page)
 
+	// The transforms, which are of boxes where layout put them, and which
+	// decide which clips are outside a transformed box and which inside it.
+	l.resolveTransforms(frag)
+
 	// Clipping last of all, because §11.1's rectangles are final ones: a
 	// padding box in page coordinates, for boxes that were positioned after
 	// everything else. It changes no geometry — §11.1 is about painting and
@@ -460,6 +477,11 @@ func (l *layouter) paintLengths() style.LengthContext {
 }
 
 type layouter struct {
+	// transformGroups is Options.TransformGroups: a transform no quarter turn
+	// draws is drawn as a TransformGroup rather than reported. See
+	// transform.go.
+	transformGroups bool
+
 	// What laying out MathML keeps for the run: each face's MATH table, read
 	// once; each box's class as an embellished operator or a space-like
 	// element, and each core operator's properties, which every row asks of

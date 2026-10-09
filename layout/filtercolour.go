@@ -223,6 +223,11 @@ func eachColour(ops []Op, f func(style.RGBA) bool) bool {
 			if !onlyBlurAndOpacity(v.Filters) || !eachColour(v.Ops, f) {
 				return false
 			}
+		case TransformGroup:
+			// A matrix moves ink and mixes no colours.
+			if !eachColour(v.Ops, f) {
+				return false
+			}
 		case Link:
 		default:
 			// A picture, or anything else whose colours are not stated here.
@@ -279,6 +284,9 @@ func mapColours(ops []Op, f func(style.RGBA) style.RGBA) []Op {
 			v.Ops = mapColours(v.Ops, f)
 			op = v
 		case FilterGroup:
+			v.Ops = mapColours(v.Ops, f)
+			op = v
+		case TransformGroup:
 			v.Ops = mapColours(v.Ops, f)
 			op = v
 		}

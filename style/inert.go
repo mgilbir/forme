@@ -88,8 +88,8 @@ type inertValue struct {
 	also string
 	// always marks a property whose *every* value asks for the page that is
 	// already there, so that there is nothing to compare. It is a different
-	// claim from produced and a rarer one — see transform-origin and
-	// backface-visibility, the two entries that make it.
+	// claim from produced and a rarer one — see backface-visibility, the
+	// entry that makes it.
 	always bool
 	// initial is the property's initial value, when it differs from produced.
 	// Empty means the two are the same.
@@ -160,24 +160,32 @@ var inertValues = map[string]inertValue{
 	// is not any more — it is implemented, and what it cannot express is
 	// reported at the box that asked for it rather than at the declaration. See
 	// layout/opacity.go. Filter Effects 1's filter has gone the same way: see
-	// layout/filter.go.
-	"transform":       {produced: "none", because: "nothing is transformed"},
+	// layout/filter.go. And so has transform, with transform-origin beside it:
+	// both are read by layout/transform.go, which applies the transforms a
+	// display list of axis-aligned rectangles can draw, and every other 2D one
+	// where the backend draws a TransformGroup, and reports the rest at the
+	// box.
 	"transform-style": {produced: "flat", because: "there is no 3D rendering context"},
-	// backface-visibility is the second property whose every value is inert,
-	// and for transform-origin's reason (below). It says whether a box is drawn
-	// when it faces away from the viewer, and CSS Transforms 2 makes a box face
-	// away only when its accumulated 3D transformation turns it round. So
-	// a document declaring "hidden" either declares a transform too — which is
-	// reported, at that declaration — or asks for a box that is never
-	// back-facing to be hidden when it is. It is not a grouping property and
-	// makes no stacking context, so there is nothing else in it to lose. It was
-	// listed with "visible" produced, so "hidden" was reported on documents
-	// with no transform anywhere: the suite's
+	// backface-visibility is the one property whose every value is inert. It
+	// says whether a box is drawn when it faces away from the viewer, and CSS
+	// Transforms 2 §10 makes a box face away only when the component in row
+	// 3, column 3 of its accumulated 3D transformation matrix is negative.
+	// Every transform this engine applies is 2D, in the plane of the page,
+	// and the 4×4 matrix of a 2D one has 1 there: a mirror such as
+	// scaleX(-1), which layout draws where the backend draws a TransformGroup,
+	// shows the box's front reversed and not its back, and every 3D function
+	// is reported at the box and not applied (layout/transform.go). So a
+	// document declaring "hidden" asks for a box that is never back-facing to
+	// be hidden when it is. It is not a
+	// grouping property and makes no stacking context, so there is nothing
+	// else in it to lose. It was listed with "visible" produced, so "hidden"
+	// was reported on documents with no transform anywhere: the suite's
 	// opacity-change-parent-stacking-context pair writes it on a box that is
-	// never turned. If transform is ever implemented, this entry has to change
-	// with it.
+	// never turned. If a 3D transform is ever applied, this entry has to
+	// change with it; TestNothingIsTurnedAway holds half of that, and
+	// layout's TestStillRefused the other.
 	"backface-visibility": {always: true,
-		because: "nothing is transformed, so no box ever faces away from the viewer"},
+		because: "every transform this engine applies stays in the plane of the page, so no box ever faces away from the viewer"},
 
 	// CSS Text Decoration 4 §2.6. Decorations are drawn straight through, which
 	// is a choice "auto" permits and "none" asks for outright — so both are
@@ -239,22 +247,16 @@ var inertValues = map[string]inertValue{
 	"clip-path": {produced: "none", because: "nothing is clipped to a shape"},
 	"mask":      {produced: "none", because: "nothing is masked"},
 
-	// CSS Transforms 2 §3 and §5. The engine transforms nothing — "transform"
-	// above says so — and a perspective with nothing to see through it is the
-	// same fact again.
+	// CSS Transforms 2 §8. A perspective changes only what a 3D transform puts
+	// off the plane of the page, and this engine applies no 3D transform:
+	// every 3D function is reported at the box. A perspective with nothing to
+	// see through it is the same fact again.
 	//
-	// transform-origin is one of two properties here whose *every* value is
-	// inert (backface-visibility, above, is the other), and it is inert for a
-	// reason rather than by luck: the property does not do
-	// anything on its own. It names the point a transform turns about, so a
-	// document that declares it either declares a transform too — which is
-	// reported, at the declaration, by the entry above — or declares an origin for
-	// a transformation that was never asked for. Either way nothing is lost by
-	// this being silent, and every spelling of the same point ("center", "50%
-	// 50%", "top left", "0 0") is one fewer report of a difference that is not
-	// there. If transform is ever implemented, this entry has to go with it.
-	"perspective":      {produced: "none", because: "there is no perspective to see through"},
-	"transform-origin": {always: true, because: "nothing is transformed, so no transformation has an origin"},
+	// transform-origin was here, inert in every value because there was no
+	// transformation for an origin to belong to. There is one now, and the
+	// origin decides where a turned or scaled box lands, so it is registered
+	// and read: see layout/transform.go.
+	"perspective": {produced: "none", because: "there is no perspective to see through"},
 
 	// CSS Text Decoration 4 §3.2 and §2.5, and CSS Fonts 4 §4.5 and §6.9.
 	// text-emphasis and text-emphasis-style were here and are implemented; see

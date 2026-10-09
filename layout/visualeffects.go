@@ -158,6 +158,19 @@ func (l *layouter) resolveClips(root *Fragment) {
 			from, depth, anc = l.clipFromContainingBlock(f.Box, inherited)
 			round = inheritedRound[anc]
 		}
+		if f.transform.on {
+			// CSS Transforms 1 §2's clipping is of the transformed box: what
+			// clips the box from outside cuts it where it is drawn, and so
+			// after the transform, and only its own "clip" and what is inside
+			// it move with it. So the clip from outside is set aside for the
+			// painter to apply to the transformed group, and the box starts
+			// afresh. See transform.go.
+			//
+			// The depth goes on counting: the bound is on the chain of boxes
+			// that clip, and a transform does not shorten it.
+			f.transform.clip, f.transformRound = from, round
+			from, round = Clip{}, nil
+		}
 		self := from.meet(l.clipRectOf(f))
 		if filtersItsPaint(f.Box) {
 			// Filter Effects 1 §5: a filter is applied first and clipping

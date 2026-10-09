@@ -272,6 +272,28 @@ func dimOps(ops []Op, at int, alpha float64) ([]Op, []groupMark) {
 			}
 			v.Ops = inner
 			kept = append(kept, v)
+		case TransformGroup:
+			// An alpha is linear and the matrix only moves ink, so what the
+			// group holds is dimmed as it would have been outside it; its
+			// marks are where the matrix draws them, as near as a rectangle
+			// says, and cut by the group's clip.
+			m := v.affine()
+			inner, innerMarks := dimOps(append([]Op(nil), v.Ops...), 0, alpha)
+			for _, mk := range innerMarks {
+				if !mk.rect.Empty() {
+					mk.rect = m.bounds(mk.rect)
+					if v.Clip.Active {
+						mk.rect = v.Clip.Rect.Intersect(mk.rect)
+					}
+				}
+				marks = append(marks, mk)
+			}
+			if len(inner) == 0 {
+				continue
+			}
+			g := newTransformGroup(m, inner)
+			g.Clip = v.Clip
+			kept = append(kept, g)
 		case DrawImage:
 			marks = append(marks, groupMark{rect: v.Rect, image: true})
 			if alpha == 0 {

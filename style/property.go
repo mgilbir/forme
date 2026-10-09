@@ -594,6 +594,13 @@ var properties = map[string]property{
 	// Filter Effects 1 §5. It does not inherit, and "none" filters nothing. See
 	// layout/filter.go for which functions are applied.
 	"filter": {false, "none"},
+	// CSS Transforms 1 §6 and §7. Neither inherits. "none" transforms
+	// nothing, and the origin's initial value is the middle of the border
+	// box ("50% 50% 0"). Layout applies the transforms whose result a display
+	// list of axis-aligned rectangles and turned runs can draw, and reports
+	// the rest at the box: see layout/transform.go.
+	"transform":        {false, "none"},
+	"transform-origin": {false, "50% 50% 0"},
 	// css-will-change 1 §3. It does not inherit. Layout reads it for what it
 	// does to a page: naming a property some value of which would make the box
 	// a stacking context or a containing block makes it one — "will-change:

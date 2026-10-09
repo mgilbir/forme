@@ -382,10 +382,14 @@ func TestAWillChangeIsNotReported(t *testing.T) {
 		}
 	}
 	for _, decl := range []string{"transform: rotate(10deg)", "backdrop-filter: blur(2px)", "backdrop-filter: grayscale(1)"} {
+		// A transform is reported by layout, at the box, where it cannot be
+		// drawn; the others where they are declared.
 		built := Build(Input{HTML: `<div id="d">x</div>`, CSS: []Stylesheet{{Source: `#d { ` + decl + ` }`}}})
+		rec := NewRecorder(nil)
+		PaintReporting(Layout(built.Root, Size{W: rpx(600), H: rpx(1000)}, nil, rec), rec)
 		name, _, _ := strings.Cut(decl, ":")
 		reported := false
-		for _, f := range built.Findings {
+		for _, f := range append(built.Findings, rec.Findings()...) {
 			reported = reported || (f.Property == name && f.Unsupported())
 		}
 		if !reported {

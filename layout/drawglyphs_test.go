@@ -180,8 +180,8 @@ func TestTheComparisonSeesEveryGlyph(t *testing.T) {
 // has to be in the face's record of use — Used, which /CIDSet is written from,
 // and so in SubsetGlyphs, which is the program embedded. Formulas whose signs
 // and operators are size variants and assemblies, drawn plainly, through a
-// filter and under a rounded corner, which put them inside a FilterGroup and
-// a ClipPath.
+// filter, under a rounded corner and turned by thirty degrees, which put them
+// inside a FilterGroup, a ClipPath and a TransformGroup.
 func TestEveryGlyphTheListDrawsIsInItsFacesRecord(t *testing.T) {
 	formulas := []string{
 		`<msqrt><mspace width="1em" height="1.5em"></mspace></msqrt>`,
@@ -195,18 +195,22 @@ func TestEveryGlyphTheListDrawsIsInItsFacesRecord(t *testing.T) {
 	// walk into it is not being checked. A blur's group holds the only copy of
 	// what it blurs; a shadow's holds a second copy of glyphs drawn outside it
 	// too, so only the blur shows a group's glyphs being missed.
-	wraps := []struct{ how, wrap, inside string }{
-		{"plainly", `%s`, ""},
-		{"through a filter", `<div style="filter: blur(1px)">%s</div>`, "FilterGroup"},
-		{"with a shadow", `<div style="filter: drop-shadow(2px 2px 1px red)">%s</div>`, "FilterGroup"},
-		{"under a round clip", `<div style="border-radius: 50%%; overflow: hidden; width: 20px; height: 20px">%s</div>`, "ClipPath"},
-		{"at half its opacity", `<div style="opacity: 0.5">%s</div>`, ""},
+	wraps := []struct {
+		how, wrap, inside string
+		opts              Options
+	}{
+		{"plainly", `%s`, "", Options{}},
+		{"through a filter", `<div style="filter: blur(1px)">%s</div>`, "FilterGroup", Options{}},
+		{"with a shadow", `<div style="filter: drop-shadow(2px 2px 1px red)">%s</div>`, "FilterGroup", Options{}},
+		{"under a round clip", `<div style="border-radius: 50%%; overflow: hidden; width: 20px; height: 20px">%s</div>`, "ClipPath", Options{}},
+		{"at half its opacity", `<div style="opacity: 0.5">%s</div>`, "", Options{}},
+		{"turned", `<div style="transform: rotate(30deg)">%s</div>`, "TransformGroup", Options{TransformGroups: true}},
 	}
 	for _, w := range wraps {
 		how, wrap := w.how, w.wrap
 		for _, formula := range formulas {
 			doc := fmt.Sprintf(wrap, `<math display="block">`+formula+`</math>`)
-			_, ops, _ := mathComposed(t, mathStretchFace(t, nil), doc)
+			_, ops, _ := mathComposedWith(t, mathStretchFace(t, nil), doc, w.opts)
 			drawn := map[*shape.Face][]int{}
 			byIndex, nested := 0, 0
 			var walk func([]Op, string)
@@ -230,6 +234,8 @@ func TestEveryGlyphTheListDrawsIsInItsFacesRecord(t *testing.T) {
 						walk(o.Ops, "FilterGroup")
 					case ClipPath:
 						walk(o.Ops, "ClipPath")
+					case TransformGroup:
+						walk(o.Ops, "TransformGroup")
 					}
 				}
 			}

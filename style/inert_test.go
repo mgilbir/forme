@@ -112,16 +112,10 @@ func TestADeclarationAtItsInitialValueIsNotReported(t *testing.T) {
 		// demanding one. layout/textdecoration_test.go holds that fact too.
 		"text-underline-position: auto",
 		"text-underline-position: from-font",
-		// The one property whose every value is inert, in four spellings of two
-		// different points. It names where a transform turns about, and nothing
-		// is transformed.
-		"transform-origin: 50% 50%",
-		"transform-origin: center",
-		"transform-origin: top left",
-		"transform-origin: 0 0",
-		// And the second, for the same reason: a box faces away from the viewer
-		// only when a transform turns it round, and nothing is transformed.
-		// "hidden" was reported, on documents with no transform anywhere.
+		// The one property whose every value is inert: a box faces away from
+		// the viewer only when a 3D transform turns it round, and no transform
+		// this engine applies does. "hidden" was reported, on documents with no
+		// transform anywhere.
 		"backface-visibility: hidden",
 		"backface-visibility: visible",
 		"backface-visibility: HIDDEN",
@@ -447,22 +441,30 @@ func TestAPropertyInBothTablesStillReportsItsOtherValues(t *testing.T) {
 	}
 }
 
-// TestNothingIsTransformed is to transform-origin and backface-visibility what
-// TestNothingIsFragmented is to the break properties, and it guards a stronger
-// claim: those entries say *every* value of either is inert, which is only true
-// while there is no transformation for an origin to belong to or for a box to
-// be turned away from the viewer by.
+// TestNothingIsTurnedAway is to backface-visibility what TestNothingIsFragmented
+// is to the break properties, and it guards a stronger claim: the entry says
+// *every* value is inert, which is only true while no box can be turned to face
+// away from the viewer. transform is registered and read now, and its 3D
+// functions and its mirrors are refused at the box (layout's
+// TestWhatTheDisplayListCannotDrawIsRefused holds that half); what would let
+// a box leave the plane of the page without one is a perspective or a
+// preserved 3D context, and neither is registered.
 //
-// The day any of these is registered and read, an origin decides where a box
-// ends up, "hidden" decides whether a turned box is drawn, and both entries
-// have to come out with the same change.
-func TestNothingIsTransformed(t *testing.T) {
-	for _, name := range []string{"transform", "rotate", "scale", "translate", "perspective"} {
+// The day either is, a box can face away, "hidden" decides whether it is
+// drawn, and the entry has to come out with the same change.
+func TestNothingIsTurnedAway(t *testing.T) {
+	for _, name := range []string{"perspective", "transform-style"} {
 		if _, ok := properties[name]; ok {
 			t.Errorf("%q is in the registry now, so something reads it; the "+
-				"transform-origin and backface-visibility entries claim every "+
-				"value is inert because nothing is transformed", name)
+				"backface-visibility entry claims every value is inert because "+
+				"no box is ever turned away from the viewer", name)
 		}
+	}
+	if _, ok := properties["transform-origin"]; !ok {
+		t.Error("transform-origin is not registered; it was inert only while nothing was transformed")
+	}
+	if _, ok := inertValues["transform-origin"]; ok {
+		t.Error("transform-origin is still in the inert table; an origin decides where a turned box lands")
 	}
 }
 

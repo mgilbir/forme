@@ -230,6 +230,10 @@ func writeRenderKey(b *strings.Builder, ops []Op) {
 			fmt.Fprintf(b, "clip to %s {\n", v.Path)
 			writeRenderKey(b, v.Ops)
 			b.WriteString("}\n")
+		case TransformGroup:
+			fmt.Fprintf(b, "transform %v clip=%v {\n", v.Matrix, v.Clip)
+			writeRenderKey(b, v.Ops)
+			b.WriteString("}\n")
 		default:
 			fmt.Fprintf(b, "op %T\n", op)
 		}

@@ -59,6 +59,8 @@ func Example() {
 			fills++
 		case layout.FilterGroup: // op.Filters, op.Ops — what op.Ops draw, filtered as one: blurred, faded, recoloured, shadowed
 			fills++
+		case layout.TransformGroup: // op.Matrix, op.Ops — what op.Ops draw, through the matrix; only with Options.TransformGroups
+			fills++
 		case layout.Link: // op.Rects, op.Href — a hyperlink's areas; draws nothing
 			links++
 		}
