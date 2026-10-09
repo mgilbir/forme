@@ -846,3 +846,54 @@ func TestAClassOrCoverageIsSearchedAsHarfBuzzSearchesIt(t *testing.T) {
 		}
 	}
 }
+
+// sharedStringLtag is an ltag table of n tags, every one pointing at one
+// string of strLen bytes, the first of them a language and the rest letters.
+func sharedStringLtag(n, strLen int) []byte {
+	b := u16(nil, 0, 1, 0, 0, n>>16, n&0xFFFF)
+	str := 12 + 4*n
+	for i := 0; i < n; i++ {
+		b = u16(b, str, strLen)
+	}
+	s := []byte("en-")
+	for len(s) < strLen {
+		s = append(s, 'x')
+	}
+	return append(b, s...)
+}
+
+// TestLtagTagsSharingAStringAreReadWithinTheTablesSize loads a face whose ltag
+// table has n tags on one string of 16n bytes, at 4n against n. Each tag was
+// copied whole before hbLanguage kept its first 63 bytes, so the copies grew
+// as n×16n, sixteen times for four; cut first, they grow as n. Counted by the
+// bytes allocated, which every copy is.
+func TestLtagTagsSharingAStringAreReadWithinTheTablesSize(t *testing.T) {
+	load := func(n int) func() {
+		data := fonttest.SFNT(fonttest.SFNTOptions{Name: "Cost", Glyphs: costGlyphs,
+			Extra: map[string][]byte{"ltag": sharedStringLtag(n, 16*n)}})
+		return func() {
+			if _, err := Load(data); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	const what = "loading a face whose n ltag tags share one string of 16n bytes, at 4n against n"
+	if r := costtest.Allocated(t, what, load(1000), load(4000)); r > 8 {
+		t.Errorf("%s: a factor of %.1f where 8 is the most the input allows", what, r)
+	}
+}
+
+// TestALongLtagTagReadsAsItsFirst63Bytes pins that cutting a tag before it is
+// read changes nothing hbLanguage answers: a tag is its first 63 bytes, a tag
+// whose first byte is NUL is no language, and an empty one is none either.
+func TestALongLtagTagReadsAsItsFirst63Bytes(t *testing.T) {
+	long := sharedStringLtag(1, 200)
+	got := readLtag(long)
+	if want := hbLanguage(string(long[16:])); len(got) != 1 || got[0] != want || len(want.tag) != 63 {
+		t.Errorf("a 200-byte tag reads as %+v, want %+v of 63 bytes", got, want)
+	}
+	nul := append(u16(nil, 0, 1, 0, 0, 0, 2, 20, 0, 20, 3), 0, 'e', 'n')
+	if got := readLtag(nul); len(got) != 2 || got[0].valid || got[1].valid {
+		t.Errorf("an empty tag and one starting with NUL read as %+v, want no language", got)
+	}
+}
