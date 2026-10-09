@@ -89,6 +89,7 @@ func nameStrings(name []byte) map[int][]string {
 	storage := font.Be16(name, 4)
 	out := map[int][]string{}
 	seen := map[int]map[string]bool{}
+	left := nameReadAllowance(name)
 	for i := 0; i < count; i++ {
 		rec := 6 + 12*i
 		if rec+12 > len(name) {
@@ -100,6 +101,10 @@ func nameStrings(name []byte) map[int][]string {
 		if off+length > len(name) {
 			continue
 		}
+		if length > left {
+			break
+		}
+		left -= length
 		raw := name[off : off+length]
 		var s string
 		switch font.Be16(name, rec) {

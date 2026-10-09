@@ -56,7 +56,10 @@ func (f *Face) Subfamily() string { return f.subfamily }
 // misread.
 //
 // The first record of the best rank wins, so the answer does not depend on how
-// many others there are, and a name table is walked once.
+// many others there are, and a name table is walked once. A record is ranked
+// before it is decoded, and one that cannot win is not decoded at all; those
+// that are decoded are charged against nameReadAllowance, since a record whose
+// string reads as nothing leaves the rank open and every record can be one.
 func readName(name []byte, id int) string {
 	if len(name) < 6 {
 		return ""
@@ -64,6 +67,7 @@ func readName(name []byte, id int) string {
 	count := font.Be16(name, 2)
 	storage := font.Be16(name, 4)
 	best, bestRank := "", 6
+	left := nameReadAllowance(name)
 	for i := 0; i < count; i++ {
 		rec := 6 + 12*i
 		if rec+12 > len(name) {
@@ -80,7 +84,7 @@ func readName(name []byte, id int) string {
 		}
 		english := language&0x3ff == 0x09 // Windows language IDs; the primary language is the low ten bits
 		rank := 0
-		var text string
+		decode := decodeUTF16
 		switch {
 		case platform == 3 && (encoding == 1 || encoding == 10):
 			if english {
@@ -88,21 +92,27 @@ func readName(name []byte, id int) string {
 			} else {
 				rank = 4
 			}
-			text = decodeUTF16(name[off : off+length])
 		case platform == 1 && encoding == 0:
 			if language == 0 { // Macintosh language 0 is English
 				rank = 2
 			} else {
 				rank = 5
 			}
-			text = decodeASCII(name[off : off+length])
+			decode = decodeASCII
 		case platform == 0:
 			rank = 3
-			text = decodeUTF16(name[off : off+length])
 		default:
 			continue
 		}
-		if text == "" || rank >= bestRank {
+		if rank >= bestRank {
+			continue
+		}
+		if length > left {
+			break
+		}
+		left -= length
+		text := decode(name[off : off+length])
+		if text == "" {
 			continue
 		}
 		best, bestRank = text, rank
