@@ -472,7 +472,9 @@ func (s *ebdtStrikes) imageIn(gid int, st strike) (Image, bool) {
 // top left corner at (x, y), or the images of a composite's components at
 // their offsets from there, each sample combined with what is there by a
 // bitwise or. It is false where the image is refused: its bytes are too few,
-// it does not fit, a component cannot be read, or the work runs out.
+// it does not fit, a component cannot be read, or the work runs out. A nil
+// dst writes nothing and refuses what drawing would: whether there is an
+// image, for GlyphColour, without its samples.
 func (s *ebdtStrikes) draw(st strike, img strikeImage, dst []byte, w, h, x, y, depth int, work *font.Budget) bool {
 	m, rest, ok := img.metrics()
 	if !ok {
@@ -520,6 +522,9 @@ func (s *ebdtStrikes) draw(st strike, img strikeImage, dst []byte, w, h, x, y, d
 	}
 	if len(rest) < need {
 		return false
+	}
+	if dst == nil {
+		return true
 	}
 	mask := byte(1<<bits - 1)
 	at := 0 // in bits

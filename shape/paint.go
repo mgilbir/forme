@@ -354,12 +354,32 @@ func (f *Face) GlyphColourFor(gid int, opts PaintOptions) GlyphColour {
 	if _, ok := f.bitmapImage(gid, ppem); ok {
 		return ColourBitmap
 	}
-	if f.paintsStrikes(opts) {
-		if _, ok := f.strikes.image(gid, ppem); ok {
-			return ColourMask
-		}
+	if f.paintsStrikes(opts) && f.strikes.hasImage(gid, ppem) {
+		return ColourMask
 	}
 	return ColourNone
+}
+
+// hasImage reports whether the strike for a size has an image of a glyph that
+// PaintGlyph paints: strikes.image's answer, found as it finds it, its bitmap
+// checked and not drawn. Asking it of every glyph before painting it cost as
+// much again as painting, a sample allocated and written for each pixel only
+// to be dropped.
+func (s *ebdtStrikes) hasImage(gid, ppem int) bool {
+	st, ok := s.strikeFor(ppem)
+	if !ok {
+		return false
+	}
+	work := font.NewBudget(strikeWork)
+	img, ok := s.locate(st, gid, work)
+	if !ok {
+		return false
+	}
+	m, _, ok := img.metrics()
+	if !ok || m.width == 0 || m.height == 0 {
+		return false
+	}
+	return s.draw(st, img, nil, m.width, m.height, 0, 0, 0, work)
 }
 
 // paintsStrikes reports whether PaintGlyph asked with opts paints glyphs from
