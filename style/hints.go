@@ -65,9 +65,9 @@ const hintOrder = -1
 // between the user's and the author's. For the cascade that is the bottom of
 // the author origin — below every author declaration, layered or not — and
 // layerRank puts it there, since a normal declaration's rank is its layer's
-// number and the layers are numbered from one. For revert they are part of the author origin, which
-// is what OriginAuthor already says; for revert-layer they are their own layer,
-// which is what a number no @layer is given says.
+// number and the layers are numbered from one. For revert they are part of the
+// author origin, which is what OriginAuthor already says; for revert-layer they
+// are their own layer, which is what a number no @layer is given says.
 //
 // They were carried as unlayered author declarations, and unlayered beats every
 // layer, so "@layer base { img { width: 7px } }" lost to <img width=5>.
