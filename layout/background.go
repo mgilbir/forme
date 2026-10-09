@@ -119,6 +119,11 @@ func (p bgPos) place(area, img style.Unit) style.Unit {
 		at = free.Mul(p.offset.Percent / 100)
 	case style.LengthCalc:
 		at = free.Mul(p.offset.Percent / 100).Add(p.offset.Value)
+	case style.LengthMath:
+		// The percentage is of the same (area - image), which may be
+		// negative — and so "sign(10%)" here may be -1, as CSS Values 4
+		// §10.6 warns.
+		at, _ = p.offset.Resolve(free, true)
 	default:
 		at = p.offset.Value
 	}
@@ -831,6 +836,9 @@ func resolveBgLength(l style.Length, basis style.Unit) (style.Unit, bool) {
 		return basis.Mul(l.Percent / 100), false
 	case style.LengthCalc:
 		return basis.Mul(l.Percent / 100).Add(l.Value), false
+	case style.LengthMath:
+		v, _ := l.Resolve(basis, true)
+		return v, false
 	case style.LengthAbsolute:
 		return l.Value, false
 	}
@@ -1258,8 +1266,8 @@ func (l *layouter) parseSize(b *Box, vals []css.ComponentValue) (bgSizeValue, bo
 
 // negativeLength reports a length CSS forbids here: a background is not sized
 // backwards.
-// A calc() holding both a length and a percentage is deliberately not judged
-// here. Whether it comes out negative depends on the box it is a percentage of,
+// A calc() holding both a length and a percentage, or a math function over a
+// percentage, is deliberately not judged here. Whether it comes out negative depends on the box it is a percentage of,
 // so it is not something the value can be asked on its own — CSS makes that a
 // clamp at used-value time rather than a parse error, and this is the parse.
 func negativeLength(l style.Length) bool {

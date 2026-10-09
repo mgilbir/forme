@@ -96,11 +96,11 @@ func TestAnAnglePercentageKeepsItsParts(t *testing.T) {
 // read, nor an angle added to a length.
 func TestALengthIsNotAnAngle(t *testing.T) {
 	for _, bad := range []string{"calc(10deg)", "calc(10px + 10deg)", "calc(10% + 1turn)"} {
-		if l, _, ok := evalLength(angleValues(t, bad)[0], LengthContext{FontSize: 16}); ok {
+		if l, ok := evalLength(angleValues(t, bad)[0], LengthContext{FontSize: 16}); ok {
 			t.Errorf("%s was read as the length %+v", bad, l)
 		}
 	}
-	if l, _, ok := evalLength(angleValues(t, "calc(10% + 2px * 3)")[0], LengthContext{}); !ok ||
+	if l, ok := evalLength(angleValues(t, "calc(10% + 2px * 3)")[0], LengthContext{}); !ok ||
 		l.Kind != LengthCalc || l.Percent != 10 || l.Value.Px() != 6 {
 		t.Errorf("a length-percentage is %+v %v", l, ok)
 	}

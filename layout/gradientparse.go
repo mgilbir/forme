@@ -417,7 +417,7 @@ func radialExtentOf(word string) radialExtent {
 // anything but auto.
 func isLengthPercentage(l style.Length) bool {
 	switch l.Kind {
-	case style.LengthAbsolute, style.LengthPercent, style.LengthCalc:
+	case style.LengthAbsolute, style.LengthPercent, style.LengthCalc, style.LengthMath:
 		return true
 	}
 	return false
@@ -517,6 +517,13 @@ func resolvePx(l style.Length, line float64) float64 {
 		return line * l.Percent / 100
 	case style.LengthCalc:
 		return line*l.Percent/100 + l.Value.Px()
+	case style.LengthMath:
+		// A math function over a percentage is run against the line, which
+		// takes it through a Unit: a sixty-fourth of a pixel is below what a
+		// gradient's stop can show.
+		basis, _ := style.FromPx(line)
+		v, _ := l.Resolve(basis, true)
+		return v.Px()
 	}
 	return l.Value.Px()
 }

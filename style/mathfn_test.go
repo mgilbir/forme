@@ -338,22 +338,61 @@ func TestMathFunctionsTypeCheck(t *testing.T) {
 	}
 }
 
-// TestAPercentageUnderMinNeedsTheBasis is the half of a math function that
-// cannot be settled where it is read: "min(50%, 300px)" depends on what the
-// percentage is of. A linear use of a percentage is still carried as
-// LengthCalc, however deeply the functions beside it nest.
-func TestAPercentageUnderMinNeedsTheBasis(t *testing.T) {
-	for _, in := range []string{
-		"min(10px, 50%)", "clamp(10px, 5% + 2em, 50%)", "calc(1px * sign(10%))",
-		"abs(50% - 100px)", "round(50%, 7px)", "calc(min(10%, 10px) + 1px)",
-		"min(10%, 20%)",
+// TestAPercentageUnderMinIsResolvedAgainstTheBasis is the half of a math
+// function that cannot be settled where it is read: "min(50%, 300px)" depends
+// on what the percentage is of. It is carried as LengthMath and run by
+// Resolve; a linear use of a percentage is still LengthCalc, however deeply
+// the functions beside it nest.
+func TestAPercentageUnderMinIsResolvedAgainstTheBasis(t *testing.T) {
+	for _, tc := range []struct {
+		in          string
+		basis, want float64 // in px
+	}{
+		{"min(50%, 300px)", 400, 200},
+		{"min(50%, 300px)", 1000, 300},
+		{"max(50%, 300px)", 400, 300},
+		{"clamp(10px, 5% + 2em, 50%)", 200, 50}, // 10 + 40, under 100
+		{"clamp(10px, 5% + 2em, 50%)", 60, 30},  // 3 + 40, over 30
+		{"clamp(100px, 50%, 10%)", 400, 100},    // MIN wins over MAX
+		{"calc(1px * sign(10%))", 400, 1},
+		{"calc(1px * sign(10%))", -400, -1}, // a negative basis, as §10.6 warns
+		{"abs(50% - 100px)", 100, 50},
+		{"round(50%, 7px)", 100, 49},
+		{"round(up, 50%, 7px)", 100, 56},
+		{"calc(min(10%, 10px) + 1px)", 50, 6},
+		{"calc(100% - min(10%, 10px))", 200, 190},
+		{"min(10%, 20%)", 100, 10},
+		{"min(10%, 20%)", -100, -20},
+		{"mod(100%, 30px)", 100, 10},
+		{"hypot(30%, 40px)", 100, 50},
+		{"calc(10px * sign(50% - 12px))", 20, -10},
+		{"min(50% * infinity, 1px)", 100, 1},
+		{"max(nan * 1%, 1px)", 100, 0},                   // NaN infects, then is censored
+		{"calc(min(50%, 300px) / 0)", 400, MaxUnit.Px()}, // an infinity, clamped
 	} {
-		vals, _ := css.ParseComponentValues(in)
-		l, unsupported, ok := ParseLength(vals, calcCtx)
-		if ok || !unsupported {
-			t.Errorf("%s was read as %+v, ok=%v unsupported=%v; it needs the "+
-				"containing block", in, l, ok, unsupported)
+		l := mustLength(t, tc.in, calcCtx)
+		if l.Kind != LengthMath || !l.HasPercent() || l.Value != 0 || l.Percent != 0 {
+			t.Errorf("%s is %+v, want a LengthMath with nothing else in it", tc.in, l)
+			continue
 		}
+		got, ok := l.Resolve(calcPx(tc.basis), true)
+		if !ok || math.Abs(got.Px()-tc.want) > 0.02 {
+			t.Errorf("%s of %gpx is %gpx (ok=%v), want %g", tc.in, tc.basis, got.Px(), ok,
+				tc.want)
+		}
+		// Of an indefinite basis it is as indefinite as a bare percentage.
+		if _, ok := l.Resolve(calcPx(tc.basis), false); ok {
+			t.Errorf("%s resolved against an indefinite basis", tc.in)
+		}
+	}
+	// Two lengths written alike are equal, which a map of them relies on, and
+	// two written differently are not.
+	a, b := mustLength(t, "min(50%, 2em)", calcCtx), mustLength(t, "min(50%,  40px)", calcCtx)
+	if a != b {
+		t.Errorf("min(50%%, 2em) and min(50%%, 40px) at a 20px em are %+v and %+v", a, b)
+	}
+	if c := mustLength(t, "min(50%, 41px)", calcCtx); a == c {
+		t.Error("min(50%, 40px) and min(50%, 41px) compare equal")
 	}
 	got := mustLength(t, "calc(min(10px, 2em) + 50% - max(1px, 2px))", calcCtx)
 	if got.Kind != LengthCalc || got.Percent != 50 || got.Value.Px() != 8 {

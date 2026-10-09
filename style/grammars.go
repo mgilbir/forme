@@ -85,10 +85,7 @@ func init() {
 
 	// css-fonts-4.
 	g["font-family"] = commaList(familyName)
-	// A percentage in a font-size is of the parent's size, which is known
-	// when the size is computed: see ResolveFontSizeIn.
-	fontSize := numeric{length: true, percent: true, resolvesPercent: true}.nonNeg()
-	g["font-size"] = single(either(fontSizeKeyword, num(fontSize)))
+	g["font-size"] = single(either(fontSizeKeyword, lpNonNeg))
 	g["font-style"] = fontStyle
 	g["font-weight"] = single(fontWeight)
 	// normal | <percentage [0,∞]> | the eight width keywords.

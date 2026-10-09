@@ -65,7 +65,7 @@ func TestAValueThisEngineDoesNotEvaluateIsReportedAsSuch(t *testing.T) {
 		{"color", "green", "Canvas", "green", "the system colour Canvas"},
 		{"color", "green", "rgb(calc(255) 0 0)", "green", "rgb()"},
 		{"color", "green", "light-dark(red, blue)", "green", "light-dark()"},
-		{"width", "100px", "min(10px, 50%)", "100px", "min()"},
+		{"line-height", "2", "max(1, 1.5)", "2", "max()"},
 		{"border-top-color", "green", "oklch(0.5 0.1 20)", "green", "oklch()"},
 		// Through the shorthands, whose expanders could not place the part.
 		{"border-top-color", "green", "", "green", "oklch()"},
@@ -267,7 +267,8 @@ func TestSupportsIsAnsweredAboutTheValue(t *testing.T) {
 		{`(position: bogus)`, false},
 		{`(position: sticky)`, true},
 		{`(width: min(1px, 2px))`, true},
-		{`(width: min(1px, 50%))`, false},
+		{`(width: min(1px, 50%))`, true},
+		{`(line-height: max(1, 1.5))`, false},
 		{`(color: oklch(0.5 0.1 20))`, false},
 		{`(word-wrap: break-word)`, true},
 		{`(font: condensed 12px serif)`, true},

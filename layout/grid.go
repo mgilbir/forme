@@ -1455,7 +1455,7 @@ func (l *layouter) baselineParticipation(it *gridItem, rows []gridTrack,
 	percent := false
 	for _, p := range [...]string{"height", "min-height", "max-height"} {
 		if length, ok := l.parseLength(it.box, p); ok &&
-			(length.Kind == style.LengthPercent || length.Kind == style.LengthCalc) {
+			length.HasPercent() {
 			percent = true
 		}
 	}

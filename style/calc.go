@@ -3,6 +3,7 @@ package style
 import (
 	"math"
 	"strings"
+	"unique"
 
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/internal/ascii"
@@ -30,7 +31,8 @@ import (
 //
 // A percentage under min(), max() or another function that is not linear in it
 // cannot be carried that way — "min(50%, 300px)" is not some pixels plus some
-// per cent of anything — and such a length is deferred: see mathfn.go.
+// per cent of anything — and such a length is carried as its expression, which
+// is LengthMath, and run when the containing block is known.
 //
 // # What is refused
 //
@@ -47,45 +49,29 @@ import (
 
 // evalLength reads a math function as a length.
 //
-// deferred says the function is a length this cannot fold, because a
-// percentage in it is under a function that is not linear in it. ok is false
-// for one that is not a length at all: the declaration is invalid and the
-// caller drops it.
-func evalLength(fn css.ComponentValue, ctx LengthContext) (l Length, deferred, ok bool) {
+// ok is false for one that is not a length at all: the declaration is invalid
+// and the caller drops it. One with a percentage under a function that is not
+// linear in it is LengthMath, which is run when the basis is known.
+func evalLength(fn css.ComponentValue, ctx LengthContext) (Length, bool) {
 	p, ok := compileMath(fn, mathScope{ctx: ctx, pctAs: kindLength})
 	if !ok || p.typ.kind != kindLength {
-		return Length{}, false, false
+		return Length{}, false
 	}
 	if p.deferred {
-		return Length{}, true, false
+		return Length{Kind: LengthMath, expr: unique.Make(p.code)}, true
 	}
 	v, ok := evalMath(p.code, mathBasis{})
 	if !ok {
-		return Length{}, false, false
+		return Length{}, false
 	}
 	abs, pct := censoredUnit(v.v), censored(v.pct)
 	if pct == 0 {
-		return Length{Kind: LengthAbsolute, Value: abs}, false, true
+		return Length{Kind: LengthAbsolute, Value: abs}, true
 	}
 	if abs == 0 {
-		return Length{Kind: LengthPercent, Percent: pct}, false, true
+		return Length{Kind: LengthPercent, Percent: pct}, true
 	}
-	return Length{Kind: LengthCalc, Value: abs, Percent: pct}, false, true
-}
-
-// resolveMathLength reads a math function as a length whose percentages are of
-// basis, which is known: the font-size case, whose percentages are of the
-// parent's size.
-func resolveMathLength(fn css.ComponentValue, ctx LengthContext, basis Unit) (Unit, bool) {
-	p, ok := compileMath(fn, mathScope{ctx: ctx, pctAs: kindLength})
-	if !ok || p.typ.kind != kindLength {
-		return 0, false
-	}
-	v, ok := evalMath(p.code, mathBasis{of: float64(basis), known: true})
-	if !ok {
-		return 0, false
-	}
-	return censoredUnit(v.v), true
+	return Length{Kind: LengthCalc, Value: abs, Percent: pct}, true
 }
 
 // censored is CSS Values 4 §10.9.2 for a number at the top of a calculation:

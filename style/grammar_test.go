@@ -116,6 +116,9 @@ func TestTheValueGrammarAgreesWithTheSpecifications(t *testing.T) {
 		{"width", "max(10px, 1em, 2rem)"}, {"margin-top", "round(up, 11px, 5px)"},
 		{"width", "calc(10px * sign(-3em))"}, {"font-size", "min(150%, 20px)"},
 		{"font-size", "clamp(10px, 120%, 30px)"}, {"width", "calc(1px / 0)"},
+		{"width", "min(10px, 50%)"}, {"width", "clamp(1px, 50%, 3px)"},
+		{"width", "calc(min(1px, 50%) + 1px)"}, {"margin-left", "max(5%, 1em)"},
+		{"background-position", "min(10%, 5px) 0"},
 		{"width", "calc(infinity * 1px)"}, {"width", "calc(100% - min(10px, 2em))"},
 	}
 	for _, tc := range validCases {
@@ -170,8 +173,8 @@ func TestTheValueGrammarAgreesWithTheSpecifications(t *testing.T) {
 		{"color", "color-mix(in srgb, red, blue)", "color-mix()"},
 		{"color", "Canvas", "the system colour Canvas"},
 		{"color", "rgb(calc(255) 0 0)", "rgb()"}, {"color", "light-dark(red, blue)", "light-dark()"},
-		{"width", "min(10px, 50%)", "min()"}, {"width", "clamp(1px, 50%, 3px)", "clamp()"},
-		{"width", "calc(min(1px, 50%) + 1px)", "calc()"}, {"width", "10lh", "the unit lh"},
+		{"line-height", "max(1, 1.5)", "max()"}, {"z-index", "round(2.5)", "round()"},
+		{"font-width", "min(50%, 80%)", "min()"}, {"width", "10lh", "the unit lh"},
 		{"width", "min(1lh, 2px)", "min()"}, {"width", "round(line-width, 1.5px)", "round()"},
 		{"line-height", "max(1, 2)", "max()"},
 		{"line-height", "calc(1.5)", "calc()"}, {"z-index", "calc(2)", "calc()"},

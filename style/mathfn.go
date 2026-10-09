@@ -58,8 +58,9 @@ import (
 // percentage — LengthCalc. "min(50%, 300px)" is not: which argument is smaller
 // depends on what the percentage is of, and that is a containing block nobody
 // has yet. A program with a percentage under anything but "+", "-", "*" and "/"
-// is deferred: it is evaluated where the basis is known, and a reader without
-// one cannot fold it.
+// is deferred: a length holds the program itself, as LengthMath, interned so
+// that the Length stays comparable, and Resolve runs it once the basis is
+// known. A reader of an angle-percentage has no basis to give and refuses one.
 
 // mathType is what a calculation computes to.
 type mathType struct {

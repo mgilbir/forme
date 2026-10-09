@@ -582,6 +582,8 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 			out[i].min = style.Max(out[i].min, length.Value)
 			out[i].max = style.Max(out[i].max, length.Value)
 			out[i].percent = max(out[i].percent, length.Percent)
+		case style.LengthMath:
+			l.reportTableMathWidth(col)
 		}
 	}
 
@@ -696,6 +698,28 @@ func (l *layouter) tableColumnDemands(table *Box, s tableSpacing) []tableColumnD
 	return out
 }
 
+// reportTableMathWidth says a column's or a cell's width was a math function
+// over a percentage, which is laid out as auto.
+//
+// Not because it cannot be evaluated — Resolve runs it — but because there is
+// nothing to run it against. A column's percentage is of the table's width,
+// which is what the column demands are being gathered to decide, and a
+// LengthCalc can be split into a length demand and a percentage demand that
+// travel separately; "min(30%, 200px)" cannot be split into anything. So the
+// width is taken as auto, and said so once per document.
+func (l *layouter) reportTableMathWidth(b *Box) {
+	raw := ascii.TrimCSSSpace(b.Style.Get("width"))
+	l.reportOnce("table-math-width:"+raw, Finding{
+		Rule:   RuleUnsupportedValue,
+		Source: AtHTML(offsetOf(b)),
+		Message: "the width " + quoteValue(raw) + " of a table column or cell is a " +
+			"math function over a percentage of the table's width, which is still " +
+			"being decided, so it was laid out as auto",
+		Path:     PathOf(b.Element),
+		Property: "width",
+	})
+}
+
 // cellDemand is a cell's two widths, measured over its border box, plus any
 // percentage width it declares.
 //
@@ -728,6 +752,8 @@ func (l *layouter) cellDemand(cell *Box) (floor, min, max style.Unit, percent fl
 			inner.min = style.Max(inner.min, length.Value)
 			inner.max = inner.min
 			percent = length.Percent
+		case style.LengthMath:
+			l.reportTableMathWidth(cell)
 		}
 	}
 	// §10.4's two limits, and the same rule the column gets above: they are
@@ -1582,7 +1608,7 @@ func (l *layouter) wrapperWidthForPercentTable(wrapper *Box, room style.Unit) (s
 		return 0, false
 	}
 	length, ok := l.parseLength(table, "width")
-	if !ok || length.Kind != style.LengthPercent {
+	if !ok || !length.HasPercent() {
 		return 0, false
 	}
 	w, ok := length.Resolve(room, true)

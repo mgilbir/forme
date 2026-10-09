@@ -168,10 +168,6 @@ type numeric struct {
 	// the slot takes — a number or an angle as well as a length — so that one
 	// is valid rather than valid CSS this engine does not compute.
 	readsCalc bool
-	// resolvesPercent says the slot's percentages are of something known when
-	// the value is computed — font-size's are of the parent's size — so a
-	// math function with one under min() or the like is evaluated there.
-	resolvesPercent bool
 	// min is the lowest value a literal may have, when hasMin says there is
 	// one. A math function is not held to it: its range is enforced by clamping
 	// at computed-value time, never by making the declaration invalid.
@@ -365,17 +361,13 @@ func (n numeric) takes(t mathType) bool {
 // reads reports whether this slot's reader evaluates a math function it holds.
 //
 // A length's reader is ParseLength, which evaluates any of them that resolves
-// to a length, folding a percentage in it into LengthCalc — but not one under
-// min() or the like, which needs the containing block, unless the slot's
-// percentages are of something known when the value is computed. A slot whose
-// reader says it evaluates a number or an angle as well says so with
+// to a length: a percentage in it is folded into LengthCalc, or, under min()
+// or the like, carried as LengthMath for Resolve to run against the basis. A
+// slot whose reader evaluates a number or an angle as well says so with
 // readsCalc. Anywhere else, a number, an integer, an angle or a bare
 // percentage given by a math function is valid CSS this engine does not
-// compute: opacity's reader, for one, reads a number and nothing else.
+// compute.
 func (n numeric) reads(p mathProgram) bool {
-	if p.deferred && !n.resolvesPercent {
-		return false
-	}
 	return n.readsCalc || n.length && p.typ.kind == kindLength
 }
 

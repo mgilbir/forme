@@ -1,6 +1,8 @@
 package style
 
 import (
+	"unique"
+
 	"github.com/mgilbir/forme/css"
 	"github.com/mgilbir/forme/internal/ascii"
 )
@@ -38,6 +40,18 @@ const (
 	// calc() that comes out as only one of the two is that one: the kind exists
 	// for the mixture and not for the function.
 	LengthCalc
+	// LengthMath is a math function with a percentage under min(), max(),
+	// clamp() or another function that is not linear in it: "min(50%, 300px)"
+	// is not so many units plus so much per cent of anything, so it cannot be
+	// LengthCalc's pair, and it is carried as the expression itself and run
+	// when the basis is known. Resolve is the only thing that can read one;
+	// Value and Percent are zero, and a switch that read either would read a
+	// plausible nothing, which is what this kind exists to make it say.
+	//
+	// With a basis that is not definite it is as indefinite as a bare
+	// percentage: CSS Sizing 3 treats a value with a percentage in it the same
+	// way whatever function the percentage is in.
+	LengthMath
 )
 
 // Length is a parsed length: a number, and what it is a number of.
@@ -50,6 +64,20 @@ type Length struct {
 	// 0-100 scale. Under LengthCalc it is added to Value rather than replacing
 	// it.
 	Percent float64
+	// expr is a LengthMath's program, interned so that two lengths written
+	// alike compare equal and a Length stays comparable and small. See
+	// mathfn.go.
+	expr unique.Handle[string]
+}
+
+// HasPercent reports whether resolving the length needs what its percentage is
+// of: a percentage, a calc() with one, or a math function over one.
+func (l Length) HasPercent() bool {
+	switch l.Kind {
+	case LengthPercent, LengthCalc, LengthMath:
+		return true
+	}
+	return false
 }
 
 // Auto is the keyword.
@@ -81,6 +109,15 @@ func (l Length) Resolve(basis Unit, definite bool) (Unit, bool) {
 			return 0, false
 		}
 		return basis.Mul(l.Percent / 100).Add(l.Value), true
+	case LengthMath:
+		if !definite {
+			return 0, false
+		}
+		v, ok := evalMath(l.expr.Value(), mathBasis{of: float64(basis), known: true})
+		if !ok {
+			return 0, false
+		}
+		return censoredUnit(v.v), true
 	}
 	return 0, false
 }
@@ -160,16 +197,17 @@ func ParseLength(vals []css.ComponentValue, ctx LengthContext) (l Length, unsupp
 			// A calc() is arithmetic over lengths, and everything in it but the
 			// percentages can be settled here — the font-relative units against
 			// the context the caller supplied, the operators against each other.
-			// So can min() and the rest of CSS Values 4's functions, unless a
-			// percentage is under one, which needs the containing block. See
-			// calc.go and mathfn.go.
+			// So can min() and the rest of CSS Values 4's functions, except a
+			// percentage under one, which needs the containing block and is
+			// carried as LengthMath until there is one. See calc.go and
+			// mathfn.go.
 			//
 			// An expression that does not typecheck is not reported as
 			// unsupported: it is invalid CSS, and the declaration holding it is
 			// dropped so that the one before it stands, exactly as a browser
 			// does with any other value it cannot parse.
-			l, deferred, ok := evalLength(v, ctx)
-			return l, deferred, ok
+			l, ok := evalLength(v, ctx)
+			return l, false, ok
 		}
 		return Length{}, false, false
 	}
@@ -418,19 +456,6 @@ func ResolveFontSizeIn(vals []css.ComponentValue, ctx LengthContext) (u Unit, un
 		}
 	}
 
-	// A math function with a percentage under min() or the like cannot be
-	// carried as a length plus a percentage, and here does not need to be: the
-	// percentage is of the parent's size, which is known.
-	if len(parts) == 1 && len(parts[0]) == 1 && isMathFunction(parts[0][0]) {
-		if _, deferred, _ := evalLength(parts[0][0], ctx); deferred {
-			size, ok := resolveMathLength(parts[0][0], ctx, parent)
-			if !ok || size < 0 {
-				return 0, false, false
-			}
-			return size, false, true
-		}
-	}
-
 	// Everything else is an ordinary length, resolved in the context the caller
 	// gave, whose FontSize is the *parent's* size — an em in a font-size is
 	// relative to the size being replaced rather than to the one being computed.
@@ -460,6 +485,10 @@ func ResolveFontSizeIn(vals []css.ComponentValue, ctx LengthContext) (u Unit, un
 		// perfectly ordinary — it is how a stylesheet says "a little larger
 		// than the text around it" — and every browser resolves it.
 		size = size.Add(parent.Mul(l.Percent / 100))
+	case LengthMath:
+		// "min(150%, 30px)": the percentage is under a function, and is of
+		// the parent's size all the same, which is known here.
+		size, _ = l.Resolve(parent, true)
 	default:
 		return 0, unsupported, false
 	}

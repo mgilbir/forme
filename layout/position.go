@@ -737,7 +737,9 @@ func (l *layouter) readsItsContainingBlock(b *Box) bool {
 		"margin-left", "margin-right", "margin-top", "margin-bottom",
 		"padding-left", "padding-right", "padding-top", "padding-bottom",
 	} {
-		if v, ok := l.parseLength(b, p); ok && v.Kind == style.LengthPercent {
+		// Any percentage, the ones inside calc() and min() included: each is a
+		// fraction of the rectangle all the same.
+		if v, ok := l.parseLength(b, p); ok && v.HasPercent() {
 			return true
 		}
 	}
