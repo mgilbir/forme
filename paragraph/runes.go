@@ -85,17 +85,26 @@ func UnsupportedScript(r rune) (string, bool) {
 // the page to fix nothing. Asking the same question twice in two ways is how
 // that happens, so it is asked once.
 //
-// Shaping the whole run first is what keeps it cheap: the answer is almost
+// Asking about the whole run first is what keeps it cheap: the answer is almost
 // always no, and only then is it worth walking the characters.
+//
+// It asks shape.Face.MissingGlyphs and not ShapeGlyphs. The count is the same
+// — it is decided before any of the font's rules run — and shaping the text to
+// read it was most of the cost of laying a document out: half the time for a
+// page of Latin in Noto Sans, and nearly nine tenths for a page of Devanagari,
+// where every box was shaped in full twice more than it was set — once to
+// choose its face and once for the guardrail. Shaping also records every glyph
+// it makes as used, so a face that was only being asked kept glyphs in its
+// embedded subset that nothing drew.
 func MissesVisible(face *shape.Face, text string) bool {
-	if _, missing := face.ShapeGlyphs(text); missing == 0 {
+	if face.MissingGlyphs(text) == 0 {
 		return false
 	}
 	for _, r := range text {
 		if r == '\n' || r == '\t' || SubstitutesExactly(r) {
 			continue
 		}
-		if _, missing := face.ShapeGlyphs(string(r)); missing > 0 {
+		if face.MissingGlyphs(string(r)) > 0 {
 			return true
 		}
 	}
