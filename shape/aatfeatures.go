@@ -326,6 +326,9 @@ type aatLanguage struct {
 	valid bool
 }
 
+// hbLanguageMax is how many bytes of a tag hbLanguage keeps.
+const hbLanguageMax = 63
+
 // hbLanguage is hb_language_from_string: no language for an empty tag; else
 // the first 63 bytes, each letter lowered and an underscore made a hyphen, cut
 // at the first byte that is none of letter, digit, hyphen or underscore.
@@ -333,8 +336,8 @@ func hbLanguage(s string) aatLanguage {
 	if s == "" || s[0] == 0 {
 		return aatLanguage{}
 	}
-	if len(s) > 63 {
-		s = s[:63]
+	if len(s) > hbLanguageMax {
+		s = s[:hbLanguageMax]
 	}
 	b := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
@@ -379,6 +382,12 @@ func ltagAt(ltag []aatLanguage, i int) aatLanguage {
 // readLtag reads an ltag table's language tags, and none for a table
 // HarfBuzz's sanitizer refuses: a version before 1, or a tag whose bytes are
 // not inside the table.
+//
+// A tag finds its bytes by an offset, and every tag may point at one string of
+// up to 65,535 bytes. Each is cut to what hbLanguage keeps before it is copied:
+// copied whole, n tags on one string cost n times its length, quadratic in the
+// table, and a 76 KB font made Load allocate 250 MB. hbLanguage reads only the
+// first byte and the first hbLanguageMax, so the cut tag reads as the whole.
 func readLtag(b []byte) []aatLanguage {
 	if len(b) < 12 || font.Be32(b, 0) < 1 {
 		return nil
@@ -393,7 +402,7 @@ func readLtag(b []byte) []aatLanguage {
 		if off > len(b) || length > len(b)-off {
 			return nil
 		}
-		out[i] = hbLanguage(string(b[off : off+length]))
+		out[i] = hbLanguage(string(b[off : off+min(length, hbLanguageMax)]))
 	}
 	return out
 }

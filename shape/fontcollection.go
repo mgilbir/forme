@@ -62,7 +62,11 @@ func (f *Face) sfntTables() map[string][]byte {
 }
 
 // programSize is how large a face's font is, for the budgets sized by it: its
-// program's length, or a face of a collection's tables'.
+// program's length, or a face of a collection's tables'. Those are at most
+// twice the collection's length, however its tables overlap, since
+// font.SFNTTables refuses a directory whose tables are more: summed as they
+// were stated, n tables on one range sized the outline allowance
+// (newOutlineCache) by n times the range.
 func programSize(data []byte, tables map[string][]byte) int {
 	if data != nil {
 		return len(data)
@@ -166,6 +170,8 @@ type CollectionFace struct {
 // any: from its name, OS/2 and head tables alone. A single font is described
 // as a collection of one. A face whose table directory cannot be read is
 // described with its index only; LoadCollection says what is wrong with it.
+// So is a face past what describeAllowance lets the collection's description
+// read, which no collection that is not built to cost reaches.
 func CollectionFaces(data []byte) ([]CollectionFace, error) {
 	data, err := unwrapWOFF(data)
 	if err != nil {
@@ -177,29 +183,114 @@ func CollectionFaces(data []byte) ([]CollectionFace, error) {
 		if tables == nil {
 			return nil, errors.New("fonts: neither a font collection nor an sfnt font program")
 		}
-		return []CollectionFace{describeTables(0, tables)}, nil
+		return []CollectionFace{describeTables(0, tables, readFaceNames(tables["name"]))}, nil
 	}
+	// A face's directory and its name table are found by offsets, and nothing
+	// stops every face from naming one directory, or every directory one name
+	// table: each face read them afresh, so n faces on one directory of D
+	// tables cost n×D, and on one name table n reads of it, quadratic in the
+	// file. A directory is read once however many faces name it, and a name
+	// table once however many directories do, and each face is described as
+	// it was when it read them itself. What is left — directories and name
+	// tables at distinct places, which may overlap — is charged against
+	// describeAllowance, and a face past it is described by its index.
 	faces := make([]CollectionFace, len(offsets))
-	for i := range offsets {
-		faces[i] = describeTables(i, font.CollectionTables(data, i))
+	described := map[int]CollectionFace{}
+	names := map[nameTable]faceNames{}
+	left := describeAllowance(data)
+	for i, at := range offsets {
+		if d, ok := described[at]; ok {
+			d.Index = i
+			faces[i] = d
+			continue
+		}
+		dir := directorySize(data, at)
+		if dir > left {
+			faces[i] = CollectionFace{Index: i}
+			continue
+		}
+		left -= dir
+		tables := font.CollectionTables(data, i)
+		if tables == nil {
+			faces[i] = CollectionFace{Index: i}
+			described[at] = faces[i]
+			continue
+		}
+		name := tables["name"]
+		key := nameTable{len: len(name)}
+		if len(name) > 0 {
+			key.at = &name[0]
+		}
+		n, ok := names[key]
+		if !ok {
+			if len(name) > left {
+				faces[i] = CollectionFace{Index: i}
+				continue
+			}
+			left -= len(name)
+			n = readFaceNames(name)
+			names[key] = n
+		}
+		faces[i] = describeTables(i, tables, n)
+		described[at] = faces[i]
 	}
 	return faces, nil
 }
 
-// describeTables reads what CollectionFaces says of a face from its tables,
-// with the readers Load reads them with.
-func describeTables(index int, tables map[string][]byte) CollectionFace {
-	if tables == nil {
-		return CollectionFace{Index: index}
+// describeAllowance is how many bytes of directories and name tables
+// CollectionFaces may read from a collection, each one once.
+//
+// An honest collection's directories and name tables are distinct bytes of it,
+// so between them they are less than the file; across the 153 collection
+// files measured (619 faces: macOS's and Windows's, Noto Sans CJK, WenQuanYi,
+// HarfBuzz's and this tree's own) they were at most 0.62 of it, in HarfBuzz's
+// TTC.ttc, whose two faces share their name table. Twice the file leaves a
+// collection whose tables are not where they should be room to be described.
+func describeAllowance(data []byte) int { return 2 * len(data) }
+
+// directorySize is the bytes of the table directory at at that reading it
+// reads: its header and its records, or nothing much for one font.SFNTTables
+// refuses before reading its records because they run past the end.
+func directorySize(data []byte, at int) int {
+	if at < 0 || at > len(data)-12 {
+		return 0
 	}
+	if size := 12 + 16*font.Be16(data, at+4); size <= len(data)-at {
+		return size
+	}
+	return 0
+}
+
+// nameTable is a name table by where it is, so that faces sharing one read it
+// once: the address of its first byte, and its length.
+type nameTable struct {
+	at  *byte
+	len int
+}
+
+// faceNames is what CollectionFaces reads from a name table.
+type faceNames struct{ name, family, subfamily string }
+
+func readFaceNames(name []byte) faceNames {
+	return faceNames{
+		name:      faceName(name),
+		family:    nameWithFallback(name, 16, 1),
+		subfamily: nameWithFallback(name, 17, 2),
+	}
+}
+
+// describeTables reads what CollectionFaces says of a face from its tables,
+// with the readers Load reads them with, and its names, read from its name
+// table.
+func describeTables(index int, tables map[string][]byte, names faceNames) CollectionFace {
 	f := &Face{}
 	f.readOS2(tables["OS/2"])
 	f.readStyle(tables["OS/2"], tables["head"])
 	return CollectionFace{
 		Index:      index,
-		Name:       faceName(tables["name"]),
-		Family:     nameWithFallback(tables["name"], 16, 1),
-		Subfamily:  nameWithFallback(tables["name"], 17, 2),
+		Name:       names.name,
+		Family:     names.family,
+		Subfamily:  names.subfamily,
 		Weight:     f.weight,
 		WidthClass: f.widthClass,
 		Italic:     f.styleItalic,

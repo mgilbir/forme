@@ -128,3 +128,68 @@ func TestEveryTableLiesInsideTheFileAtEveryLength(t *testing.T) {
 		t.Fatalf("%d tables were checked; the cuts are not reaching the directory", checked)
 	}
 }
+
+// Tables may name the same bytes, but not more than twice the file's.
+
+// overlappingSFNT is a directory of tables of the lengths given, every one at
+// the first byte after the directory, in a file of size bytes.
+func overlappingSFNT(size int, lengths ...int) []byte {
+	data := make([]byte, size)
+	binary.BigEndian.PutUint32(data, 0x00010000)
+	binary.BigEndian.PutUint16(data[4:], uint16(len(lengths)))
+	body := 12 + 16*len(lengths)
+	for i, n := range lengths {
+		rec := 12 + 16*i
+		copy(data[rec:], []byte{'T', byte('A' + i/26), byte('A' + i%26), ' '})
+		binary.BigEndian.PutUint32(data[rec+8:], uint32(body))
+		binary.BigEndian.PutUint32(data[rec+12:], uint32(n))
+	}
+	return data
+}
+
+// TestTablesOverlappingPastTwiceTheFileAreRefused requires that tables naming
+// the same bytes are read as long as they are no more than twice the file's
+// bytes between them, at the boundary exactly, and that a directory one byte
+// past it is refused, as a single font and as a face of a collection.
+func TestTablesOverlappingPastTwiceTheFileAreRefused(t *testing.T) {
+	const size = 1000
+	body := 12 + 16*3
+	// Two tables on one range of 100 bytes: read, both of them, as the bytes.
+	data := overlappingSFNT(size, 100, 100)
+	tables := SFNTTables(data)
+	if len(tables) != 2 || &tables["TAA "][0] != &data[12+16*2] || &tables["TAB "][0] != &data[12+16*2] {
+		t.Fatalf("two tables on one range read as %d tables", len(tables))
+	}
+	// Between them exactly twice the file's size, and one byte more: the
+	// whole of what follows the directory twice, and the directory's size
+	// twice again.
+	rest := size - body
+	if got := SFNTTables(overlappingSFNT(size, rest, rest, 2*body)); len(got) != 3 {
+		t.Errorf("tables of %d bytes between them in a file of %d read as %d tables", 2*size, size, len(got))
+	}
+	if got := SFNTTables(overlappingSFNT(size, rest, rest, 2*body+1)); got != nil {
+		t.Errorf("tables of %d bytes between them in a file of %d were read", 2*size+1, size)
+	}
+	// Many tables on one range, as a single font and as a collection.
+	lengths := make([]int, 40)
+	for i := range lengths {
+		lengths[i] = 200
+	}
+	many := overlappingSFNT(size, lengths...)
+	if got := SFNTTables(many); got != nil {
+		t.Errorf("40 tables of 200 bytes on one range of a %d-byte file read as %d tables", size, len(got))
+	}
+	coll := append([]byte("ttcf\x00\x01\x00\x00\x00\x00\x00\x01\x00\x00\x00\x10"), many...)
+	for i := range lengths {
+		rec := 16 + 12 + 16*i
+		binary.BigEndian.PutUint32(coll[rec+8:], Be32(coll, rec+8)+16)
+	}
+	if got := CollectionTables(coll, 0); got != nil {
+		t.Errorf("a face of 40 tables on one range read as %d tables", len(got))
+	}
+	// The same face, its tables within the bound, is read.
+	binary.BigEndian.PutUint16(coll[16+4:], 4)
+	if got := CollectionTables(coll, 0); len(got) != 4 {
+		t.Errorf("a face of 4 tables on one range read as %d tables", len(got))
+	}
+}
