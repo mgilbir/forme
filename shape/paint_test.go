@@ -561,8 +561,19 @@ func TestAGlyphPaintedAgainIsPaintedAsItWasFirst(t *testing.T) {
 			seen[v]++
 		}
 	}
+	// A refusal is reached whatever the glyph's bounds: the tree's own faces
+	// refuse only glyphs with a ClipBox, and Noto's (under EMOJI_FONTS) also
+	// ones without, so the refusal is asked for by itself.
+	refused := 0
+	for v, n := range seen {
+		if v.painted && v.refused {
+			refused += n
+		}
+	}
+	if refused == 0 {
+		t.Errorf("no glyph was counted refused, so this test does not reach it (%v)", seen)
+	}
 	for _, v := range []paintVerdict{
-		{painted: true, refused: true},
 		{painted: true},
 		{painted: true, bounds: boundsBounded},
 		{painted: true, bounds: boundsUnbounded},
