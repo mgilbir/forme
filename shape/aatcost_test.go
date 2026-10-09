@@ -3,10 +3,13 @@ package shape
 import (
 	"context"
 	"encoding/binary"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonttest"
 )
 
@@ -169,5 +172,134 @@ func TestACFFGlyphsPointsSayWhatTheyCost(t *testing.T) {
 	}
 	if read == 0 {
 		t.Fatal("no glyph had points, so this measures nothing")
+	}
+}
+
+// aatFonts are the fonts with a morx, mort or kerx in the tree's HarfBuzz
+// fixtures, and in the Google Fonts checkout where it has been fetched.
+func aatFonts(t *testing.T) []string {
+	t.Helper()
+	var files []string
+	for _, dir := range []string{"../testdata/harfbuzz/fonts", "../testdata/harfbuzz/aat/fonts",
+		"../testdata/harfbuzz/aat-inhouse/fonts", "../testdata/googlefonts/"} {
+		filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".ttf") && !strings.HasSuffix(path, ".otf") {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tables := font.SFNTTables(data)
+			if tables["morx"] != nil || tables["mort"] != nil || tables["kerx"] != nil {
+				files = append(files, path)
+			}
+			return nil
+		})
+	}
+	return files
+}
+
+// TestNoRealAATFontsTextIsRefusedForItsSubtables: charging the subtables a
+// morx or kerx tries, and the glyphs each is asked about, leaves a run of
+// every AAT font's characters, as long as a run may be, far inside the
+// default limits: within a sixteenth of them, as TestTheDefaultLimitsAdmitOrdinaryText
+// holds real text.
+func TestNoRealAATFontsTextIsRefusedForItsSubtables(t *testing.T) {
+	const maxInput = 4096 // RunLimits' default MaxInputBytes
+	files := aatFonts(t)
+	shaped, most, mostFont := 0, 0.0, ""
+	for _, path := range files {
+		switch filepath.Base(path) {
+		case "TestMORXTwentyfour.ttf", "TestMORXThirtyfour.ttf", "TestMORXThirtysix.ttf":
+			// HarfBuzz's fixtures of a morx that rewinds or inserts without
+			// end, which the limits stop whatever the subtables cost: their
+			// runs were refused, or cost 4,100 units a byte, before the
+			// subtables were charged.
+			continue
+		}
+		data, _ := os.ReadFile(path)
+		f, err := Load(data)
+		if err != nil || f.morx == nil && f.kerx == nil {
+			continue
+		}
+		var sb strings.Builder
+		for r := rune(0x21); r < 0x10000 && sb.Len() < maxInput-4; r++ {
+			// Not the C1 controls, nor a surrogate.
+			if _, ok := f.GlyphID(r); ok && (r < 0x7F || r > 0x9F) && (r < 0xD800 || r > 0xDFFF) {
+				sb.WriteRune(r)
+			}
+		}
+		if sb.Len() == 0 {
+			continue
+		}
+		text := strings.Repeat(sb.String(), maxInput/sb.Len())
+		result, err := f.ShapeGlyphsContext(context.Background(), RunInput{Text: text, Kerns: true}, RunLimits{})
+		if err != nil {
+			t.Errorf("%s: %d bytes of its characters refused at the default limits: %v", filepath.Base(path), len(text), err)
+			continue
+		}
+		if result.Work > (64<<20)/16 {
+			t.Errorf("%s: %d bytes of its characters cost %d units, more than a sixteenth of the default",
+				filepath.Base(path), len(text), result.Work)
+		}
+		shaped++
+		if perByte := float64(result.Work) / float64(len(text)); perByte > most {
+			most, mostFont = perByte, filepath.Base(path)
+		}
+	}
+	// The tree's own fixtures hold more than this; fewer means the walk
+	// found nothing, and a test that shapes nothing passes whatever it bounds.
+	if shaped < 40 {
+		t.Fatalf("only %d AAT fonts were shaped, which proves little", shaped)
+	}
+	t.Logf("%d AAT fonts shaped; the costliest, %s, %.0f units a byte", shaped, mostFont, most)
+}
+
+// emptyMorx is a morx of one chain of k noncontextual subtables, twelve bytes
+// each, that name no glyph.
+func emptyMorx(k int) []byte {
+	chain := u32(nil, 1, 16+12*k, 0, k)
+	for range k {
+		chain = u32(chain, 12, 0x20000004, 1)
+	}
+	return append(u32(u16(nil, 2, 0), 1), chain...)
+}
+
+// emptyKerx is a kerx of k format 0 subtables, twelve bytes each, that kern
+// no pair.
+func emptyKerx(k int) []byte {
+	b := u32(u16(nil, 2, 0), k)
+	for range k {
+		b = u32(b, 12, 0, 0)
+	}
+	return b
+}
+
+// TestTheSubtablesAMorxOrKerxTriesAreCharged: every subtable tried is charged,
+// and every glyph it is asked whether it can start, as a GSUB subtable tried
+// is. Neither was: a morx or kerx of 80,000 empty subtables, a megabyte,
+// made a run of 4 KB of distinct glyphs ask each of them about every glyph,
+// 1.2 seconds for the morx and 0.6 for the kerx, and was charged 9,558
+// units, what the same run cost with no subtable at all.
+func TestTheSubtablesAMorxOrKerxTriesAreCharged(t *testing.T) {
+	for _, c := range []struct {
+		tag   string
+		table func(int) []byte
+	}{{"morx", emptyMorx}, {"kerx", emptyKerx}} {
+		work := func(k int) int64 {
+			f := costFace(t, map[string][]byte{c.tag: c.table(k)})
+			r, err := f.ShapeGlyphsBounded(context.Background(), RunInput{Text: "abcabc", Kerns: true}, RunLimits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return r.Work
+		}
+		small, large := work(500), work(2000)
+		t.Logf("%s: %d units at 500 subtables, %d at 2,000", c.tag, small, large)
+		if float64(large) < 3*float64(small) {
+			t.Errorf("a %s of 2,000 subtables cost %d units and one of 500 cost %d: the subtables tried are not charged",
+				c.tag, large, small)
+		}
 	}
 }

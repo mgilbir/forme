@@ -487,18 +487,22 @@ func (sh shaper) applyKerx(buf []Glyph, pairs bool) bool {
 	vertical := sh.features.Vertical
 	run := &kerxRun{}
 	crossed := false
+	work := sh.work()
 	for i := range k.subtables {
 		s := &k.subtables[i]
-		if vertical != (s.coverage&kerxVertical != 0) {
-			continue
-		}
-		intersects := false
-		for _, g := range buf {
-			if s.startsAt(g.GID, k.numGlyphs) {
-				intersects = true
-				break
+		// A subtable tried, and each glyph asked whether it can start it,
+		// charged once the asking is done, as morx's are (applyMorx).
+		intersects, looked := false, 0
+		if vertical == (s.coverage&kerxVertical != 0) {
+			for _, g := range buf {
+				looked++
+				if s.startsAt(g.GID, k.numGlyphs) {
+					intersects = true
+					break
+				}
 			}
 		}
+		work.spend(int64(looked) + 1)
 		if !intersects {
 			continue
 		}

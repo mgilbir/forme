@@ -812,17 +812,21 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) 
 		}
 	}
 	reversed := false
+	work := sh.work()
 	for _, chain := range m.chains {
 		flags := chain.flagsFor(settings, lang, sh.f.ltag)
 		for i := range chain.subtables {
 			s := &chain.subtables[i]
-			if s.flags&flags == 0 {
-				continue
+			// A subtable tried, and each glyph asked whether it can start
+			// it, as a GSUB subtable tried is charged: see RunLimits. A
+			// morx of empty subtables is twelve bytes each, and asking all
+			// of them about every glyph was uncharged.
+			apply, looked := false, 0
+			if s.flags&flags != 0 && (s.coverage&morxAllDirections != 0 || vertical == (s.coverage&morxVertical != 0)) {
+				apply, looked = b.intersects(s, m.numGlyphs)
 			}
-			if s.coverage&morxAllDirections == 0 && vertical != (s.coverage&morxVertical != 0) {
-				continue
-			}
-			if !b.intersects(s, m.numGlyphs) {
+			work.spend(int64(looked) + 1)
+			if !apply {
 				continue
 			}
 			backwards := s.coverage&morxBackwards != 0
@@ -854,22 +858,25 @@ func (sh shaper) applyMorx(buf []Glyph, rtl, vertical bool, user []userFeature) 
 
 // intersects is buffer_intersects_machine: whether any glyph of the run, or
 // of every glyph it has held where the run is four or more, can start the
-// subtable.
-func (b *aatBuf) intersects(s *morxSubtable, numGlyphs int) bool {
+// subtable; and how many glyphs it asked.
+func (b *aatBuf) intersects(s *morxSubtable, numGlyphs int) (bool, int) {
+	n := 0
 	if b.seen != nil {
 		for gid := range b.seen {
+			n++
 			if s.startsAt(gid, numGlyphs) {
-				return true
+				return true, n
 			}
 		}
-		return false
+		return false, n
 	}
 	for _, g := range b.info {
+		n++
 		if s.startsAt(g.GID, numGlyphs) {
-			return true
+			return true, n
 		}
 	}
-	return false
+	return false, n
 }
 
 // applyMorxSubtable runs one subtable over the run.
