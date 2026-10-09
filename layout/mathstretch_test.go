@@ -91,9 +91,15 @@ func mathStretchFaceWith(t testing.TB, constants map[string]int,
 // fragments and the display list, and what was reported.
 func mathComposed(t *testing.T, face *shape.Face, doc string) (*Fragment, []Op, []Finding) {
 	t.Helper()
+	return mathComposedWith(t, face, doc, Options{})
+}
+
+// mathComposedWith is mathComposed under options.
+func mathComposedWith(t *testing.T, face *shape.Face, doc string, opts Options) (*Fragment, []Op, []Finding) {
+	t.Helper()
 	set := namedFaceSet{family: "math", face: face, standard: StandardFonts()}
 	out := Compose(Input{HTML: doc, Fonts: set, CSS: []Stylesheet{{Source: `body { margin: 0; font-size: 16px }
-		mi, mn, mo, mtext { font-size: 16px }`}}}, Options{})
+		mi, mn, mo, mtext { font-size: 16px }`}}}, opts)
 	return out.Root, out.Ops, out.Findings
 }
 

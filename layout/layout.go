@@ -288,10 +288,16 @@ func (f *Fragment) MarginRect() Rect { return f.BorderRect.Outset(f.Margin) }
 // document. A caller that does not want the findings is entitled to say so once
 // rather than to be right about which documents raise them.
 func Layout(root *Box, avail Size, set FontSet, rec *Recorder) *Fragment {
+	return layoutGrouping(root, avail, set, rec, false)
+}
+
+// layoutGrouping is Layout, with what Options.TransformGroups says.
+func layoutGrouping(root *Box, avail Size, set FontSet, rec *Recorder, transformGroups bool) *Fragment {
 	if root == nil {
 		return nil
 	}
 	l := newLayouter(root, avail, set, rec)
+	l.transformGroups = transformGroups
 	frag := l.layout()
 	l.reportFontLimits()
 	l.reportForcedBreaks(root)
@@ -471,6 +477,11 @@ func (l *layouter) paintLengths() style.LengthContext {
 }
 
 type layouter struct {
+	// transformGroups is Options.TransformGroups: a transform no quarter turn
+	// draws is drawn as a TransformGroup rather than reported. See
+	// transform.go.
+	transformGroups bool
+
 	// What laying out MathML keeps for the run: each face's MATH table, read
 	// once; each box's class as an embellished operator or a space-like
 	// element, and each core operator's properties, which every row asks of

@@ -116,6 +116,16 @@ type Options struct {
 	// that reflows the text, which is what §5's single geometric scale exists
 	// to avoid.
 	AllowScaleUp bool
+	// TransformGroups says the backend draws a TransformGroup, so a transform
+	// may be drawn at any angle: rotate(30deg), a skew, a mirror, and a
+	// quarter turn of a picture or of text stretched one way. It is off by
+	// default, and then the display list holds no TransformGroup and every
+	// such transform is reported at its box and drawn untransformed, as a
+	// backend written before the operation existed expects. A backend sets it
+	// only once it draws the operation — see TransformGroup for what that
+	// takes. A transform that keeps rectangles rectangles is drawn the same
+	// either way, by moving the operations themselves.
+	TransformGroups bool
 }
 
 // Composed is a document laid out and painted, ready for a backend.
@@ -304,7 +314,7 @@ func compose(ctx context.Context, in Input, opts Options, budget *shape.ShapingB
 	// built.Fonts rather than in.Fonts: the document's own @font-face rules
 	// have been loaded onto the caller's library by now, and laying out with
 	// the library alone would set the page in the wrong faces.
-	root := Layout(built.Root, avail, built.Fonts, rec)
+	root := layoutGrouping(built.Root, avail, built.Fonts, rec, opts.TransformGroups)
 	if err := ctx.Err(); err != nil {
 		return Composed{}, err
 	}
@@ -377,7 +387,7 @@ func naturalSize(root *Fragment, applied transformsApplied) Size {
 			return
 		}
 		if through != nil {
-			r = through.rect(r)
+			r = through.bounds(r)
 		}
 		if outer.Active {
 			r = outer.Rect.Intersect(r)
@@ -609,11 +619,17 @@ func checkFontSizes(rec *Recorder, root *Fragment, applied transformsApplied, sc
 	// A size is seen as the transforms around it drew it, so a run in a box
 	// drawn at half its size is set at half its size; and asked once per size
 	// as drawn, which is what the reader sees.
+	//
+	// Under a matrix that is not a turn and a uniform scale, the size drawn is
+	// the em measured across the line as drawn: see affine.textScale, and
+	// which way the line runs is the line's.
 	underTransforms(root, applied, func(f *Fragment, m *affine, _ Clip) {
-		k := m.lengthScale()
 		// As the painter scales a font size: to the nearest unit.
-		drawn := func(u style.Unit) style.Unit { return toUnit(float64(u) * k) }
+		drawnAlong := func(u style.Unit, sideways bool) style.Unit {
+			return toUnit(float64(u) * m.textScale(sideways))
+		}
 		for _, line := range f.Lines {
+			drawn := func(u style.Unit) style.Unit { return drawnAlong(u, line.Sideways) }
 			for _, run := range line.Runs {
 				size := drawn(run.Size)
 				if run.Text == "" || seen[size] {
@@ -636,7 +652,11 @@ func checkFontSizes(rec *Recorder, root *Fragment, applied transformsApplied, sc
 			}
 		}
 		// A list item's marker is text a box draws that is on no line of its
-		// own, so it is asked about separately and at its own size.
+		// own, so it is asked about separately and at its own size, along
+		// the way the box's lines run.
+		drawn := func(u style.Unit) style.Unit {
+			return drawnAlong(u, len(f.Lines) > 0 && f.Lines[0].Sideways)
+		}
 		if mk := f.Marker; mk != nil && mk.Text != "" && mk.Image == nil && !seen[drawn(mk.Size)] {
 			size := drawn(mk.Size)
 			seen[size] = true
@@ -811,6 +831,24 @@ func checkOp(op Op, consider func(Rect), checkOps func([]Op)) {
 		// ink away. Nested no deeper than the clipping boxes that made it,
 		// which resolveClips bounds.
 		checkOps(o.Ops)
+	case TransformGroup:
+		// What is inside it, each by its own rule, where the matrix draws
+		// it: the rectangle around it, cut by the group's clip. The natural
+		// size the scale came from measured the same rectangles.
+		m := o.affine()
+		through := func(r Rect) {
+			if r = m.bounds(r); o.Clip.Active {
+				r = o.Clip.Rect.Intersect(r)
+			}
+			consider(r)
+		}
+		var inside func([]Op)
+		inside = func(ops []Op) {
+			for _, op := range ops {
+				checkOp(op, through, inside)
+			}
+		}
+		inside(o.Ops)
 	case DrawText, DrawTextShadow, DrawEmphasisMark, DrawGlyphs:
 		// Text is not checked, for the reason FillRect.Overhang gives, and a
 		// shadow of text is text moved by an offset nothing in layout placed.

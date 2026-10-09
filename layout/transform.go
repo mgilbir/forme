@@ -38,6 +38,31 @@ import (
 // size. So the transform is applied to the finished display list of the
 // box's stacking context, operation by operation, in mapOps.
 //
+// # Any other matrix, where the backend draws one
+//
+// Every other 2D matrix — an angle, a skew, a mirror — is drawn as a
+// TransformGroup when the caller sets Options.TransformGroups: what the box's
+// stacking context painted, untouched, inside one operation that carries the
+// matrix, for the backend to concatenate. So is a quarter turn of something
+// mapOps refuses, a picture turned or text stretched, through the same
+// matrix. A quarter turn that mapOps can draw is still drawn by mapOps with
+// the option on, for two reasons: it is exact in layout's own units, as it
+// always was, and it makes the option change nothing but what it was asked
+// to change — a document whose transforms were all drawn without it draws the
+// same list with it, and a backend that has just learned the operation meets
+// it only where nothing else could draw the page.
+//
+// What is measured from the page after layout sees a group where it draws:
+// the natural size, the page-overflow guard and an opacity group's marks
+// take the rectangle around each rectangle drawn through the matrix (see
+// affine.bounds), and the font-size floor the em measured across the line
+// as drawn (affine.textScale). A link is an area of the page and not ink, so
+// a link inside the box is put ahead of the group with each area the
+// rectangle around where it is drawn: a link annotation's /Rect, and the
+// display list's Link, are rectangles, and the exact quadrilateral is a
+// thing neither states. The clip of the boxes around the transformed one is
+// on the group, after the matrix; the box's own clips are inside it.
+//
 // A coordinate a scale or a move by a fraction of a unit makes is taken to
 // the nearest layout unit, a sixty-fourth of a pixel, by one rule for every
 // coordinate (toUnit), so that edges that met before the transform meet
@@ -49,23 +74,22 @@ import (
 // where layout put it, which is the page this engine drew before any of it
 // was applied:
 //
-//   - a product that is not a quarter turn: rotate(45deg), skew(). The
-//     display list has no operation that turns a picture or a glyph by an
-//     arbitrary angle, and no rectangle survives one. Drawing these needs a
-//     transformation matrix in the display list, which every backend would
-//     have to learn — a decision about the display list's contract, and not
-//     one this file takes;
-//   - a mirror, scaleX(-1) and every product whose determinant is negative.
-//     No operation draws a glyph or a picture backwards;
+//   - without Options.TransformGroups, a product that is not a quarter turn:
+//     rotate(45deg), skew(). No rectangle survives one, and only a
+//     TransformGroup turns a picture or a glyph by an arbitrary angle, which
+//     a backend that has not said it draws one is not given;
+//   - without it too, a mirror, scaleX(-1) and every product whose
+//     determinant is negative. Only a TransformGroup draws a glyph or a
+//     picture backwards;
 //   - every 3D function, perspective() among them. A 3D transform that
 //     stays in the plane of the page is the 2D one it equals, and that is
 //     the one to write;
-//   - a box the display list cannot turn with it: one holding a picture,
-//     upright text or a formula's glyphs when the product turns; text when
-//     the product scales one axis more than the other, or turns it upside
-//     down; and the few other operations mapOp names. These are found in the
-//     operations themselves, since nothing before the paint knows what a box
-//     paints, and are reported by the painter;
+//   - without it, a box the display list cannot turn with it: one holding a
+//     picture, upright text or a formula's glyphs when the product turns;
+//     text when the product scales one axis more than the other, or turns it
+//     upside down; and the few other operations mapOp names. These are found
+//     in the operations themselves, since nothing before the paint knows what
+//     a box paints, and are reported by the painter;
 //   - the root element, whose background is the canvas's (CSS Backgrounds
 //     3's canvas background) and which this engine does not turn without it;
 //   - a row, a row group or a cell of a table, which share the table's
@@ -196,6 +220,14 @@ type boxTransform struct {
 	on     bool
 	hidden bool
 	q      quarterTurn
+	// m is the whole matrix, about the origin, in page coordinates: q.m for a
+	// quarter turn, and the matrix a TransformGroup draws through otherwise.
+	m affine
+	// group says the matrix is no quarter turn, and what the box painted is
+	// drawn through it in a TransformGroup; groups that a quarter turn whose
+	// mapping refuses what the box painted is drawn as one too, instead of
+	// being reported. Both are only ever set under Options.TransformGroups.
+	group, groups bool
 	// clip is what clips the transformed box from outside: the clip of every
 	// box around it, which is applied after the transform and not before it.
 	// The clips inside the box are its own and travel with it. See
@@ -322,11 +354,29 @@ func (l *layouter) transformOf(b *Box, r Rect) (boxTransform, string) {
 	}
 	at := translation(float64(r.X)+ox, float64(r.Y)+oy)
 	back := translation(-(float64(r.X) + ox), -(float64(r.Y) + oy))
-	q, hidden, why := classify(at.times(list).times(back))
+	m := at.times(list).times(back)
+	q, hidden, why := classify(m)
 	if why != "" {
-		return boxTransform{}, why
+		// An angle, a skew or a mirror: drawn through the matrix itself where
+		// the caller's backend draws a TransformGroup, and refused otherwise.
+		// A matrix with a number no float holds is refused either way.
+		if !l.transformGroups || !m.finite() {
+			return boxTransform{}, why
+		}
+		m.a, m.b, m.c, m.d = snap(m.a), snap(m.b), snap(m.c), snap(m.d)
+		return boxTransform{on: true, m: m, group: true, groups: true}, ""
 	}
-	return boxTransform{on: true, hidden: hidden, q: q}, ""
+	return boxTransform{on: true, hidden: hidden, q: q, m: q.m, groups: l.transformGroups}, ""
+}
+
+// finite reports whether every entry of a matrix is a number.
+func (m affine) finite() bool {
+	for _, v := range []float64{m.a, m.b, m.c, m.d, m.e, m.f} {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // transformList is the product of a box's transform functions, left to
@@ -580,6 +630,76 @@ func (m affine) rect(r Rect) Rect {
 	x0, x1 := style.Min(p0.X, p1.X), style.Max(p0.X, p1.X)
 	y0, y1 := style.Min(p0.Y, p1.Y), style.Max(p0.Y, p1.Y)
 	return Rect{X: x0, Y: y0, W: x1.Sub(x0), H: y1.Sub(y0)}
+}
+
+// bounds is the smallest rectangle holding a rectangle drawn through the
+// matrix, whatever the matrix is. Under one that keeps the axes it is rect,
+// exactly; under any other the four corners are mapped and the rectangle
+// around them taken outwards to whole units, so that what is drawn is inside
+// it. A corner a hair from a whole unit is taken to it first, so that the
+// last bits of a sine do not add a unit to an edge.
+func (m affine) bounds(r Rect) Rect {
+	if (m.b == 0 && m.c == 0) || (m.a == 0 && m.d == 0) {
+		return m.rect(r)
+	}
+	x0, y0, x1, y1 := math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)
+	for _, p := range [4][2]float64{
+		{float64(r.X), float64(r.Y)}, {float64(r.Right()), float64(r.Y)},
+		{float64(r.X), float64(r.Bottom())}, {float64(r.Right()), float64(r.Bottom())},
+	} {
+		x := m.a*p[0] + m.c*p[1] + m.e
+		y := m.b*p[0] + m.d*p[1] + m.f
+		x0, x1 = math.Min(x0, x), math.Max(x1, x)
+		y0, y1 = math.Min(y0, y), math.Max(y1, y)
+	}
+	ux0, uy0 := outward(x0, false), outward(y0, false)
+	ux1, uy1 := outward(x1, true), outward(y1, true)
+	return Rect{X: ux0, Y: uy0, W: ux1.Sub(ux0), H: uy1.Sub(uy0)}
+}
+
+// outward is a coordinate to the whole unit below it, or above it when up,
+// unless it is within a millionth of a unit of one.
+func outward(v float64, up bool) style.Unit {
+	r := math.Round(v)
+	switch {
+	case math.Abs(v-r) < 1e-6:
+		v = r
+	case up:
+		v = math.Ceil(v)
+	default:
+		v = math.Floor(v)
+	}
+	return toUnit(v)
+}
+
+// textScale is the size a run of text is drawn at under the matrix, as a
+// multiple of the size it was set at: the height of an em measured across
+// the line, at right angles to the line's direction as drawn, which is the
+// area the matrix scales by over the length it scales the line's direction
+// by. sideways says the line runs down the box rather than across it.
+//
+// Under a turn and a uniform scale every direction is scaled alike, and it is
+// the square root of the area, which is what a font size scaled by a quarter
+// turn has always been taken as. Under any other matrix it is the scale on
+// the text's axis: scaleY(0.5) halves the em and scaleX(0.5) does not, and a
+// skew along the line leaves it.
+func (m *affine) textScale(sideways bool) float64 {
+	if m == nil {
+		return 1
+	}
+	det := math.Abs(m.a*m.d - m.b*m.c)
+	if m.a == m.d && m.b == -m.c || m.a == -m.d && m.b == m.c {
+		// A turn and a uniform scale, mirrored or not.
+		return math.Sqrt(det)
+	}
+	along := math.Hypot(m.a, m.b)
+	if sideways {
+		along = math.Hypot(m.c, m.d)
+	}
+	if along == 0 {
+		return 0
+	}
+	return det / along
 }
 
 func (m affine) clip(c Clip) Clip {
@@ -840,9 +960,104 @@ func (q quarterTurn) mapOp(op Op) (Op, string) {
 		g := newFilterGroup(filters, inner)
 		g.Clip = q.clip(v.Clip)
 		return g, ""
+	case TransformGroup:
+		// The group's own matrix acts first, on what it holds, which stays
+		// as it is, and this one after it, on the page.
+		v.Matrix = q.m.times(v.affine()).array()
+		v.Clip = q.clip(v.Clip)
+		return v, ""
 	}
 	return op, fmt.Sprintf("it would move a %T, which this engine does not know how to transform", op)
 }
+
+// TransformGroup draws its operations through an affine matrix: a point (x,
+// y) of an operation inside it is drawn at (a·x + c·y + e, b·x + d·y + f),
+// where Matrix is [a b c d e f]. It is CSS's matrix(a, b, c, d, e, f) and
+// PDF's "a b c d e f cm" in that order, in layout's coordinates — origin at
+// the top left of the content box, y downwards — with a to d numbers and e
+// and f layout units, as every coordinate of the display list is.
+//
+// It is what a transform no rectangle survives is drawn as: rotate(30deg), a
+// skew, a mirror, and a quarter turn of something a quarter turn of the
+// coordinates cannot draw — a picture, a run of text stretched more one way
+// than the other. Every operation inside it is in the coordinates of the box
+// before its transform, exactly as it would have been painted without one,
+// and is drawn by the backend as it would be anywhere else, with the matrix
+// concatenated to whatever is in force: a glyph, a picture, a gradient and a
+// tiling's pattern are turned, skewed and mirrored with the box. A group
+// inside a group is a transformed box inside a transformed box, and the two
+// matrices multiply, the outer one acting last.
+//
+// It is emitted only where Options.TransformGroups asks for it. A backend
+// that sets that option has to draw it; one that does not never sees one.
+//
+// Clip is applied after the matrix, in the coordinates outside the group, and
+// is set only where something around the transformed box cuts it — CSS
+// Transforms 1 §2's clip of the transformed box; what clips inside the box is
+// on the operations inside, in theirs. A Link is never inside one: a link
+// annotation is a rectangle of the page that no matrix moves, so the painter
+// puts the box's links ahead of the group with each area the rectangle around
+// where the matrix draws it, and a backend need do nothing for them.
+//
+// A PDF backend that draws in layout's coordinates — one "cm" at the start of
+// the page that scales layout's units to points and turns y upwards, and every
+// operation's numbers written as they are — draws it as q, the clip's
+// rectangle and "W n" when Clip is set, "a b c d e f cm" with e and f in the
+// unit it writes layout's coordinates in, the operations, and Q. The y-flip is
+// the page's, outside the group, and the group's matrix needs no change for
+// it. A backend that turns each coordinate itself, writing PDF's own (X, Y) =
+// (k·x, H − k·y) with no "cm", concatenates the matrix with that flip on both
+// sides: [a, −b, −c, d, k·e + c·H, H·(1 − d) − k·f]. Either way, PDF states a
+// pattern's and a shading pattern's matrix against the default coordinates of
+// the page or form, not the current ones, so a tiling or a gradient drawn as a
+// pattern inside a group has the group's matrix multiplied into its own; and a
+// form XObject's bounding box inside one is in the group's coordinates, not
+// the page's.
+type TransformGroup struct {
+	Matrix [6]float64
+	Ops    []Op
+	Clip   Clip
+
+	// ink is where Ops mark, before the matrix, when inkKnown: worked out once
+	// when the group is made, since a group inside a group is asked for it by
+	// every group around it. See newTransformGroup.
+	ink      Rect
+	inkKnown bool
+}
+
+func (TransformGroup) isOp() {}
+
+// newTransformGroup is a group with its ink worked out, which is how the
+// engine makes one. A group written as a literal works it out when asked.
+func newTransformGroup(m affine, ops []Op) TransformGroup {
+	g := TransformGroup{Matrix: m.array(), Ops: ops}
+	g.ink, g.inkKnown = opsInk(ops), true
+	return g
+}
+
+// Extent is where the group may put ink: the rectangle around what its
+// operations mark, drawn through the matrix, and cut by its clip.
+func (g TransformGroup) Extent() Rect {
+	in := g.ink
+	if !g.inkKnown {
+		in = opsInk(g.Ops)
+	}
+	if in.Empty() {
+		return Rect{}
+	}
+	out := g.affine().bounds(in)
+	if g.Clip.Active {
+		out = out.Intersect(g.Clip.Rect)
+	}
+	return out
+}
+
+func (g TransformGroup) affine() affine {
+	m := g.Matrix
+	return affine{a: m[0], b: m[1], c: m[2], d: m[3], e: m[4], f: m[5]}
+}
+
+func (m affine) array() [6]float64 { return [6]float64{m.a, m.b, m.c, m.d, m.e, m.f} }
 
 // Painting.
 
@@ -888,11 +1103,26 @@ func (p *painter) transforming(f *Fragment, paint func()) {
 	// inside another is copied again by the one around it: a stack of them
 	// costs its depth times what is inside. So the copies are charged as
 	// marks are, and past the budget the box is drawn where layout put it.
-	n, _ := countOpsUpTo(p.ops[at:], math.MaxInt64)
-	if !p.rec.chargeMark(satMul(n, costOp), "the transforms past that point, which were drawn untransformed") {
+	//
+	// A TransformGroup copies nothing: it holds what was painted, and what
+	// its making reads is the operations at the top of what the box painted,
+	// a group inside it among them as one. It is charged as one operation, as
+	// a ClipPath a rounded corner makes is.
+	const cut = "the transforms past that point, which were drawn untransformed"
+	if t.group {
+		if p.rec.chargeMark(costOp, cut) {
+			p.transformGroup(f, at, logAt, t.m)
+		}
+	} else if n, _ := countOpsUpTo(p.ops[at:], math.MaxInt64); !p.rec.chargeMark(satMul(n, costOp), cut) {
 		// Reported once, by the budget: what was cut, and where.
 	} else if mapped, why := t.q.mapOps(p.ops[at:]); why != "" {
-		p.reportOnce(f.Box, "transform", transformFinding(f.Box, why))
+		if t.groups && p.rec.chargeMark(costOp, cut) {
+			// What a quarter turn cannot map — a picture turned, text
+			// stretched — the matrix draws.
+			p.transformGroup(f, at, logAt, t.m)
+		} else if !t.groups {
+			p.reportOnce(f.Box, "transform", transformFinding(f.Box, why))
+		}
 	} else {
 		p.ops = append(p.ops[:at], mapped...)
 		for _, l := range p.transformLogs[logAt:] {
@@ -909,6 +1139,44 @@ func (p *painter) transforming(f *Fragment, paint func()) {
 		p.ops = clipOps(p.ops, at, t.clip)
 	}
 	p.rounding(at, f.transformRound)
+}
+
+// transformGroup puts what a fragment painted from at onwards in one
+// TransformGroup drawn through m, and moves what is measured from the page
+// with it: the links among what it painted, which are areas of the page and
+// not ink and go ahead of the group, as a filter puts them (a link annotation
+// is not drawn, and no matrix a backend concatenates moves it); and the marks
+// opacity groups were handed while it was painted. Both are moved to the
+// rectangle around where the matrix draws them, which is all a Link's areas
+// and a mark's rectangle can say.
+func (p *painter) transformGroup(f *Fragment, at, logAt int, m affine) {
+	var inner, links []Op
+	for _, op := range p.ops[at:] {
+		if l, ok := op.(Link); ok {
+			rects := make([]Rect, 0, len(l.Rects))
+			for _, r := range l.Rects {
+				if r = m.bounds(r); !r.Empty() {
+					rects = append(rects, r)
+				}
+			}
+			if len(rects) > 0 {
+				l.Rects = rects
+				links = append(links, l)
+			}
+			continue
+		}
+		inner = append(inner, op)
+	}
+	p.ops = append(p.ops[:at], links...)
+	if len(inner) > 0 {
+		p.ops = append(p.ops, newTransformGroup(m, inner))
+	}
+	for _, l := range p.transformLogs[logAt:] {
+		if r := l.g.marks[l.i].rect; !r.Empty() {
+			l.g.marks[l.i].rect = m.bounds(r)
+		}
+	}
+	p.applied[f] = true
 }
 
 // addMarks hands marks to an opacity group, logging them while a transform is
@@ -951,7 +1219,7 @@ func underTransforms(root *Fragment, applied transformsApplied, visit func(f *Fr
 				if t.hidden {
 					return
 				}
-				inner := t.q.m
+				inner := t.m
 				if m != nil {
 					inner = m.times(inner)
 				}
@@ -964,15 +1232,4 @@ func underTransforms(root *Fragment, applied transformsApplied, visit func(f *Fr
 		}
 	}
 	walk(root, nil, Clip{})
-}
-
-// lengthScale is how much a matrix applied by the paint scales a length that
-// lies along no axis, a font size: the square root of the area it scales by,
-// which is the scale itself wherever text was drawn through it, since text
-// is drawn only through a uniform one.
-func (m *affine) lengthScale() float64 {
-	if m == nil {
-		return 1
-	}
-	return math.Sqrt(math.Abs(m.a*m.d - m.b*m.c))
 }

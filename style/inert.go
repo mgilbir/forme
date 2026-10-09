@@ -162,24 +162,28 @@ var inertValues = map[string]inertValue{
 	// layout/opacity.go. Filter Effects 1's filter has gone the same way: see
 	// layout/filter.go. And so has transform, with transform-origin beside it:
 	// both are read by layout/transform.go, which applies the transforms a
-	// display list of axis-aligned rectangles can draw and reports the rest at
-	// the box.
+	// display list of axis-aligned rectangles can draw, and every other 2D one
+	// where the backend draws a TransformGroup, and reports the rest at the
+	// box.
 	"transform-style": {produced: "flat", because: "there is no 3D rendering context"},
 	// backface-visibility is the one property whose every value is inert. It
 	// says whether a box is drawn when it faces away from the viewer, and CSS
-	// Transforms 2 makes a box face away only when its accumulated 3D
-	// transformation turns it round. Every transform this engine applies is a
-	// turn by a multiple of a quarter, a scale and a move, all in the plane of
-	// the page and none of them turning the box over: a mirror, such as
-	// scaleX(-1), and every 3D function are reported at the box and not
-	// applied (layout/transform.go). So a document declaring "hidden" asks for
-	// a box that is never back-facing to be hidden when it is. It is not a
+	// Transforms 2 §10 makes a box face away only when the component in row
+	// 3, column 3 of its accumulated 3D transformation matrix is negative.
+	// Every transform this engine applies is 2D, in the plane of the page,
+	// and the 4×4 matrix of a 2D one has 1 there: a mirror such as
+	// scaleX(-1), which layout draws where the backend draws a TransformGroup,
+	// shows the box's front reversed and not its back, and every 3D function
+	// is reported at the box and not applied (layout/transform.go). So a
+	// document declaring "hidden" asks for a box that is never back-facing to
+	// be hidden when it is. It is not a
 	// grouping property and makes no stacking context, so there is nothing
 	// else in it to lose. It was listed with "visible" produced, so "hidden"
 	// was reported on documents with no transform anywhere: the suite's
 	// opacity-change-parent-stacking-context pair writes it on a box that is
-	// never turned. If a 3D transform or a mirror is ever applied, this entry
-	// has to change with it; TestNothingIsTurnedAway holds half of that.
+	// never turned. If a 3D transform is ever applied, this entry has to
+	// change with it; TestNothingIsTurnedAway holds half of that, and
+	// layout's TestStillRefused the other.
 	"backface-visibility": {always: true,
 		because: "every transform this engine applies stays in the plane of the page, so no box ever faces away from the viewer"},
 

@@ -738,6 +738,10 @@ func countOpsUpTo(ops []Op, limit int64) (int64, bool) {
 				if !count(v.Ops) {
 					return false
 				}
+			case TransformGroup:
+				if !count(v.Ops) {
+					return false
+				}
 			}
 		}
 		return true

@@ -38,13 +38,16 @@ import (
 // rather than a "border" primitive, because a backend that had to understand
 // border-collapse would be a second layout engine.
 //
-// There are twelve: FillRect, DrawText, DrawTextShadow, DrawEmphasisMark,
+// There are thirteen: FillRect, DrawText, DrawTextShadow, DrawEmphasisMark,
 // DrawGlyphs, DrawImage, TileImage, FillGradient and FillPath, which put ink
 // on the page;
-// ClipPath and FilterGroup, which hold operations and clip what they put there
-// to a shape or filter it as a group; and Link, which puts none and says where
-// a hyperlink is. A backend that switches over them must have a case for each,
-// and one that only draws may skip Link. The set grows only by addition — an
+// ClipPath, FilterGroup and TransformGroup, which hold operations and clip
+// what they put there to a shape, filter it as a group, or draw it through a
+// matrix; and Link, which puts none and says where a hyperlink is. A backend
+// that switches over them must have a case for each, and one that only draws
+// may skip Link. TransformGroup is the one a backend asks for: the list holds
+// none unless Options.TransformGroups is set, which a backend does once it
+// draws one. The set grows only by addition — an
 // operation's meaning, once stated, is not changed — so a backend that meets a
 // kind it has no case for has met something new, and should say so rather than
 // draw around it.
@@ -492,6 +495,8 @@ func useDrawnGlyphs(ops []Op) {
 		case FilterGroup:
 			useDrawnGlyphs(o.Ops)
 		case ClipPath:
+			useDrawnGlyphs(o.Ops)
+		case TransformGroup:
 			useDrawnGlyphs(o.Ops)
 		}
 	}
@@ -1574,6 +1579,19 @@ func clipOps(ops []Op, at int, c Clip) []Op {
 			// A filter is applied before the clip, so the clip goes on the
 			// group and not into what it holds: a blur cut by a rectangle is
 			// not the blur of what the rectangle leaves.
+			ext := v.Extent()
+			if c.hides(ext) {
+				continue
+			}
+			if !c.admits(ext) {
+				v.Clip = v.Clip.meet(c)
+			}
+			kept = append(kept, v)
+
+		case TransformGroup:
+			// What clips a transformed box from outside cuts it where it is
+			// drawn, after the matrix, so the clip goes on the group, in the
+			// coordinates outside it.
 			ext := v.Extent()
 			if c.hides(ext) {
 				continue
