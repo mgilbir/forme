@@ -463,19 +463,66 @@ const paintWork = maxFontWork
 // paintCOLR paints a COLR glyph within a budget of work, and reports whether
 // the table has it. It is walked twice: once counting, which is where a glyph
 // that runs past its bounds is refused, and once painting, which then cannot.
+//
+// What counting finds is the glyph's and the table's alone — the paints, the
+// stops, and whether a glyph with no clip box can be bounded, none of which
+// the palette, the foreground or the size changes, and the table is read at
+// the face's one place in its design space — so it is found the first time a
+// glyph is painted and kept. A glyph painted again is walked once, painting,
+// and one with no clip box is not painted with the bounded functions again:
+// it had been four walks of it, and the three now left out were half the time
+// painting all 1,971 colour glyphs of Bitcount Prop Single Ink took. The
+// first painting of a glyph still counts it, and paints it knowing what
+// counting found.
 func (f *Face) paintCOLR(t *colrTable, gid int, opts PaintOptions, p Painter, work int) (bool, error) {
 	c := f.colr
-	counter := &paintCounter{t: t, budget: font.NewBudget(work)}
-	painted, refused := c.paintGlyphWith(gid, counter, true, counter.budget)
-	if !painted {
+	v, counted := c.paintVerdict(gid, work)
+	if !counted {
+		counter := &paintCounter{t: t, budget: font.NewBudget(work)}
+		painted, refused, bounds := c.paintGlyphKnowing(gid, counter, true, counter.budget, boundsUnknown)
+		v = paintVerdict{painted: painted, refused: refused || counter.budget.Err() != nil, bounds: bounds}
+		c.keepPaintVerdict(gid, work, v)
+	}
+	if !v.painted {
 		return false, nil
 	}
-	if refused || counter.budget.Err() != nil {
+	if v.refused {
 		return true, fmt.Errorf("%w: glyph %d", ErrPaintLimit, gid)
 	}
 	a := &paintAdapter{t: t, p: p, palette: c.palette(opts.Palette), fg: opts.Foreground, overrides: opts.PaletteOverrides}
-	c.paintGlyphWith(gid, a, true, font.NewBudget(work))
+	c.paintGlyphKnowing(gid, a, true, font.NewBudget(work), v.bounds)
 	return true, nil
+}
+
+// paintKey is a glyph counted within a budget of work.
+type paintKey struct{ gid, work int }
+
+// paintVerdict is what counting a glyph's painting found: whether the table
+// paints it, whether painting it runs past its bounds, and, for a COLRv1
+// glyph with no clip box, whether its painting can be bounded.
+type paintVerdict struct {
+	painted, refused bool
+	bounds           boundedness
+}
+
+// paintVerdict is what counting a glyph within a budget found, and false
+// where it has not been counted.
+func (c *colrInk) paintVerdict(gid, work int) (paintVerdict, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.verdicts[paintKey{gid, work}]
+	return v, ok
+}
+
+// keepPaintVerdict keeps what counting a glyph found. Two goroutines that
+// count the same glyph at once find the same, and either may keep it.
+func (c *colrInk) keepPaintVerdict(gid, work int, v paintVerdict) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.verdicts == nil {
+		c.verdicts = map[paintKey]paintVerdict{}
+	}
+	c.verdicts[paintKey{gid, work}] = v
 }
 
 // paintCounter is the painter of the counting walk: it paints nothing, and

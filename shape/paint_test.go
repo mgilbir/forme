@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mgilbir/forme/font"
@@ -510,5 +511,106 @@ func TestEveryNotoColorEmojiGlyphPaints(t *testing.T) {
 	}
 	if painted < 4000 {
 		t.Errorf("%d COLRv1 glyphs, where the font has over four thousand", painted)
+	}
+}
+
+// paintedText is a glyph painted within a budget of work, as recordingPainter
+// writes it, and the error.
+func paintedText(f *Face, gid int, opts PaintOptions, work int) string {
+	r := &recordingPainter{}
+	painted, err := f.paintCOLR(f.colrTable(), gid, opts, r, work)
+	if !painted {
+		return "not COLR"
+	}
+	return fmt.Sprintf("%v\n%s", err, strings.Join(r.lines, "\n"))
+}
+
+// TestAGlyphPaintedAgainIsPaintedAsItWasFirst paints every COLR glyph of the
+// colour faces twice, in two palettes and within the whole budget and one too
+// small for some: the second time from what counting it the first time found
+// and kept, the first time by counting it. Each glyph is painted the same, or
+// refused the same, both times; and the faces reach every verdict — refused,
+// painted with a clip box, and with none both bounded and not — so that none
+// of what is kept goes unread.
+func TestAGlyphPaintedAgainIsPaintedAsItWasFirst(t *testing.T) {
+	names := []string{"ColourPaint.ttf", "ColourInk.ttf"}
+	if os.Getenv("EMOJI_FONTS") != "" {
+		names = append(names, "Noto-COLRv1.ttf")
+	}
+	seen := map[paintVerdict]int{}
+	for _, name := range names {
+		f, err := Load(paintFont(t, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, work := range []int{paintWork, 6} {
+			for _, palette := range []int{0, 1} {
+				opts := PaintOptions{Palette: palette, Foreground: Color{R: 1, G: 2, B: 3, A: 255}}
+				first := make([]string, f.NumGlyphs())
+				for gid := range f.NumGlyphs() {
+					first[gid] = paintedText(f, gid, opts, work)
+				}
+				for gid := range f.NumGlyphs() {
+					if again := paintedText(f, gid, opts, work); again != first[gid] {
+						t.Errorf("%s glyph %d within %d, palette %d: painted\n%s\nand again\n%s", name, gid, work, palette, first[gid], again)
+					}
+				}
+			}
+		}
+		for _, v := range f.colr.verdicts {
+			seen[v]++
+		}
+	}
+	for _, v := range []paintVerdict{
+		{painted: true, refused: true},
+		{painted: true},
+		{painted: true, bounds: boundsBounded},
+		{painted: true, bounds: boundsUnbounded},
+	} {
+		if seen[v] == 0 {
+			t.Errorf("no glyph was counted %+v, so this test does not reach it (%v)", v, seen)
+		}
+	}
+}
+
+// TestAFaceIsPaintedFromSeveralGoroutinesAtOnce paints every glyph of
+// ColourInk from goroutines sharing a face and its clones, none of them
+// counted yet, and requires each to be painted as it is alone: what counting
+// finds is kept behind the face's lock (run it with -race).
+func TestAFaceIsPaintedFromSeveralGoroutinesAtOnce(t *testing.T) {
+	data := harfbuzzFont(t, "ColourInk.ttf")
+	alone, err := Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([]string, alone.NumGlyphs())
+	for gid := range want {
+		want[gid] = paintedText(alone, gid, PaintOptions{}, paintWork)
+	}
+	f, err := Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan string, 8*len(want))
+	for i := range 8 {
+		face := f
+		if i%2 == 1 {
+			face = f.Clone()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for gid := range want {
+				if got := paintedText(face, gid, PaintOptions{}, paintWork); got != want[gid] {
+					errs <- fmt.Sprintf("glyph %d: %s, and alone %s", gid, got, want[gid])
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Error(e)
 	}
 }
