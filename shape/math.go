@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
+	"sync"
 
 	"github.com/mgilbir/forme/font"
 )
@@ -211,13 +213,43 @@ type MathTable struct {
 // where it has one this reader cannot read at all: shorter than its header, or
 // of a major version other than 1, whose layout this reader does not know.
 //
-// It reads the table directory each time it is asked, so a caller asking about
-// many glyphs should keep the answer.
+// The table is read the first time it is asked for, of the face or of one of
+// its clones, and each call hands out a MathTable of its own, whose Limits
+// are what that caller's reading found: the cascade asks again for each
+// element whose math-depth changes, and read again each time the table was a
+// fifth of the time a formula took to lay out.
 func (f *Face) MathTable() (*MathTable, error) {
-	if f == nil || f.sfntTables() == nil {
+	if f == nil {
 		return nil, nil
 	}
+	if f.math == nil {
+		return f.readMathTable()
+	}
+	r := f.math
+	r.once.Do(func() { r.t, r.err = f.readMathTable() })
+	if r.t == nil {
+		return nil, r.err
+	}
+	m := *r.t
+	m.face = f
+	m.limits = slices.Clone(r.t.limits)
+	return &m, nil
+}
+
+// mathRead is a face's MATH table as it was first read, and the error
+// reading it: what MathTable hands out a copy of.
+type mathRead struct {
+	once sync.Once
+	t    *MathTable
+	err  error
+}
+
+// readMathTable reads the face's MATH table. See MathTable.
+func (f *Face) readMathTable() (*MathTable, error) {
 	tables := f.sfntTables()
+	if tables == nil {
+		return nil, nil
+	}
 	data, ok := tables["MATH"]
 	if !ok {
 		return nil, nil
@@ -900,7 +932,7 @@ func (m *MathTable) validAssembly(a MathGlyphAssembly) bool {
 // OS/2 table long enough to say. MathML Core §5.1 falls back to them for
 // subscriptShiftDown and superscriptShiftUp where a font has no MATH table.
 func (f *Face) ScriptOffsets() (sub, super int, ok bool) {
-	if f == nil || f.sfntTables() == nil {
+	if f == nil {
 		return 0, 0, false
 	}
 	os2 := f.sfntTables()["OS/2"]

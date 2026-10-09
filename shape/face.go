@@ -266,6 +266,14 @@ type Face struct {
 	// collection is where a face of a collection keeps its tables, which are
 	// slices of the collection, for data is nil. See fontcollection.go.
 	collection *collectionFace
+	// tables is data taken apart into its tables, as Load read it, for a
+	// face that is not of a collection: what sfntTables answers, which a
+	// caller is not to change. Nil for a face of a collection, whose
+	// collection keeps them, and for a standard face.
+	tables map[string][]byte
+	// math is the face's MATH table, read the first time it is asked for,
+	// and shared by the face's clones. See MathTable.
+	math *mathRead
 
 	used    map[int]bool // glyph indices this face has encoded
 	runWork *runWork     // opt-in per-call budget, never shared by Clone
@@ -424,6 +432,7 @@ func loadFace(data []byte, coords []float64) (*Face, error) {
 // tables are slices of the collection and not a program of their own (see
 // fontcollection.go).
 func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face, error) {
+	read := tables
 	tables = withBitmapHead(tables)
 	unitsPerEm, err := headUnitsPerEm(tables["head"])
 	if err != nil {
@@ -532,6 +541,12 @@ func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face,
 		unitsPerEm: unitsPerEm,
 		varCoords:  coords,
 		used:       map[int]bool{},
+		math:       &mathRead{},
+	}
+	if data != nil {
+		// The tables as they were taken from data, before a bhed is read as
+		// head: font.SFNTTables(data), which is how loadFace read them.
+		f.tables = read
 	}
 	head := tables["head"]
 	if len(head) >= 54 {

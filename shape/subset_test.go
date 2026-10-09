@@ -175,6 +175,9 @@ func TestSubsetRefusesATruncatedFont(t *testing.T) {
 	broken := append([]byte(nil), f.data...)
 	f2 := *f
 	f2.data = broken[:locaStart+8] // cut mid-loca
+	// A face keeps its program taken apart as it was loaded; this one's is
+	// the cut one.
+	f2.tables = font.SFNTTables(f2.data)
 	if _, err := f2.Subset(); err == nil {
 		t.Error("a truncated font was subsetted rather than refused")
 	}
