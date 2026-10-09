@@ -81,6 +81,10 @@ type colrInk struct {
 	outlines map[int]box32
 	budget   *font.Budget
 	spent    bool
+	// verdicts are what counting a glyph's painting found, by the glyph and
+	// the budget it was counted within, so that PaintGlyph counts a glyph
+	// once and not each time it is painted. See paintCOLR.
+	verdicts map[paintKey]paintVerdict
 }
 
 // colrAnswer is one glyph's answer: its extents, and whether the table paints
@@ -194,6 +198,26 @@ func (c *colrInk) paintGlyph(gid int, funcs painter, clip bool) bool {
 // refused says whether painting stopped short at a bound: the nesting, the
 // edges, or the budget.
 func (c *colrInk) paintGlyphWith(gid int, funcs painter, clip bool, own *font.Budget) (painted, refused bool) {
+	painted, refused, _ = c.paintGlyphKnowing(gid, funcs, clip, own, boundsUnknown)
+	return painted, refused
+}
+
+// boundedness is whether painting a COLRv1 glyph that has no clip box can be
+// bounded, which painting it with the bounded functions finds: unknown until
+// it has.
+type boundedness uint8
+
+const (
+	boundsUnknown boundedness = iota
+	boundsBounded
+	boundsUnbounded
+)
+
+// paintGlyphKnowing is paintGlyphWith told whether painting the glyph can be
+// bounded, where that is known, rather than painting it with the bounded
+// functions to learn. It reports what it was told or learned, which is
+// boundsUnknown for a glyph that has a clip box or is not painted with one.
+func (c *colrInk) paintGlyphKnowing(gid int, funcs painter, clip bool, own *font.Budget, known boundedness) (painted, refused bool, bounds boundedness) {
 	t := c.t
 	p := &paintContext{c: c, funcs: funcs, depthLeft: maxPaintDepth, edges: maxPaintEdges, own: own}
 	p.glyphs.enter()
@@ -205,11 +229,16 @@ func (c *colrInk) paintGlyphWith(gid int, funcs painter, clip bool, own *font.Bu
 			var box clipRect
 			if clip {
 				if box, clip = t.clipBox(gid); !clip {
-					bounded = false
-					b := &boundedPainter{bounded: true}
-					_, inner := c.paintGlyphWith(gid, b, false, own)
-					p.refused = p.refused || inner
-					bounded = b.bounded
+					if known == boundsUnknown {
+						b := &boundedPainter{bounded: true}
+						_, inner := c.paintGlyphWith(gid, b, false, own)
+						p.refused = p.refused || inner
+						known = boundsUnbounded
+						if b.bounded {
+							known = boundsBounded
+						}
+					}
+					bounded = known == boundsBounded
 				}
 			}
 			funcs.pushTransform(identity32)
@@ -223,7 +252,7 @@ func (c *colrInk) paintGlyphWith(gid int, funcs painter, clip bool, own *font.Bu
 				funcs.popClip()
 			}
 			funcs.popTransform()
-			return true, p.refused
+			return true, p.refused, known
 		}
 	}
 	if first, n, ok := t.baseGlyphRecord(gid); ok {
@@ -237,9 +266,9 @@ func (c *colrInk) paintGlyphWith(gid int, funcs painter, clip bool, own *font.Bu
 			funcs.paint(paintFill{at: -1, index: t.u16(layer + 2)})
 			funcs.popClip()
 		}
-		return true, p.refused
+		return true, p.refused, known
 	}
-	return false, false
+	return false, false, known
 }
 
 // HarfBuzz's bounds on one glyph's painting: HB_MAX_NESTING_LEVEL and

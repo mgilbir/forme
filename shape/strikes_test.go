@@ -697,6 +697,62 @@ func TestACompositeThatWouldWriteBillionsOfPixelsIsRefused(t *testing.T) {
 	}
 }
 
+// TestGlyphColourSaysMaskWhereAndOnlyWhereOneIsPainted holds GlyphColour,
+// which checks a glyph's bitmap without drawing it, to PaintGlyph, which draws
+// it: over every glyph of both fixture faces, of the composites FreeType
+// refuses, and of Strikes.ttf with its EBDT cut short, at sizes on, between
+// and past the strikes, a glyph is ColourMask exactly where it is painted as
+// one mask. Each refusal of draw's — bytes too few for the bitmap, a component
+// past the box, one that cannot be read, one of itself — is among them.
+func TestGlyphColourSaysMaskWhereAndOnlyWhereOneIsPainted(t *testing.T) {
+	var faces []*Face
+	for _, name := range []string{"Strikes.ttf", "StrikesApple.ttf"} {
+		f, err := Load(strikesFont(t, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		faces = append(faces, f)
+	}
+	leaf := bigImage(8, 2, 0, 2, 0xFF, 0x0F)
+	eblc, ebdt := buildStrike(10, 1, []strikeGlyph{
+		{1, 7, leaf},
+		{2, 9, bigImage(9, 3, 0, 3, composite([3]int{1, 1, 1})...)},
+		{3, 9, bigImage(8, 2, 0, 2, composite([3]int{1, 1, 0})...)},
+		{4, 9, bigImage(8, 2, 0, 2, composite([3]int{9, 0, 0})...)},
+		{5, 9, bigImage(8, 2, 0, 2, composite([3]int{5, 0, 0})...)},
+		{6, 7, bigImage(8, 3, 0, 3, 0xFF, 0x0F)},
+		{7, 9, bigImage(8, 2, 0, 2, composite([3]int{1, 0, -1})...)},
+		{8, 7, bigImage(0, 2, 0, 2)},
+	})
+	faces = append(faces, strikeFace(t, eblc, ebdt))
+	tables := font.SFNTTables(strikesFont(t, "Strikes.ttf"))
+	for n := 0; n < len(tables["EBDT"]); n += 5 {
+		if f, err := loadStrikeFace(t, tables["EBLC"], tables["EBDT"][:n]); err == nil {
+			faces = append(faces, f)
+		}
+	}
+	masks, none := 0, 0
+	for i, f := range faces {
+		for gid := -1; gid <= f.NumGlyphs(); gid++ {
+			for _, ppem := range []int{0, 8, 10, 12, 14, 16, 24, 40} {
+				_, painted := paintedMask(f, gid, ppem)
+				said := f.GlyphColour(gid, ppem) == ColourMask
+				if said != painted {
+					t.Errorf("face %d glyph %d at %d: GlyphColour says a mask %v, and one is painted %v", i, gid, ppem, said, painted)
+				}
+				if painted {
+					masks++
+				} else {
+					none++
+				}
+			}
+		}
+	}
+	if masks == 0 || none == 0 {
+		t.Fatalf("%d masks and %d glyphs with none: the faces do not divide, so this tests nothing", masks, none)
+	}
+}
+
 // TestATruncatedStrikeTableIsReadWithoutPanicking cuts Strikes.ttf's EBLC and
 // EBDT at every length, and paints and measures every glyph at every strike's
 // size from each: whatever is read, nothing panics and nothing unbalanced is

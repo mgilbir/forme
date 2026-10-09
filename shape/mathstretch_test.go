@@ -2,10 +2,13 @@ package shape
 
 import (
 	"encoding/binary"
+	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonttest"
 )
 
@@ -421,4 +424,101 @@ func TestScriptOffsetsAreOS2s(t *testing.T) {
 				len(tc.table), sub, sup, ok, tc.sub, tc.sup, tc.ok)
 		}
 	}
+}
+
+// manyVariantsFace is stretchFace with a parenthesis of more size variants
+// than are considered, which Variants notes in Limits the first time a table
+// is asked for them.
+func manyVariantsFace(t *testing.T) *Face {
+	t.Helper()
+	opts := stretchOptions()
+	var many []fonttest.MathVariant
+	for i := 0; i < maxMathVariants+6; i++ {
+		many = append(many, fonttest.MathVariant{Glyph: gParenV1, Advance: 100 + i})
+	}
+	opts.VertVariants[gParen] = many
+	f, _ := stretchFace(t, opts)
+	return f
+}
+
+// TestMathTableIsReadOnceAndHandedOutApart: a face reads its MATH table and
+// its table directory once, for it and its clones, and each MathTable handed
+// out is the table read, its own face's, with Limits of its own — what one
+// caller's reading noted is not another's.
+func TestMathTableIsReadOnceAndHandedOutApart(t *testing.T) {
+	f := manyVariantsFace(t)
+	first, err := f.MathTable()
+	if err != nil || first == nil {
+		t.Fatalf("MathTable: %v, %v", first, err)
+	}
+	if f.math.t == nil {
+		t.Fatal("the table read is not kept")
+	}
+	first.Variants(gParen, true)
+	if !strings.Contains(strings.Join(first.Limits(), "\n"), "size variants") {
+		t.Fatalf("Limits() = %q, and Variants noted nothing", first.Limits())
+	}
+	fresh, err := f.readMathTable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone := f.Clone()
+	for _, face := range []*Face{f, clone} {
+		again, err := face.MathTable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again == first {
+			t.Fatal("the same MathTable was handed out twice")
+		}
+		if len(again.Limits()) != 0 {
+			t.Errorf("a table asked for after another noted a limit has Limits() = %q", again.Limits())
+		}
+		if again.face != face {
+			t.Error("a table handed out is not its face's")
+		}
+		want := *fresh
+		want.face = face
+		if !reflect.DeepEqual(*again, want) {
+			t.Errorf("the table handed out is %+v, and read afresh %+v", *again, want)
+		}
+	}
+	if n := testing.AllocsPerRun(10, func() { _ = f.sfntTables() }); n != 0 {
+		t.Errorf("taking the face apart into its tables allocated %v times; it is done once, at load", n)
+	}
+	if &f.sfntTables()["MATH"][0] != &font.SFNTTables(f.data)["MATH"][0] {
+		t.Error("the tables kept are not the program's")
+	}
+}
+
+// TestMathTableIsAskedForFromSeveralGoroutinesAtOnce asks a face and its
+// clones for the table from goroutines at once, each reading glyphs from its
+// own and noting a limit in it (run it with -race).
+func TestMathTableIsAskedForFromSeveralGoroutinesAtOnce(t *testing.T) {
+	f := manyVariantsFace(t)
+	var wg sync.WaitGroup
+	for i := range 8 {
+		face := f
+		if i%2 == 1 {
+			face = f.Clone()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				m, err := face.MathTable()
+				if err != nil || m == nil {
+					t.Errorf("MathTable: %v, %v", m, err)
+					return
+				}
+				if len(m.Limits()) != 0 {
+					t.Errorf("a table handed out has Limits() = %q before it is read", m.Limits())
+				}
+				if len(m.Variants(gParen, true)) != maxMathVariants || len(m.Limits()) != 1 {
+					t.Errorf("Limits() = %q", m.Limits())
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

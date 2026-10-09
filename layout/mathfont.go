@@ -41,9 +41,9 @@ func (l *layouter) mathFontFor(b *Box) mathFont {
 	return m
 }
 
-// mathTableOf is a face's MATH table, read once per face — Face.MathTable reads
-// the table directory and every header of the table each time it is asked —
-// with what reading it could not do reported the first time.
+// mathTableOf is a face's MATH table, asked for once per face in a layout —
+// Face.MathTable hands out a table of its own each time it is asked — with
+// what reading it could not do reported the first time.
 func (l *layouter) mathTableOf(b *Box, face *shape.Face) *shape.MathTable {
 	if t, ok := l.mathTables[face]; ok {
 		return t

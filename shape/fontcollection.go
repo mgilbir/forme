@@ -48,11 +48,15 @@ func standaloneProgram(tables map[string][]byte) []byte {
 }
 
 // sfntTables is the face's font taken apart into its tables: a face of a
-// collection's own, and a face from Load's program's. It is nil for a standard
-// face, which has no program.
+// collection's own, and a face from Load's program's, as Load took it apart.
+// It is nil for a standard face, which has no program. The map is the face's
+// and its clones', and is not to be changed.
 func (f *Face) sfntTables() map[string][]byte {
 	if f.collection != nil {
 		return f.collection.tables
+	}
+	if f.tables != nil {
+		return f.tables
 	}
 	return font.SFNTTables(f.data)
 }
