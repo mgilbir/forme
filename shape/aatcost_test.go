@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonttest"
+	"github.com/mgilbir/forme/internal/costtest"
 )
 
 // What the AAT tables cost a run, against tables that make the run do more
@@ -372,5 +374,72 @@ func TestTheTracksATrakWalksAreCharged(t *testing.T) {
 	if float64(large) < 3*float64(small) {
 		t.Errorf("a trak of 4,000 tracks cost a run %d units and one of 1,000 cost %d: "+
 			"the tracks walked are not charged", large, small)
+	}
+}
+
+// thirtysix is HarfBuzz's fixture TestMORXThirtysix: an insertion whose
+// entries never advance, so that the machine inserts a glyph after an "A" and
+// is put back in front of it, for as long as the run's allowance lasts.
+func thirtysix(t *testing.T) *Face {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(harfbuzzDir, "aat", "fonts", "TestMORXThirtysix.ttf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.morx == nil || len(f.morx.chains) != 1 || len(f.morx.chains[0].subtables) != 1 ||
+		f.morx.chains[0].subtables[0].kind != morxInsertion {
+		t.Fatal("TestMORXThirtysix is not the one insertion it was")
+	}
+	return f
+}
+
+// TestAnInsertionThatNeverAdvancesCostsWhatItsAllowanceIs: the machine of
+// TestMORXThirtysix, given an allowance four times as large, costs about four
+// times as much. Each insertion puts the machine back in front of what it
+// inserted, which moves the whole of the run behind it, and HarfBuzz charges
+// the allowance for that move (shift_forward); uncharged, the run grew by a
+// glyph for every four units of the allowance and moved all of itself each
+// time, which is quadratic in the allowance.
+func TestAnInsertionThatNeverAdvancesCostsWhatItsAllowanceIs(t *testing.T) {
+	f := thirtysix(t)
+	s := &f.morx.chains[0].subtables[0]
+	a, ok := f.GlyphID('A')
+	if !ok {
+		t.Fatal("no A")
+	}
+	run := func(allowance int) func() {
+		return func() {
+			b := &aatBuf{info: []Glyph{{GID: a}}, ok: true, f: f, maxOps: allowance, maxLen: 1 << 30}
+			shaper{f: f}.applyMorxSubtable(b, s, f.morx.numGlyphs)
+			if len(b.info) < 2 {
+				t.Fatal("nothing was inserted, so the machine never ran")
+			}
+		}
+	}
+	c := costtest.Time(t, "TestMORXThirtysix's insertion at an allowance of n", run(8192), run(4*8192))
+	if c.Ratio > 8 {
+		t.Errorf("four times the allowance cost %s: the glyphs a rewind shifts are not charged", c)
+	}
+}
+
+// TestOneCharacterOfARunawayMorxIsQuick: one character set in
+// TestMORXThirtysix, which HarfBuzz gives up on in a millisecond, is set in
+// well under one: the machine stops where the run's allowance, 65,536 for a
+// short run, is spent. It took three seconds, the glyphs every rewind
+// shifted uncharged, and the run grew to 16,385 glyphs.
+func TestOneCharacterOfARunawayMorxIsQuick(t *testing.T) {
+	f := thirtysix(t)
+	for _, text := range []string{"A", "A\u0301"} {
+		start := time.Now()
+		glyphs, _ := f.ShapeGlyphs(text)
+		took := time.Since(start)
+		t.Logf("%q: %d glyphs in %v", text, len(glyphs), took)
+		if took > 500*time.Millisecond {
+			t.Errorf("%q took %v", text, took)
+		}
 	}
 }

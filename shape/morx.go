@@ -611,15 +611,24 @@ func (b *aatBuf) moveTo(i int) bool {
 		b.idx += count
 	case n > i:
 		count := n - i
+		if b.idx < count {
+			// shift_forward: room in front of the position, which moves the
+			// rest of the run, and is charged for that as HarfBuzz charges
+			// it. Uncharged, an insertion that does not advance grows the
+			// run by a glyph a transition and moves all of it each time, and
+			// one "A" of TestMORXThirtysix took three seconds.
+			if b.maxOps -= len(b.info) - b.idx; b.maxOps < 0 {
+				b.ok = false
+				return false
+			}
+			grow, n := count-b.idx, len(b.info)
+			b.info = append(b.info, make([]Glyph, grow)...)
+			copy(b.info[b.idx+grow:], b.info[b.idx:n])
+			b.idx += grow
+		}
 		if b.maxOps -= count; b.maxOps < 0 {
 			b.ok = false
 			return false
-		}
-		if b.idx < count {
-			// shift_forward: room in front of the position.
-			grow := count - b.idx
-			b.info = append(b.info[:b.idx], append(make([]Glyph, grow), b.info[b.idx:]...)...)
-			b.idx += grow
 		}
 		b.idx -= count
 		copy(b.info[b.idx:], b.out[i:])
