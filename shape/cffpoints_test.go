@@ -148,7 +148,8 @@ func TestCFFPointsAreFreeTypes(t *testing.T) {
 		label := ft.name + "@" + ft.location
 		compared, diverged := 0, 0
 		for gid, want := range ft.glyphs {
-			got := pointsText(f.cffContourPoints(gid))
+			points, _ := f.cffContourPoints(gid)
+			got := pointsText(points)
 			if ft.kind == "hash" {
 				if want == "none" {
 					t.Errorf("%s glyph %d: FreeType loads no outline", label, gid)

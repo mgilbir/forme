@@ -317,31 +317,35 @@ func (f *Face) cffSegments(gid int, c *outlineCache) ([]Segment, error) {
 // charstring itself, never a VARC table's composition of it, since FreeType's
 // CFF loader reads none; a seac's accent before its base; and an allowance of
 // its own, since kerx asks for a glyph's points once for each attachment and
-// what it asks must not spend the face's drawing budget.
-func (f *Face) cffPointSegments(gid int) []Segment {
+// what it asks must not spend the face's drawing budget. work is what the
+// charstring spent of that allowance, which kerx charges to the run it is
+// shaping (kerxRun.contourPoint), so that the allowance bounds one glyph's
+// reading and the run's limits bound how many are read.
+func (f *Face) cffPointSegments(gid int) (segs []Segment, work int) {
 	ink := f.ink
 	ink.load()
 	o, run := ink.outlines, gid
 	switch {
 	case gid < 0:
-		return nil
+		return nil, 0
 	case ink.cff2 != nil:
 		if gid >= ink.numGlyphs {
-			return nil
+			return nil, 0
 		}
 		o, run = &cffOutlines{charStrings: [][]byte{ink.cff2.glyph(gid)}}, 0
 	case o == nil, gid >= len(o.charStrings):
-		return nil
+		return nil, 0
 	}
 	var pen outlinePen
-	r := t2Run{o: o, budget: font.NewBudget(maxFontWork), draw: true, path: pen.add, accentFirst: true}
+	budget := font.NewBudget(maxFontWork)
+	r := t2Run{o: o, budget: budget, draw: true, path: pen.add, accentFirst: true}
 	ink.mu.Lock()
 	_, ok := r.bounds(run, false)
 	ink.mu.Unlock()
 	if !ok || r.spent || r.capped {
-		return nil
+		return nil, budget.Spent()
 	}
-	return pen.segs
+	return pen.segs, budget.Spent()
 }
 
 var errOutlineWork = errors.New("shape: drawing the face's glyphs has run past the work one face may spend on it")
