@@ -2201,6 +2201,9 @@ Files:   testdata/harfbuzz/fonts/KerxPairs.ttf
          testdata/harfbuzz/fonts/KerxPlanLegacyKern.ttf
          testdata/harfbuzz/fonts/TrakCases.ttf
          testdata/harfbuzz/fonts/TrakNoSTAT.ttf
+         testdata/harfbuzz/fonts/TrakTracksPastEnd.ttf
+         testdata/harfbuzz/fonts/TrakSizesPastEnd.ttf
+         testdata/harfbuzz/fonts/TrakValuesPastEnd.ttf
 Source:  testdata/harfbuzz/aatpos_fixture.py, in this repository, which
          builds them with fontTools
 Licence: the licence in LICENSE; they are not anyone else's work

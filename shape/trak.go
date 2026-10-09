@@ -29,17 +29,55 @@ const coreTextDefaultSize = 12
 // readTrak is a face's trak where HarfBuzz applies it — the face has a STAT
 // too — and nil otherwise: no trak, one whose major version is not 1, or no
 // STAT.
+//
+// A direction whose TrackData does not fit the table is not tracked, as
+// HarfBuzz's sanitizer neuters the offset to it: its tracks, its sizes, or
+// any track's values reaching past the end of the table. The copy that says
+// so is made only for such a table. Read as the rest of the table reads, a
+// past-the-end size or value as zero, a twenty-byte table stating 65,535
+// tracks of 65,535 sizes was walked two hundred thousand steps at every run,
+// and gave tracking HarfBuzz does not: an interpolation towards the zeros, or
+// zero tracks whose interpolation divided nought by nought.
 func readTrak(tables map[string][]byte) []byte {
 	t, stat := tables["trak"], tables["STAT"]
 	if len(t) < 12 || font.Be16(t, 0) != 1 || len(stat) < 4 || font.Be32(stat, 0) == 0 {
 		return nil
 	}
+	for _, field := range []int{6, 8} {
+		if at := font.Be16(t, field); at != 0 && !trackDataFits(t, at) {
+			t = append([]byte(nil), t...)
+			t[field], t[field+1] = 0, 0
+		}
+	}
 	return t
 }
 
+// trackDataFits is TrackData::sanitize: the TrackData at an offset, its size
+// table and its tracks, and each track's values, all within the table. Once
+// it holds, a walk of the tracks or the sizes reads only what the table holds.
+func trackDataFits(t []byte, at int) bool {
+	if len(t)-at < 8 {
+		return false
+	}
+	tracks, sizes := font.Be16(t, at), font.Be16(t, at+2)
+	if sizeTable := int(font.Be32(t, at+4)); sizeTable > len(t) || len(t)-sizeTable < 4*sizes {
+		return false
+	}
+	if len(t)-at-8 < 8*tracks {
+		return false
+	}
+	for i := range tracks {
+		if values := font.Be16(t, at+8+8*i+6); values > len(t) || len(t)-values < 2*sizes {
+			return false
+		}
+	}
+	return true
+}
+
 // tracking is trak::get_h_tracking or get_v_tracking: the normal track at a
-// size, in font units, rounded as HarfBuzz rounds it.
-func (f *Face) tracking(vertical bool, size float64) int {
+// size, in font units, rounded as HarfBuzz rounds it; and the steps finding
+// it took, a track or a size each.
+func (f *Face) tracking(vertical bool, size float64) (v, steps int) {
 	t := f.trak
 	data := font.Be16(t, 6)
 	if vertical {
@@ -50,22 +88,24 @@ func (f *Face) tracking(vertical bool, size float64) int {
 		ptem = coreTextDefaultSize
 	}
 	if data == 0 {
-		return 0
+		return 0, 0
 	}
-	return int(math.Round(float64(trackingAt(t, data, ptem))))
+	value, steps := trackingAt(t, data, ptem)
+	return int(math.Round(float64(value))), steps
 }
 
 // trackingAt is TrackData::get_tracking for the normal track, 0: the value
-// of the track, or of the two either side of it interpolated, at a size.
-func trackingAt(t []byte, at int, ptem float32) float32 {
+// of the track, or of the two either side of it interpolated, at a size; and
+// the tracks and sizes it stepped over.
+func trackingAt(t []byte, at int, ptem float32) (float32, int) {
 	if len(t)-at < 8 {
-		return 0
+		return 0, 0
 	}
 	n := font.Be16(t, at)
 	if n == 0 {
-		return 0
+		return 0, 0
 	}
-	sizes := trackSizes{t: t, at: int(font.Be32(t, at+4)), n: font.Be16(t, at+2)}
+	sizes := &trackSizes{t: t, at: int(font.Be32(t, at+4)), n: font.Be16(t, at+2)}
 	entry := func(i int) int { return at + 8 + 8*i }
 	trackValue := func(i int) float32 {
 		p := entry(i)
@@ -75,7 +115,8 @@ func trackingAt(t []byte, at int, ptem float32) float32 {
 		return float32(int32(font.Be32(t, p))) / 65536
 	}
 	if n == 1 {
-		return sizes.value(entry(0), ptem)
+		v := sizes.value(entry(0), ptem)
+		return v, sizes.steps
 	}
 	const track = 0
 	i, j := 0, n-1
@@ -85,24 +126,27 @@ func trackingAt(t []byte, at int, ptem float32) float32 {
 	for j > 0 && trackValue(j-1) >= track {
 		j--
 	}
+	steps := i + (n - 1 - j)
 	if i == j {
-		return sizes.value(entry(i), ptem)
+		v := sizes.value(entry(i), ptem)
+		return v, steps + sizes.steps
 	}
 	t0, t1 := trackValue(i), trackValue(j)
 	k := float32((track - t0) / (t1 - t0))
 	a, b := sizes.value(entry(i), ptem), sizes.value(entry(j), ptem)
-	return a + k*(b-a)
+	return a + k*(b-a), steps + sizes.steps
 }
 
 // trackSizes is a TrackData's size table: the sizes, in points, its tracks
-// state values at.
+// state values at; and the sizes value has stepped over.
 type trackSizes struct {
 	t     []byte
 	at, n int
+	steps int
 }
 
 // size is the i-th size, and zero past what the table holds.
-func (s trackSizes) size(i int) float32 {
+func (s *trackSizes) size(i int) float32 {
 	p := s.at + 4*i
 	if p < 0 || len(s.t)-p < 4 {
 		return 0
@@ -111,7 +155,7 @@ func (s trackSizes) size(i int) float32 {
 }
 
 // valueAt is a track's i-th value, and zero past what the table holds.
-func (s trackSizes) valueAt(entry, i int) int {
+func (s *trackSizes) valueAt(entry, i int) int {
 	if len(s.t)-entry < 8 {
 		return 0
 	}
@@ -124,7 +168,7 @@ func (s trackSizes) valueAt(entry, i int) int {
 
 // value is TrackTableEntry::get_value: a track's value at a size, the
 // nearest at either end, and interpolated between the two sizes either side.
-func (s trackSizes) value(entry int, ptem float32) float32 {
+func (s *trackSizes) value(entry int, ptem float32) float32 {
 	if s.n == 0 {
 		return 0
 	}
@@ -135,6 +179,7 @@ func (s trackSizes) value(entry int, ptem float32) float32 {
 	for i < s.n && s.size(i) < ptem {
 		i++
 	}
+	s.steps += i
 	switch {
 	case i == 0:
 		return float32(s.valueAt(entry, 0))
@@ -166,7 +211,12 @@ func (s trackSizes) value(entry int, ptem float32) float32 {
 // run, in the order its characters are written.
 func (sh shaper) applyTrak(buf []Glyph) {
 	vertical := sh.features.Vertical
-	v := sh.f.scale(sh.f.tracking(vertical, sh.features.PointSize))
+	units, steps := sh.f.tracking(vertical, sh.features.PointSize)
+	// The tracks and sizes stepped over, as a subtable's rules tried are
+	// charged: a valid table of 65,535 tracks is half a megabyte, and walked
+	// at every run.
+	sh.work().spend(int64(steps) + 1)
+	v := sh.f.scale(units)
 	if v == 0 {
 		return
 	}

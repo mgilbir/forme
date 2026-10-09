@@ -303,3 +303,74 @@ func TestTheSubtablesAMorxOrKerxTriesAreCharged(t *testing.T) {
 		}
 	}
 }
+
+// trakFace is a face tracked by a trak of the given tracks, each at a value
+// below the normal track, of one size, so that finding the normal track
+// steps over every one; or, where tracks is negative, a twelve-byte header
+// and a TrackData stating 65,535 tracks of 65,535 sizes and holding none.
+func trakFace(t *testing.T, tracks int) *Face {
+	t.Helper()
+	trak := u16(u32(nil, 0x00010000), 0, 12, 0, 0)
+	if tracks < 0 {
+		trak = u32(u16(trak, 0xFFFF, 0xFFFF), 20)
+	} else {
+		sizes := 12 + 8 + 8*tracks
+		values := sizes + 4
+		trak = u32(u16(trak, tracks, 1), sizes)
+		for range tracks {
+			trak = u16(u32(trak, -65536), 256, values)
+		}
+		trak = u16(u32(trak, 12<<16), 25)
+	}
+	stat := u16(nil, 1, 1, 8, 0, 0, 0, 0, 0, 0, 0)
+	return costFace(t, map[string][]byte{"trak": trak, "STAT": stat})
+}
+
+// trakWork is what a run on trakFace is charged, and its first glyph's
+// advance.
+func trakWork(t *testing.T, tracks int) (int64, float64) {
+	t.Helper()
+	f := trakFace(t, tracks)
+	r, err := f.ShapeGlyphsBounded(context.Background(), RunInput{Text: "abc"}, RunLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r.Work, r.Glyphs[0].XAdvance
+}
+
+// TestATrakThatDoesNotFitIsNotWalked: a TrackData stating more tracks or
+// sizes than its table holds is refused, as HarfBuzz's sanitizer refuses it,
+// and not walked at every run. Read as zeros past the end of the table, a
+// header of twenty bytes stating 65,535 tracks of 65,535 sizes was 131,070
+// steps a run, and divided nought by nought for its tracking. That the
+// refusal is HarfBuzz's is held by the Trak*PastEnd faces in
+// TestAATPositioningAgreesWithHarfBuzz.
+func TestATrakThatDoesNotFitIsNotWalked(t *testing.T) {
+	work, advance := trakWork(t, -1)
+	_, untracked := trakWork(t, 0)
+	t.Logf("%d units, advancing %v", work, advance)
+	if work > 100 {
+		t.Errorf("a run on a trak stating 65,535 tracks it does not hold cost %d units", work)
+	}
+	if advance != untracked {
+		t.Errorf("it was tracked: the first glyph advances %v, and %v untracked", advance, untracked)
+	}
+}
+
+// TestTheTracksATrakWalksAreCharged: the tracks a run steps over to find the
+// normal track are charged, as a subtable's rules tried are, so that a valid
+// table of tens of thousands of tracks, walked at every run, is charged for
+// it.
+func TestTheTracksATrakWalksAreCharged(t *testing.T) {
+	small, smallAdvance := trakWork(t, 1000)
+	large, _ := trakWork(t, 4000)
+	_, untracked := trakWork(t, 0)
+	t.Logf("%d units at 1,000 tracks, %d at 4,000", small, large)
+	if smallAdvance == untracked {
+		t.Fatal("the run was not tracked, so the tracks were never walked")
+	}
+	if float64(large) < 3*float64(small) {
+		t.Errorf("a trak of 4,000 tracks cost a run %d units and one of 1,000 cost %d: "+
+			"the tracks walked are not charged", large, small)
+	}
+}
