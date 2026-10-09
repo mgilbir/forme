@@ -104,6 +104,10 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 	}
 	ask := l.variationAsk(b)
 	r := ask.r
+	var fams *boxFamilies
+	if hasRanges {
+		fams = l.familiesOf(b)
+	}
 
 	// The cluster starts, so every cluster is [at[i], at[i+1]).
 	//
@@ -158,7 +162,7 @@ func (l *layouter) faceRunsFor(b *Box, primary *shape.Face, text string) []faceR
 			// faces all exclude this character has nothing for it and the next
 			// one the author named is asked — which is what a unicode-range is
 			// written to make happen.
-			if named, found := l.namedFaceFor(b, ask, cluster); found {
+			if named, found := l.namedFaceFor(fams, ask, cluster); found {
 				want = named
 			}
 		}
@@ -401,14 +405,43 @@ func (l *layouter) familyListIsRestricted(b *Box) bool {
 // for a font-family list and is what makes "high-a-only, deep-b-only" mean what
 // it says. A cluster no named family covers comes back false and is left to the
 // primary face and the fallback set, exactly as before.
-func (l *layouter) namedFaceFor(b *Box, ask variationAsk, cluster string) (*shape.Face, bool) {
-	src := sourceOf(boxElement(b))
-	for _, family := range parseFamilyList(b.Style.Get("font-family")) {
-		if face, ok := styledFace(l.fontSet, l.inst, l.rec, src, family, cluster, ask); ok {
+//
+// It is asked once per cluster, so what does not depend on the cluster is
+// worked out once per box, in boxFamilies.
+func (l *layouter) namedFaceFor(fams *boxFamilies, ask variationAsk, cluster string) (*shape.Face, bool) {
+	for _, family := range fams.list {
+		if face, ok := styledFaceMemo(l.fontSet, l.inst, l.rec, fams.src, family, cluster, ask, fams.instances); ok {
 			return face, true
 		}
 	}
 	return nil, false
+}
+
+// boxFamilies is what namedFaceFor needs of a box that does not change from
+// one cluster to the next: the family list, parsed; where a finding points; and
+// the instance each face it has met is set in.
+//
+// The instances are remembered because finding one spells the location out
+// (instanceCoords, spellCoords) to look it up, and for a variable webfont that
+// was a tenth of the time a mixed-script page in it took to lay out — the same
+// answer, worked out again for every character. The answer depends on the face,
+// the rule that offered it and how it matched, and on the box's request, which
+// is the same for every cluster of the box: so it is kept per box, by the
+// first three. The instancer's own answers never change once given — an
+// instance cut is kept and one refused stays refused — so asking it again
+// could only have said the same.
+type boxFamilies struct {
+	list      []string
+	src       Source
+	instances map[instancedFor]*shape.Face
+}
+
+func (l *layouter) familiesOf(b *Box) *boxFamilies {
+	return &boxFamilies{
+		list:      parseFamilyList(b.Style.Get("font-family")),
+		src:       sourceOf(boxElement(b)),
+		instances: map[instancedFor]*shape.Face{},
+	}
 }
 
 // instancedFallback is the set's fallback lookup for a box, with the face it
