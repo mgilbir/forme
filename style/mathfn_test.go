@@ -475,3 +475,28 @@ func TestAMathFunctionInAFontSizeComputesToPixels(t *testing.T) {
 		}
 	}
 }
+
+// TestADimensionPastTheUnitRangeIsTheLargestLength: a value an implementation
+// cannot hold "must be converted to the closest value supported" (CSS Values 3
+// §4), and the arithmetic already saturates, so "calc(1e9px)" reads as
+// "calc(1e9 * 1px)" does rather than being refused, inside a function too.
+func TestADimensionPastTheUnitRangeIsTheLargestLength(t *testing.T) {
+	read := func(in string) Length {
+		t.Helper()
+		vals, _ := css.ParseComponentValues(in)
+		l, unsupported, ok := ParseLength(vals, calcCtx)
+		if !ok || unsupported {
+			t.Fatalf("%s was not read (ok=%v, unsupported=%v)", in, ok, unsupported)
+		}
+		return l
+	}
+	want := read("calc(1e9 * 1px)")
+	for _, in := range []string{"calc(1e9px)", "max(1px, 1e9px)", "min(1e9px, 2e9px)", "clamp(0px, 1e9px, 2e9px)"} {
+		if got := read(in); got != want {
+			t.Errorf("%s is %+v, want %+v as calc(1e9 * 1px) reads", in, got, want)
+		}
+	}
+	if got, want := read("calc(-1e9px)"), read("calc(-1e9 * 1px)"); got != want {
+		t.Errorf("calc(-1e9px) is %+v, want %+v", got, want)
+	}
+}

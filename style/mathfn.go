@@ -348,10 +348,11 @@ func (c *mathCompiler) token(t css.Token) (mathNode, bool) {
 			if !supported || !known {
 				return mathNode{}, false
 			}
-			u, fits := FromPx(t.Number * px)
-			if !fits {
-				return mathNode{}, false
-			}
+			// Saturated, as the arithmetic saturates: "calc(1e9px)" is
+			// "calc(1e9 * 1px)", the largest length there is, and a value
+			// an implementation cannot hold "must be converted to the
+			// closest value supported" (CSS Values 3 §4).
+			u, _ := FromPx(t.Number * px)
 			return mathNode{code: leaf(opNum, k, float64(u)), typ: typ}, true
 		}
 		// A time, a frequency, a resolution or a flex: types this engine
