@@ -109,6 +109,9 @@ func parseVarStore(t []byte) (*varStore, error) {
 	// list is as long as its bytes allow, and parsing it once per offset was
 	// that length once per offset.
 	parsed := map[int]int{}
+	// What the groups may name between them is bounded by the store's size:
+	// see varStoreRegionAllowance.
+	allowance := varStoreRegionAllowance(t)
 	for i := range s.data {
 		off := int(font.Be32(t, 8+4*i))
 		if off < 0 || off+6 > len(t) {
@@ -118,7 +121,7 @@ func parseVarStore(t []byte) (*varStore, error) {
 			s.data[i] = s.data[first]
 			continue
 		}
-		d, err := parseVarStoreData(t[off:], regionCount)
+		d, err := parseVarStoreData(t[off:], regionCount, &allowance)
 		if err != nil {
 			return nil, fmt.Errorf("the item variation store's group %d: %w", i, err)
 		}
@@ -128,7 +131,17 @@ func parseVarStore(t []byte) (*varStore, error) {
 	return s, nil
 }
 
-func parseVarStoreData(b []byte, regionCount int) (varStoreData, error) {
+// varStoreRegionAllowance is how many region indices the groups of a store may
+// name between them. Each is two bytes of the store, and groups that do not
+// overlap cannot name more than the store holds.
+//
+// A group is parsed wherever its offset points, and the memo in parseVarStore
+// is by exact offset, so a store whose group offsets are a few bytes apart over
+// one block that reads as a long region list at every one of them names that
+// list once per offset, and keeps each as a slice of eight-byte integers.
+func varStoreRegionAllowance(t []byte) int { return len(t) / 2 }
+
+func parseVarStoreData(b []byte, regionCount int, allowance *int) (varStoreData, error) {
 	var d varStoreData
 	itemCount := font.Be16(b, 0)
 	wordDeltaCount := font.Be16(b, 2)
@@ -141,6 +154,10 @@ func parseVarStoreData(b []byte, regionCount int) (varStoreData, error) {
 	if wordCount > regionIndexCount {
 		return d, fmt.Errorf("it states %d long columns of %d", wordCount, regionIndexCount)
 	}
+	if regionIndexCount > *allowance {
+		return d, errors.New("the store's groups name more regions between them than its size can state")
+	}
+	*allowance -= regionIndexCount
 	d.regions = make([]int, regionIndexCount)
 	for i := range d.regions {
 		r := font.Be16(b, 6+2*i)
