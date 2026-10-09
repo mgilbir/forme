@@ -72,10 +72,12 @@ import (
 //     backgrounds and borders and are painted with them; and a box broken
 //     across columns, whose fragments have no one border box to turn about.
 //
-// A transform that does not apply is reported as well: CSS Transforms 1 §1.2
+// A transform that does not apply is not reported: CSS Transforms 1 §1.2
 // gives it to transformable elements only, which a non-atomic inline box, a
 // table column and a column group are not, and a browser does not transform
-// them either.
+// them either. Drawing one untransformed is the right page, as a margin on a
+// ::first-line ignored is, and a finding would keep a correct page off the
+// clean count.
 //
 // A matrix that is not invertible — "scale(0)" — is applied and not refused:
 // §6 says such a box "and its content do not get displayed", which is a page
@@ -232,27 +234,6 @@ func (l *layouter) resolveTransforms(root *Fragment) {
 	if root == nil || root.Box == nil {
 		return
 	}
-	// The boxes a transform does not apply to, which have no fragment of
-	// their own to decide it on, or one that does not count.
-	// Once per element, however many boxes §9.2.1.1 made of an inline one.
-	once := map[groupKey]bool{}
-	var boxes func(b *Box)
-	boxes = func(b *Box) {
-		if k := (groupKey{b.Element, b.Pseudo}); declaresTransform(b) && !transformable(b) && !once[k] {
-			once[k] = true
-			what := "a non-atomic inline box"
-			if !isInlineBox(b) {
-				what = "a table column or column group"
-			}
-			l.reportTransform(b, "a transform does not apply to "+what+
-				" (CSS Transforms 1 §1.2), and a browser does not transform one either")
-		}
-		for _, c := range b.Children {
-			boxes(c)
-		}
-	}
-	boxes(root.Box)
-
 	pieces := map[*Box]int{}
 	var count func(f *Fragment)
 	count = func(f *Fragment) {

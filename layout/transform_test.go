@@ -413,10 +413,15 @@ func TestATransformedBoxContainsWhatIsPositionedInside(t *testing.T) {
 }
 
 // TestATransformDoesNotApplyToAnInlineBox: CSS Transforms 1 §1.2. The span
-// is not transformed, and that is reported.
+// is not transformed, which is the page a browser draws, so nothing is
+// reported; a cell and the root, which this engine does not turn, are.
 func TestATransformDoesNotApplyToAnInlineBox(t *testing.T) {
+	_, findings := transformPaint(t, `<div><span id="i">ab</span></div>`,
+		noDefaults+`#i { transform: translateX(10px) }`)
+	if got := transformFindings(findings); len(got) != 0 {
+		t.Errorf("a transform on a non-atomic inline box, which does not apply, was reported: %v", got)
+	}
 	for _, tc := range []struct{ doc, css, why string }{
-		{`<div><span id="i">ab</span></div>`, `#i { transform: translateX(10px) }`, "non-atomic inline box"},
 		{`<table><tr><td id="i">a</td></tr></table>`, `#i { transform: translateX(10px) }`, "cell"},
 		{`<p>a</p>`, `html { transform: translateX(10px) }`, "root element"},
 	} {
