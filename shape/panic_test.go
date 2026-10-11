@@ -398,7 +398,9 @@ func FuzzLoadAndUse(f *testing.F) {
 //     purpose — see the note on Subset — and hmtx is kept at full length, so
 //     this is a property the design promises rather than one it merely happens
 //     to have. A width that moved is a line drawn to the wrong length with the
-//     right letters in it.
+//     right letters in it. A CID-keyed face is the exception the note names:
+//     its subset is renumbered, and each kept glyph is asked for at its new
+//     index.
 //
 // An error is a legitimate answer and is not one of the three: a standard font
 // has no program to subset, and a font whose loca and glyf disagree is one
@@ -435,8 +437,19 @@ func checkSubset(t *testing.T, f *Face) {
 	if err != nil || sub == nil {
 		t.Fatalf("the subset this package wrote cannot be read back: %v", err)
 	}
-	for _, gid := range kept {
-		if got, want := sub.advanceGID(gid), f.advanceGID(gid); got != want {
+	// A CID-keyed face's subset is renumbered, glyph i of the program being
+	// kept[i] of the face (see SubsetGlyphs), and holds the kept glyphs and no
+	// others. Every other subset keeps the face's numbering.
+	renumbered := f.IsCIDKeyed()
+	if renumbered && sub.NumGlyphs() != len(kept) {
+		t.Fatalf("the subset holds %d glyphs and kept %d", sub.NumGlyphs(), len(kept))
+	}
+	for i, gid := range kept {
+		at := gid
+		if renumbered {
+			at = i
+		}
+		if got, want := sub.advanceGID(at), f.advanceGID(gid); got != want {
 			t.Fatalf("glyph %d advances %v in the subset and %v in the font",
 				gid, got, want)
 		}
