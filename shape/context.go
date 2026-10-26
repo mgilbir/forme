@@ -618,6 +618,36 @@ input:
 	return matched
 }
 
+// firstInputMisses is matchInput's answer, and its charge, for a coverage
+// form's rule whose first input coverage, at off in sub, does not hold the
+// glyph the rule is tried at: no match, having looked at one glyph. It is
+// asked before the rule's positions are set aside and matchInput is called,
+// which for a rule that does not start here was most of the time a format 3
+// subtable took: a subtable is tried at every glyph of the run its lookup is
+// for, and at most of them its first coverage does not hold the glyph.
+//
+// It answers only where matchInput would have looked at that glyph and no
+// other. A rule longer than matchInput takes is refused there without a
+// charge, so it is left to it. So would a glyph the lookup steps over be, which
+// matchInput looks past; but the glyph a subtable is tried at is never one —
+// applyGSUBAt and applyGPOSAt refuse it first, under the same flags and mark
+// set — so it is not asked again here.
+func (sh shaper) firstInputMisses(sub []byte, off int, buf []Glyph, at, count int) bool {
+	if firstInputPrecheckOff || count < 1 || count > maxContextLength || at < 0 || at >= len(buf) {
+		return false
+	}
+	if _, ok := coverageIndex(sub, off, buf[at].GID); ok {
+		return false
+	}
+	sh.work().spend(1)
+	return true
+}
+
+// firstInputPrecheckOff turns firstInputMisses off, so that a test can shape
+// the same text with and without it and require the glyphs and the work
+// charged to agree. Nothing else sets it.
+var firstInputPrecheckOff bool
+
 // ligbaseState is what sameLigaturePart has found out about the ligature the
 // first glyph of an input belongs to: not yet asked, or whether the lookup
 // steps over it.
@@ -782,6 +812,9 @@ func (sh shaper) sequenceContext(sub []byte, buf []Glyph, at, flags, depth int) 
 		glyphCount := font.Be16(sub, 2)
 		recCount := font.Be16(sub, 4)
 		if glyphCount < 1 || 6+2*glyphCount > len(sub) {
+			return 0, buf, false
+		}
+		if sh.firstInputMisses(sub, font.Be16(sub, 6), buf, at, glyphCount) {
 			return 0, buf, false
 		}
 		var in ruleInput
@@ -1001,6 +1034,9 @@ func (sh shaper) chainedFormat3(sub []byte, buf []Glyph, at, flags, depth int) (
 	covers := func(listAt, k, gid int) bool {
 		_, ok := coverageIndex(sub, font.Be16(sub, listAt+2*k), gid)
 		return ok
+	}
+	if sh.firstInputMisses(sub, font.Be16(sub, inputAt), buf, at, inputCount) {
+		return 0, buf, false
 	}
 	var in ruleInput
 	if !sh.matchInput(buf, at, inputCount, flags, &in, func(k, pos int) bool {
