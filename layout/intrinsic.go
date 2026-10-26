@@ -772,7 +772,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 					runEdge = runEdge.Add(w)
 				} else {
 					runEdge = 0
-					runTail.Add(item.Level, trailingSpacingOf(item))
+					runTail.Place(item, trailingSpacingOf(item))
 				}
 			} else {
 				// The run ends at the space — but on which side of it depends on
@@ -806,7 +806,7 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 				edge = edge.Add(w)
 			} else {
 				edge = 0
-				lineTail.Add(item.Level, trailingSpacingOf(item))
+				lineTail.Place(item, trailingSpacingOf(item))
 			}
 
 		case item.Anywhere && !item.NoWrap:
@@ -829,8 +829,8 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 			line = line.Add(item.Width)
 			runText, lineText = true, true
 			edge, runEdge = 0, 0
-			lineTail.Add(item.Level, trailingSpacingOf(item))
-			runTail.Add(item.Level, trailingSpacingOf(item))
+			lineTail.Place(item, trailingSpacingOf(item))
+			runTail.Place(item, trailingSpacingOf(item))
 
 		default:
 			if item.BreakBefore && !item.NoWrap && !item.LastResort &&
@@ -884,8 +884,8 @@ func (l *layouter) widthsOf(items []inlineItem) (out intrinsicWidths, split line
 				// and the padding after it is not, so the box is as wide as the
 				// text and the two paddings and no wider.
 				edge, runEdge = 0, 0
-				lineTail.Add(item.Level, trailingSpacingOf(item))
-				runTail.Add(item.Level, trailingSpacingOf(item))
+				lineTail.Place(item, trailingSpacingOf(item))
+				runTail.Place(item, trailingSpacingOf(item))
 				runText, lineText = true, true
 			}
 		}
