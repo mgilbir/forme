@@ -886,11 +886,12 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		defer func() { b.boundary, b.openSpaces = saved, savedSpaces }()
 	}
 
-	// An atomic inline is not text a run of white space can be decided across,
-	// and neither is what is inside it. See closesOpenRun.
-	closesRun := closesOpenRun(box, n)
-	if closesRun {
-		b.boundary.Open = paragraph.OpenRun{}
+	// An atomic inline is one character in the text around it, and what is
+	// inside it is none of that text: an inline-block's content begins its own
+	// text, as a block's does. See standsAsAnObject.
+	object := standsAsAnObject(box, n)
+	if object {
+		b.boundary = textBoundary{}
 	}
 
 	// ::before and ::after bracket the element's own children rather than
@@ -969,23 +970,39 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// invisible, which is the pair this whole vocabulary exists to avoid.
 		b.boundary = textBoundary{}
 	}
-	if closesRun {
-		b.boundary.Open = paragraph.OpenRun{}
+	if object {
+		// And the text after it follows the object rather than anything
+		// before it. See standsAsAnObject for why that is no text at all.
+		b.boundary = textBoundary{}
 	}
 	return box
 }
 
-// closesOpenRun reports whether a box ends a run of white space held open across
-// it, which an atomic inline does: a picture or an inline-block beside a segment
-// break is what the break is beside, and §4.1.1's rules about the characters
-// either side of it are not about the text past it. css-text-4's "intervening
-// inline box boundaries must be ignored" is about inline boxes, and an atomic
-// inline is the one inline-level box that is not one. See paragraph.OpenRun.
+// standsAsAnObject reports whether a box is one character in the text around
+// it, U+FFFC OBJECT REPLACEMENT CHARACTER, which an atomic inline is: a picture
+// or an inline-block beside a segment break is what the break is beside, and
+// §4.1.1's rules about the characters either side of it are not about the text
+// past it. css-text-4's "intervening inline box boundaries must be ignored" is
+// about inline boxes, and an atomic inline is the one inline-level box that is
+// not one.
 //
-// Only the open run, and not the rest of the boundary: the text before a break
-// is carried through these boxes as it always was, and the question of whether
-// it should be is a different change from this one.
-func closesOpenRun(box *Box, n *html.Node) bool {
+// Both ways round, and for the same reason. The text after the object does not
+// take up a run of white space the text before it left open (paragraph.OpenRun),
+// and the text before it is not the character before a break that follows it.
+// "漢\n<img>字" and "漢<img>\n字" both keep their space. Blink builds its text
+// the same way, with a U+FFFC for each atomic inline, and decides a break after
+// one from that character.
+//
+// The boundary an object leaves is the empty one a block edge leaves, rather
+// than one holding U+FFFC, because no rule tells the two apart: U+FFFC is not a
+// zero width space, its East Asian Width is Neutral, and it is not punctuation
+// of width Ambiguous, so a break beside it is a space exactly as a break beside
+// nothing is. A planted U+FFFC changed no test and no reftest. What does matter
+// is that nothing of the text before is carried: not the characters, not a run
+// left open, and not Boundary.Collapsed — "a <img> b" is two runs of white
+// space, one either side of the picture, and under "full-width" the second was
+// dropped as the continuation of the first.
+func standsAsAnObject(box *Box, n *html.Node) bool {
 	if box.Outer != OuterInline || box.outOfFlow() {
 		return false
 	}

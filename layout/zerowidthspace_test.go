@@ -268,7 +268,7 @@ func TestTheCharacterAfterTheBreakCrossesABoundaryToo(t *testing.T) {
 // break is what the break is beside, and the text past it is not the character
 // after the break. css-text-4's "intervening inline box boundaries must be
 // ignored" is about inline boxes, and an atomic inline is the inline-level box
-// that is not one. See closesOpenRun.
+// that is not one. See standsAsAnObject.
 func TestAnAtomicInlineEndsTheRunBesideIt(t *testing.T) {
 	for _, src := range []string{
 		`漢` + "\n" + `<img style="width: 10px; height: 10px">字`,
@@ -286,6 +286,59 @@ func TestAnAtomicInlineEndsTheRunBesideIt(t *testing.T) {
 	if len(got) != 1 || got[0] != "漢 " {
 		t.Errorf("a break before an inline-block holding an ideograph left the line %q, "+
 			"want [\"漢 \"]: the ideograph inside it is not after the break", got)
+	}
+}
+
+// TestAnAtomicInlineIsTheCharacterBeforeTheBreak is the other way round from the
+// test above. An atomic inline is one U+FFFC in the text, so a break after one
+// is beside the picture, and the ideograph or the zero width space before the
+// picture is not the character before the break. Blink builds its text the same
+// way and decides the break from that character. See standsAsAnObject.
+func TestAnAtomicInlineIsTheCharacterBeforeTheBreak(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{`漢<img style="width: 10px; height: 10px">` + "\n字", "漢 字"},
+		{`漢<span style="display: inline-block"></span>` + "\n字", "漢 字"},
+		{`aa&#8203;<img style="width: 10px; height: 10px">` + "\nbb", "aa bb"},
+		// The break in a box of its own, after the picture.
+		{`漢<img style="width: 10px; height: 10px"><span>` + "\n字</span>", "漢 字"},
+		// The text inside an inline-block is not before the break either.
+		{`<span style="display: inline-block">漢</span>` + "\n字", " 字"},
+		// The containment: an inline box is not an atomic inline, and the
+		// ideograph before an empty one is still the character before the break.
+		{"漢<span></span>\n字", "漢字"},
+	} {
+		if got := lineTextOf(t, tc.src); got != tc.want {
+			t.Errorf("%q came out %q, want %q", tc.src, got, tc.want)
+		}
+	}
+}
+
+// TestASpaceAfterAnAtomicInlineIsNotTheSpaceBeforeIt. The picture is between the
+// two spaces of "a <img> b", so they are two runs of white space and not one:
+// the flattening keeps both. Under "full-width" the spaces become U+3000 before
+// the flattening sees them, and the bit that says a run continues from the node
+// before was carried through the picture, so the second was dropped.
+func TestASpaceAfterAnAtomicInlineIsNotTheSpaceBeforeIt(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{`a <img style="width: 10px; height: 10px"> b`, "a  b"},
+		{`<span style="text-transform: full-width">a <img style="width: 10px; height: 10px"> b</span>`,
+			"ａ　　ｂ"},
+		// The containment: across an inline box it is one run, and one space.
+		{`<span style="text-transform: full-width">a <span></span> b</span>`, "ａ　ｂ"},
+	} {
+		if got := lineTextOf(t, tc.src); got != tc.want {
+			t.Errorf("%q came out %q, want %q", tc.src, got, tc.want)
+		}
+	}
+	// And the text inside an inline-block begins afresh, as a block's does: its
+	// first space is not the second half of the run before the box.
+	got := lineTextsOf(t, layoutOf(t, 600,
+		`<div id="d">a <span id="ib" style="display: inline-block"> b</span></div>`,
+		`#d { font-family: Courier; font-size: 20px; width: 400px; text-transform: full-width }`), "ib")
+	block := lineTextsOf(t, layoutOf(t, 600, `<div id="d"> b</div>`,
+		`#d { font-family: Courier; font-size: 20px; width: 400px; text-transform: full-width }`), "d")
+	if len(got) != 1 || len(block) != 1 || got[0] != block[0] {
+		t.Errorf("an inline-block after a space set %q, want what a block sets, %q", got, block)
 	}
 }
 
