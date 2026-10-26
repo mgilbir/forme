@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/mgilbir/forme/css"
@@ -626,6 +627,12 @@ type boxBuilder struct {
 	// It is reset where afterWord is, and for the same reason: a block begins
 	// its text afresh, and so does the text after a <br>.
 	boundary textBoundary
+	// openSpaces are the text boxes that wrote a space for the run of white
+	// space boundary.Open says is still open, which the text after it may
+	// decide is no space at all. See paragraph.OpenRun. It is only read while
+	// boundary.Open is set, so every place that resets the boundary ends the
+	// run with it.
+	openSpaces []*Box
 	// chosen is the option each drop-down <select> shows, found once per
 	// select. See controlSkipsChild.
 	chosen map[*html.Node]*html.Node
@@ -874,9 +881,16 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// seg-break-transformation-019 is exactly that shape, four times over:
 		// an absolutely positioned, a fixed and two floated <aside>s written
 		// between a zero-width space and the segment break it suppresses.
-		saved := b.boundary
-		b.boundary = textBoundary{}
-		defer func() { b.boundary = saved }()
+		saved, savedSpaces := b.boundary, b.openSpaces
+		b.boundary, b.openSpaces = textBoundary{}, nil
+		defer func() { b.boundary, b.openSpaces = saved, savedSpaces }()
+	}
+
+	// An atomic inline is not text a run of white space can be decided across,
+	// and neither is what is inside it. See closesOpenRun.
+	closesRun := closesOpenRun(box, n)
+	if closesRun {
+		b.boundary.Open = paragraph.OpenRun{}
 	}
 
 	// ::before and ::after bracket the element's own children rather than
@@ -955,7 +969,28 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 		// invisible, which is the pair this whole vocabulary exists to avoid.
 		b.boundary = textBoundary{}
 	}
+	if closesRun {
+		b.boundary.Open = paragraph.OpenRun{}
+	}
 	return box
+}
+
+// closesOpenRun reports whether a box ends a run of white space held open across
+// it, which an atomic inline does: a picture or an inline-block beside a segment
+// break is what the break is beside, and §4.1.1's rules about the characters
+// either side of it are not about the text past it. css-text-4's "intervening
+// inline box boundaries must be ignored" is about inline boxes, and an atomic
+// inline is the one inline-level box that is not one. See paragraph.OpenRun.
+//
+// Only the open run, and not the rest of the boundary: the text before a break
+// is carried through these boxes as it always was, and the question of whether
+// it should be is a different change from this one.
+func closesOpenRun(box *Box, n *html.Node) bool {
+	if box.Outer != OuterInline || box.outOfFlow() {
+		return false
+	}
+	return isAtomicInline(box) || replacesItsOwnContent(n) || replacedFallback(n) ||
+		(n != nil && n.Namespace == html.NamespaceHTML && ascii.EqualFold(n.Name, "iframe"))
 }
 
 // inMathParent reports whether an element's parent is a MathML element whose
@@ -1233,9 +1268,22 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	if !transformFreezesSpace(kind) {
 		before.Collapsed = false
 	}
+	if !before.Open.Open {
+		b.openSpaces = nil
+	}
 	collapse := preservedInAControl(n, inherited.Get("white-space-collapse"))
-	text := collapseWhitespaceAfter(n.Text, collapse, wst,
+	phase1 := paragraph.CollapseWhitespaceOpen(n.Text, collapse, wst,
 		before, b.writingSystemAt(n))
+	text := phase1.Text
+	// A run the text before left open is decided here, where the character
+	// after it is. Removed, the spaces written for it are taken back; kept,
+	// they stand, and this node wrote nothing more for it than it would have.
+	if phase1.Carried == paragraph.RunRemoved {
+		b.trimOpenSpaces()
+	}
+	if phase1.Carried != paragraph.RunNotCarried || !phase1.Open.Open {
+		b.openSpaces = nil
+	}
 	b.reportPhraseSeparators(n, text, wst)
 	// Whether the run of white space this node ends with is still open, asked
 	// of the collapsed text and *before* the transform below rewrites it. See
@@ -1268,6 +1316,10 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 		// the run it found exactly as open as it was.
 		b.boundary.Collapsed = endsCollapsed
 	}
+	// Whatever the text was, empty included: a node that is all white space
+	// carries the run on, and one that collapsed to nothing is not between the
+	// characters either side of it.
+	b.boundary.Open = phase1.Open
 	if text == "" {
 		return nil
 	}
@@ -1278,10 +1330,41 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 		Outer: OuterInline, Inner: InnerText,
 		Style: inherited, Text: text, FontSize: fontSize, fontSizeKnown: true,
 	}
+	if phase1.WroteOpen {
+		b.openSpaces = append(b.openSpaces, box)
+	}
 	if openSigma >= 0 {
 		b.openSigma, b.openSigmaAt = box, openSigma
 	}
 	return box
+}
+
+// trimOpenSpaces takes back the spaces written for a run of white space that the
+// text after it has decided is none. See paragraph.OpenRun.
+//
+// A box left with no text is taken out of its parent rather than kept empty,
+// for the reason textBox makes none: text that comes to nothing is not on the
+// page. The boxes are all in the inline formatting context the text deciding
+// the run is in — a block boundary would have closed the run — so the context
+// still has content and nothing about the parent's kind changes.
+func (b *boxBuilder) trimOpenSpaces() {
+	for _, t := range b.openSpaces {
+		text, ok := paragraph.TrimOpenSpace(t.Text)
+		if !ok {
+			continue
+		}
+		if text != "" {
+			t.Text = text
+			continue
+		}
+		if p := t.Parent; p != nil {
+			if i := slices.Index(p.Children, t); i >= 0 {
+				p.Children = slices.Delete(p.Children, i, i+1)
+				t.Parent = nil
+			}
+		}
+	}
+	b.openSpaces = nil
 }
 
 // settleSigma decides a ς left open by the text before, from the text that

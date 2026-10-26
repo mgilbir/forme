@@ -208,3 +208,96 @@ func TestTheWidthTablesAreSortedAndDisjoint(t *testing.T) {
 		}
 	}
 }
+
+// TestARunEndingANodeIsDecidedByTheNext is the rule across a node boundary, the
+// direction Boundary's Last and Seen do not reach: the node holding the break
+// ends before the character after it. See OpenRun.
+//
+// Each case is two nodes, and the first is what the second is handed. What is
+// asked of the second is what it decided about the run and what it wrote, which
+// is the whole contract: the caller takes back the first node's space on
+// RunRemoved and on nothing else.
+func TestARunEndingANodeIsDecidedByTheNext(t *testing.T) {
+	collapse := func(text string, before Boundary) Collapsed {
+		return CollapseWhitespaceOpen(text, "normal", WordSpaceTransform{}, before, WritingSystemOther)
+	}
+	after := func(first string) Boundary {
+		c := collapse(first, Boundary{})
+		b := BoundaryAfter(Boundary{}, c.Text)
+		b.Open = c.Open
+		return b
+	}
+
+	first := collapse("漢\n", Boundary{})
+	if first.Text != "漢 " || !first.Open.Open || !first.WroteOpen ||
+		first.Open.Seen != '漢' || !first.Open.Breaks {
+		t.Fatalf("\"漢\\n\" left %+v: the break falls back to a space, and the run "+
+			"is open with the ideograph before it", first)
+	}
+
+	for _, tc := range []struct {
+		first, second, want string
+		fate                RunFate
+	}{
+		// The ideograph after the break takes it away, and nothing is written.
+		{"漢\n", "字", "字", RunRemoved},
+		// White space of the second node's own is part of the same run.
+		{"漢\n", " \n字", "字", RunRemoved},
+		{"漢 ", "\n字", "字", RunRemoved},
+		// A zero-width space after the break is the rule's other neighbour.
+		{"aa\n", "​bb", "​bb", RunRemoved},
+		// A Latin letter keeps the break as the space the first node wrote, and
+		// the second writes nothing more for it than it did before.
+		{"漢\n", "x", "x", RunKept},
+		// And a second node with white space of its own still writes it: the
+		// flattening collapses it into the first, as it always has.
+		{"a ", " x", " x", RunKept},
+	} {
+		got := collapse(tc.second, after(tc.first))
+		if got.Text != tc.want || got.Carried != tc.fate {
+			t.Errorf("%q after %q wrote %q and decided %v, want %q and %v",
+				tc.second, tc.first, got.Text, got.Carried, tc.want, tc.fate)
+		}
+	}
+
+	// A node that is all white space decides nothing and carries the run on,
+	// with the character before it unchanged.
+	mid := collapse(" ", after("漢\n"))
+	if mid.Carried != RunNotCarried || !mid.Open.Open || mid.Open.Seen != '漢' || !mid.Open.Breaks {
+		t.Errorf("\" \" after \"漢\\n\" left %+v, want the run carried on open", mid)
+	}
+
+	// A preserved break is not decided by its neighbours, so nothing is held
+	// open under pre-line and nothing is taken up under pre.
+	if c := CollapseWhitespaceOpen("漢\n", "preserve-breaks", WordSpaceTransform{},
+		Boundary{}, WritingSystemOther); c.Open.Open {
+		t.Errorf("pre-line held its break open: %+v", c)
+	}
+	if c := CollapseWhitespaceOpen("字", "preserve", WordSpaceTransform{},
+		after("漢\n"), WritingSystemOther); c.Carried != RunNotCarried {
+		t.Errorf("pre decided a run it does not collapse: %+v", c)
+	}
+}
+
+// TestTrimOpenSpaceTakesBackTheRunsSpace. The space is the last character but
+// for the bidi controls Phase I writes after a run, and is U+3000 where
+// "full-width" made it one. Anything else was not written for the run.
+func TestTrimOpenSpaceTakesBackTheRunsSpace(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+		ok       bool
+	}{
+		{"漢 ", "漢", true},
+		{" ", "", true},
+		{"漢　", "漢", true},
+		{"漢 ‪⁦", "漢‪⁦", true},
+		{"漢", "漢", false},
+		{"漢 x", "漢 x", false},
+		{"", "", false},
+	} {
+		got, ok := TrimOpenSpace(tc.in)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("TrimOpenSpace(%q) = %q, %v, want %q, %v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}
