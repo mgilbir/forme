@@ -61,8 +61,15 @@ STRINGS = {
     "TrakTracksPastEnd.ttf": ["AA"],
     "TrakSizesPastEnd.ttf": ["AA"],
     "TrakValuesPastEnd.ttf": ["AA"],
+    "TrakTwoNormalTracks.ttf": ["AA"],
+    "TrakEqualTracks.ttf": ["AA"],
+    "TrakFarTracks.ttf": ["AA"],
+    "TrakNearTracks.ttf": ["AA"],
 }
-SIZES = {"TrakCases.ttf": [0, 6, 9, 10.5, 12, 24, 100], "TrakNoSTAT.ttf": [0, 6],
+# A size that is not a number, or is infinite, is one a caller can hand
+# hb_font_set_ptem; HarfBuzz tracks one that is not above zero at 12.
+SIZES = {"TrakCases.ttf": [0, 6, 9, 10.5, 12, 24, 100, float("nan"), float("inf"), float("-inf")],
+         "TrakNoSTAT.ttf": [0, 6],
          "TrakTracksPastEnd.ttf": [0, 6, 30], "TrakSizesPastEnd.ttf": [0, 6, 30],
          "TrakValuesPastEnd.ttf": [0, 6, 30]}
 

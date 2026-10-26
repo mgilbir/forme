@@ -35,6 +35,13 @@
 #   Trak*PastEnd.ttf  its table stating more tracks or sizes than it holds, or
 #                     the normal track's values past its end, which HarfBuzz's
 #                     sanitizer refuses, and does not track
+#   Trak*Tracks.ttf   tracks whose interpolation at the normal track is not a
+#                     number or not a 32-bit one: two at its value, zero
+#                     (nought over nought); two equal ones either side of the
+#                     ones the walk passes (over nought); two a few parts in
+#                     65,536 apart, which carry it past 2^31; and two a quarter
+#                     apart, which do not. C leaves converting the first three
+#                     to an int to the processor; the expectations are x86-64's
 #
 # They are built with fontTools and their timestamps fixed, so that building
 # them again produces the same bytes and the checksums the expectations record
@@ -302,13 +309,15 @@ def ankr():
     return struct.pack(">HHII", 0, 0, lookup_at, data_at) + pad(look) + data_a + data_acute
 
 
-def trak(n_tracks=None, n_sizes=None, past_end=0):
+def trak(n_tracks=None, n_sizes=None, past_end=0, tracks=None):
     """The tracking table. n_tracks and n_sizes state more tracks or sizes
     than it holds, and past_end moves the normal track's values that many
     bytes on, past the end of the table: a TrackData that does not fit,
-    which HarfBuzz's sanitizer refuses, leaving the direction untracked."""
+    which HarfBuzz's sanitizer refuses, leaving the direction untracked.
+    tracks replaces the three tracks, each a value and its values at the
+    three sizes."""
     sizes = [9.0, 12.0, 24.0]
-    tracks = [(-1.0, [-50, -60, -70]), (0.0, [30, 10, -40]), (1.0, [100, 100, 100])]
+    tracks = tracks or [(-1.0, [-50, -60, -70]), (0.0, [30, 10, -40]), (1.0, [100, 100, 100])]
     head = 12
     data = head
     entries_at = data + 8
@@ -323,6 +332,25 @@ def trak(n_tracks=None, n_sizes=None, past_end=0):
     for _, values in tracks:
         out += struct.pack(">%dh" % len(sizes), *values)
     return out
+
+
+# Tracks whose interpolation at the normal track, zero, divides by nothing or
+# by almost nothing. The walk stops at the last track not above zero and the
+# first not below it, looking from either end.
+TRAK_DEGENERATE = {
+    # Two at zero: the walk passes both, and interpolates between them.
+    "TrakTwoNormalTracks": [(-1.0, [-50, -60, -70]), (0.0, [30, 10, -40]), (0.0, [50, 50, 50]),
+                            (1.0, [100, 100, 100])],
+    # The first and last equal, both above zero: -5 over nought.
+    "TrakEqualTracks": [(5.0, [300, 300, 300]), (6.0, [0, 0, 0]), (-1.0, [0, 0, 0]),
+                        (5.0, [-300, -300, -300])],
+    # Six parts in 65,536 apart: -5 over that, times 60,000, is past 2^31.
+    "TrakFarTracks": [(5.0, [-30000, -30000, -30000]), (6.0, [0, 0, 0]), (-1.0, [0, 0, 0]),
+                      (5.0001, [30000, 30000, 30000])],
+    # A quarter apart: -20 times -100, which is still a number.
+    "TrakNearTracks": [(5.0, [100, 100, 100]), (6.0, [0, 0, 0]), (-1.0, [0, 0, 0]),
+                       (5.25, [0, 0, 0])],
+}
 
 
 def raw(tag, data):
@@ -446,6 +474,8 @@ def build(directory):
     save(base("TrakTracksPastEnd", {"trak": trak(n_tracks=60000)}, stat=True), "TrakTracksPastEnd.ttf")
     save(base("TrakSizesPastEnd", {"trak": trak(n_sizes=60000)}, stat=True), "TrakSizesPastEnd.ttf")
     save(base("TrakValuesPastEnd", {"trak": trak(past_end=10)}, stat=True), "TrakValuesPastEnd.ttf")
+    for name, tracks in TRAK_DEGENERATE.items():
+        save(base(name, {"trak": trak(tracks=tracks)}, stat=True), name + ".ttf")
 
 
 if __name__ == "__main__":
