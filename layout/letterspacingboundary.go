@@ -305,19 +305,45 @@ func commonAncestor(a, b *Box) *Box {
 // trailingSpacing is the letter-spacing after the last character of a line,
 // which §8.2 adds and which hangs past the end rather than counting towards it.
 //
-// It is asked of the runs in logical order and looks past an inline box's own
-// edge, which is not a character and carries no spacing of its own.
+// It is the alignment's half of a question the fill and the intrinsic pass ask
+// as well — how much of this line is not width it has to find — and it is
+// answered the way they answer it: paragraph.Rightmost finds the item drawn
+// furthest right, and paragraph.TrailingSpacing says what hangs after it.
+//
+// It used to answer for the *logically last* run with that run's *declared*
+// spacing, which is a second answer to the same question and was wrong three
+// ways the measuring walks had already been corrected for. A cursive run takes
+// no spacing (§8.2), so a right-aligned line ending in Arabic was set two
+// pixels past its edge under "letter-spacing: 2px", and a centred one one
+// pixel off centre. A run of nothing but a formatting character draws no
+// letter, so "&#x61C;<a>ع</a>" was set by the mark's declared value. And the
+// last run of a right-to-left line is its leftmost, so "אב<span
+// letter-spacing:10px>cd</span>" under "direction: rtl" was set by the
+// span's 10px with the Hebrew's 2px the one hanging at the right — eight
+// pixels past the line's edge. See TestAnAlignedLineIsSetByTheSpacingThatHangs.
+//
+// It looks past an inline box's own edge, which is not a character and carries
+// no spacing of its own, and past what is out of flow, which is not on the
+// line. Anything else that is not a run of text — a tab, an atomic inline, a
+// forced break — is drawn where it is and has no letter-spacing after it, so it
+// can hold the place and hangs nothing.
+//
+// The gap §8.1 puts at a run's far edge, which TrailingSpacing counts as well,
+// is not counted twice: dropLineEndGap has already taken it out of the width of
+// the item that ends the line and zeroed it there.
 func trailingSpacing(runs []inlineItem) style.Unit {
-	for i := len(runs) - 1; i >= 0; i-- {
-		if runs[i].Inset {
+	var tail paragraph.Rightmost
+	for _, it := range runs {
+		switch {
+		case it.Inset || it.Abs != nil || it.Float != nil:
 			continue
+		case isSpacedRun(it):
+			tail.Place(it, trailingSpacingOf(it))
+		default:
+			tail.Add(it.Level, 0)
 		}
-		if !isSpacedRun(runs[i]) {
-			return 0
-		}
-		return runs[i].Spacing.Letter
 	}
-	return 0
+	return tail.Tail()
 }
 
 // cursiveTrackingSuppresses reports whether §8.2 takes the letter-spacing off a
