@@ -1,0 +1,4 @@
+go test fuzz v1
+string("あ\n㛂")
+string("q\xe0")
+byte('\x1b')

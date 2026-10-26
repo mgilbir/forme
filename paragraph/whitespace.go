@@ -2,6 +2,7 @@ package paragraph
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/bidi"
 	"github.com/mgilbir/forme/internal/ascii"
@@ -373,6 +374,71 @@ type Boundary struct {
 	// sees, taken after the transform, and by then the space may be a U+3000
 	// that no rule here is about.
 	Collapsed bool
+	// Open is the run of collapsible white space the text ended inside, which
+	// the text after it decides. See OpenRun.
+	Open OpenRun
+}
+
+// OpenRun is a run of collapsible white space that ended a node, and so ended
+// before anything could say what came after it.
+//
+// A segment break's fate is decided by the characters either side of it, and a
+// node that ends in one knows only the first. "あ\n<span>㛂</span>" is the same
+// text as "あ\n㛂", and §4.1.1's East Asian rule removes that break — but the
+// node that holds it ends at the newline, so it wrote the space the rule falls
+// back to, and the ideograph that would have taken it away was in the next node.
+// That is the forward half of what Boundary carries backwards, and it is carried
+// the same way: the next node reads the run as one it is still inside, and when
+// it reaches the character after it, decides the whole run as one node would
+// have. What was already written for the run is taken back by the caller if the
+// decision is that there is none. See RunFate.
+//
+// A run is held open only under plain collapsing, where the space the rule falls
+// back to is all that was written. A preserved break is not decided by its
+// neighbours, and word-space-transform writes a separator of its own.
+type OpenRun struct {
+	// Open says the text ended inside a run that a space was written for.
+	Open bool
+	// Last and Seen are the characters before the run, in the senses
+	// Boundary's own fields have.
+	Last, Seen rune
+	// Breaks says the run holds a segment break, which is what puts it to the
+	// rules about its neighbours at all. A run of spaces alone becomes a space
+	// whatever follows it, but it can still be joined by a break in the node
+	// after.
+	Breaks bool
+	// System is the writing system of the text the break was in, which is the
+	// one the rule's second sentence asks about.
+	System WritingSystem
+}
+
+// RunFate is what became of a run of white space carried open into a node.
+type RunFate int
+
+const (
+	// RunNotCarried says no open run was carried in, or the node did not
+	// decide it: the node is not under plain collapsing, or the run was still
+	// open at its end.
+	RunNotCarried RunFate = iota
+	// RunKept says the run became a space, which the text before already
+	// wrote.
+	RunKept
+	// RunRemoved says the run became nothing, and the spaces the text before
+	// wrote for it are to be taken back.
+	RunRemoved
+)
+
+// Collapsed is Phase I's output over one text node, with what it decided about
+// the runs at its two ends.
+type Collapsed struct {
+	Text string
+	// Open is the run the text ended inside, if a later node decides it.
+	Open OpenRun
+	// WroteOpen says this node's text ends with the space written for Open,
+	// which is the space to take back if the run is removed.
+	WroteOpen bool
+	// Carried is what became of the run before.Open said was open.
+	Carried RunFate
 }
 
 // EndsCollapsedSpace reports whether Phase I output ends with a space that a
@@ -422,6 +488,14 @@ func CollapseWhitespace(text, value string, wst WordSpaceTransform) string {
 // alternating spaces and newlines is a document somebody will send.
 func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 	before Boundary, system WritingSystem) string {
+	return CollapseWhitespaceOpen(text, value, wst, before, system).Text
+}
+
+// CollapseWhitespaceOpen is CollapseWhitespaceAfter, saying as well what it
+// left open for the node after and what it decided of the run the node before
+// left open. See OpenRun.
+func CollapseWhitespaceOpen(text, value string, wst WordSpaceTransform,
+	before Boundary, system WritingSystem) Collapsed {
 	ws := WhiteSpaceOf(value)
 	// A carriage return is a space and not a segment break — see
 	// SpacesForReturns. Substituting it once, here, is what makes the two the
@@ -438,12 +512,13 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 		// word-space-transform turning one into a space is the property putting
 		// a space in rather than the source having one. So they are expanded
 		// after the removal and not before it.
-		return InsertPhraseSeparators(expandSeparators(discardWhitespace(text), wst), wst, system)
+		return Collapsed{Text: InsertPhraseSeparators(
+			expandSeparators(discardWhitespace(text), wst), wst, system)}
 	}
 	if !ws.Collapse {
 		// pre, pre-wrap and break-spaces keep every space and every tab, so
 		// that substitution is all of Phase I that is left.
-		return InsertPhraseSeparators(expandSeparators(text, wst), wst, system)
+		return Collapsed{Text: InsertPhraseSeparators(expandSeparators(text, wst), wst, system)}
 	}
 
 	// U+200B ZERO WIDTH SPACE is the segment break transformation's one
@@ -480,12 +555,35 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 	// is what keeps every other document on the path it was on.
 	sawSeparator := false
 
+	// plain says a run here is decided by its neighbours and nothing else, so it
+	// may be held open across the end of the node and taken up at the start of
+	// one. pre-line keeps its breaks whatever surrounds them, and a word space
+	// transform writes a separator the rules here do not take back. See OpenRun.
+	plain := !ws.PreserveBreaks && !wst.Transforms() && !wst.Invents()
+	var result Collapsed
+	// carried says the run the node before left open is the one being
+	// gathered, so this node begins inside it: the characters before it are the
+	// ones the node before saw, and a break it held is already counted. own
+	// says this node has white space of its own in that run, and so writes the
+	// space for its own part of it, as it did before the run was carried.
+	carried, own := plain && before.Open.Open, false
+	if carried {
+		inRun = true
+		last, lastSeen = before.Open.Last, before.Open.Seen
+		if before.Open.Breaks {
+			breaks = 1
+		}
+	}
+
 	// flush takes the character that ends the run twice over: as it stands, for
 	// the zero-width-space rule, and as a reader would see it, for the East
 	// Asian one. They are not the same question — U+200B is itself
 	// default-ignorable, so a rule that looked past what is not drawn would look
 	// straight past the character the rule before it is about.
-	flush := func(next, nextSeen rune) {
+	//
+	// atEnd says the run ends with the node rather than at a character, so what
+	// follows it is not known here. See OpenRun.
+	flush := func(next, nextSeen rune, atEnd bool) {
 		if !inRun {
 			// Nothing gathered, so whatever follows is this node's own text and
 			// the run that crossed the boundary — if there was one — has ended.
@@ -495,18 +593,54 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 		n := breaks
 		sep := sawSeparator
 		inRun, breaks, sawSeparator = false, 0, false
+		// The characters before the run, which the arms below overwrite once
+		// they have written what the run becomes.
+		runLast, runSeen := last, lastSeen
+		wasCarried, ownRun := carried, own
+		carried, own = false, false
 		// joined says this run continues one the node before already emitted a
 		// space for, so the space is written and this run adds nothing to it: a
 		// run collapses to one space however many nodes it is written across.
 		// A preserved segment break is not a space and is unaffected, which is
 		// why this is read at the arms that write one rather than here.
-		joined := continuing
+		//
+		// A run carried open is the same, unless this node has white space of
+		// its own in it: the node before wrote the space, and the flattening
+		// collapses a second one into it exactly as it did before the run was
+		// carried.
+		joined := continuing || (wasCarried && !ownRun)
 		continuing = false
+		// The writing system the rule's second sentence asks about is that of
+		// the break, and a carried run's break may be in the node before.
+		sys := system
+		if wasCarried && before.Open.Breaks {
+			sys = before.Open.System
+		}
+		spaced := false
 		space := func(s string) {
+			spaced = true
 			if !joined {
 				out.WriteString(s)
 			}
 		}
+		defer func() {
+			if atEnd && plain && spaced {
+				// The run became the space the rules fall back to, and only
+				// because nothing after it was there to say otherwise. It is
+				// left open for the node after, which carries it on or decides
+				// it.
+				result.Open = OpenRun{Open: true, Last: runLast, Seen: runSeen,
+					Breaks: n > 0, System: sys}
+				result.WroteOpen = !joined
+				return
+			}
+			if wasCarried {
+				result.Carried = RunRemoved
+				if spaced {
+					result.Carried = RunKept
+				}
+			}
+		}()
 		switch {
 		case sep && n > 0 && ws.PreserveBreaks:
 			// A preserved break with a separator beside it. §4.1.1 keeps the
@@ -550,7 +684,7 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 			// words, all through the text. It is the single most visible thing
 			// this engine got wrong about CJK, and it is wrong in the direction
 			// that looks deliberate.
-		case system.SpacesNoWords() &&
+		case sys.SpacesNoWords() &&
 			(widePunctuationAtSegmentBreak(lastSeen) || widePunctuationAtSegmentBreak(nextSeen)):
 			// The same rule about the punctuation East Asian text is written
 			// with, read at the width the punctuation actually has.
@@ -572,7 +706,7 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 			// "should" tests and cite Gecko bugs rather than a section, which is
 			// what the specification's own sentence not covering them looks like
 			// from here.
-		case system.SpacesNoWords() &&
+		case sys.SpacesNoWords() &&
 			(punctuationAtSegmentBreak(lastSeen) && wideAtSegmentBreak(nextSeen) ||
 				punctuationAtSegmentBreak(nextSeen) && wideAtSegmentBreak(lastSeen)):
 			// §4.1.1's second sentence, which is the same rule about the
@@ -643,6 +777,8 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 		}
 		if r < 0x80 && isCollapsibleSpace(byte(r)) {
 			inRun = true
+			// Only a run still carried has a part that is not this node's.
+			own = true
 			if r == '\n' {
 				// The one segment break there is. A carriage return is not one
 				// and cannot reach here — it was a space before the loop began.
@@ -659,7 +795,7 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 		if inRun {
 			seen = nextSeen(text[i:])
 		}
-		flush(r, seen)
+		flush(r, seen, false)
 		for _, c := range pending {
 			out.WriteRune(c)
 		}
@@ -670,7 +806,7 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 			lastSeen = r
 		}
 	}
-	flush(0, 0)
+	flush(0, 0, true)
 	for _, c := range pending {
 		out.WriteRune(c)
 	}
@@ -679,7 +815,32 @@ func CollapseWhitespaceAfter(text, value string, wst WordSpaceTransform,
 	// characters a reader will see: a run of white space that collapsed to one
 	// space is one separator to the rule below, and two to the rule as it stood
 	// before the collapsing ran. See InsertPhraseSeparators.
-	return InsertPhraseSeparators(out.String(), wst, system)
+	result.Text = InsertPhraseSeparators(out.String(), wst, system)
+	return result
+}
+
+// TrimOpenSpace takes back the space Phase I wrote for a run it left open, which
+// a later node has decided is no space at all. See OpenRun.
+//
+// The space is the last character but for the bidi controls Phase I writes
+// after a run rather than inside it, and it is a U+0020 or the U+3000 that
+// "text-transform: full-width" makes of one. Text that does not end that way is
+// returned as it is, with false: whatever was written is not a space this rule
+// gave, and keeping a space is what the text had before the run was carried.
+func TrimOpenSpace(text string) (string, bool) {
+	end := len(text)
+	for end > 0 {
+		r, size := utf8.DecodeLastRuneInString(text[:end])
+		if IsBidiControl(r) {
+			end -= size
+			continue
+		}
+		if r != ' ' && r != '\u3000' {
+			return text, false
+		}
+		return text[:end-size] + text[end:], true
+	}
+	return text, false
 }
 
 // discardWhitespace removes every white space character, which is §4.1's

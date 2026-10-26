@@ -219,6 +219,76 @@ func TestTheEastAsianRuleCrossesABoundaryToo(t *testing.T) {
 	}
 }
 
+// TestTheCharacterAfterTheBreakCrossesABoundaryToo is the other half of the two
+// tests above. They carry the character *before* a break across a box boundary;
+// this is the character after it, which a node ending in the break cannot see.
+//
+// FuzzBoundaryLines found it: "あ\n㛂" set as one line of two ideographs, and the
+// same text with the newline in a <span> of its own set a space between them.
+// Phase I decides a run of white space where the run ends, and a run that ends
+// with its node ended before the ideograph that removes the break, so it fell
+// back to the space. "漢\n<span>字</span>" is the everyday spelling — Japanese
+// hard-wrapped in the source with an element starting the next line — and it
+// gained a space in the middle of a word at every such line. See
+// paragraph.OpenRun.
+func TestTheCharacterAfterTheBreakCrossesABoundaryToo(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{"漢\n<span>字</span>", "漢字"},               // the next character in a box
+		{"漢\n<span></span>字", "漢字"},               // an empty box after the break
+		{"漢<span>\n</span>字", "漢字"},               // the break in a box of its own
+		{"漢 <span>\n</span>字", "漢字"},              // a run begun before the box and broken inside it
+		{"漢\n<span> </span>字", "漢字"},              // a box of nothing but the run's spaces
+		{"漢\n<span>\n</span><b>字</b>", "漢字"},      // two boxes on, and two breaks
+		{"<span>漢\n</span><span>字</span>", "漢字"},  // a box closing after the break
+		{"漢\n&#x202a;<span>字</span>", "漢\u202a字"}, // a control in the run is not between them
+		// An overlay is not in the text either side of it, and the text inside
+		// it does not decide the run it was hung off.
+		{"漢\n<span style=\"position: absolute\">x</span>字", "漢字"},
+		{"漢\n<span style=\"float: left\">x</span>字", "漢字"},
+	} {
+		if got := lineTextOf(t, tc.src); got != tc.want {
+			t.Errorf("%q came out %q, want %q: the character after the break is "+
+				"the ideograph however many boxes are written around it", tc.src, got, tc.want)
+		}
+	}
+	// The zero-width space is the rule's other neighbour, and it is decided the
+	// same way: a mark after the break, in the next box, takes the break away.
+	if got := lineTextOf(t, "aa\n<span>&#8203;bb</span>"); got != "aabb" {
+		t.Errorf("a break before a zero-width space in the next box came out %q, "+
+			"want \"aabb\"", got)
+	}
+	// The containment: a Latin letter after the break is not an ideograph, so
+	// the break is a space however the boxes fall.
+	if got := lineTextOf(t, "漢\n<span>x</span>"); got != "漢 x" {
+		t.Errorf("a break before a Latin letter came out %q, want \"漢 x\"", got)
+	}
+}
+
+// TestAnAtomicInlineEndsTheRunBesideIt. A picture or an inline-block after a
+// break is what the break is beside, and the text past it is not the character
+// after the break. css-text-4's "intervening inline box boundaries must be
+// ignored" is about inline boxes, and an atomic inline is the inline-level box
+// that is not one. See closesOpenRun.
+func TestAnAtomicInlineEndsTheRunBesideIt(t *testing.T) {
+	for _, src := range []string{
+		`漢` + "\n" + `<img style="width: 10px; height: 10px">字`,
+		`漢` + "\n" + `<span style="display: inline-block"></span>字`,
+	} {
+		if got := lineTextOf(t, src); got != "漢 字" {
+			t.Errorf("%q came out %q, want \"漢 字\": the break is beside the "+
+				"atomic inline and not the ideograph past it", src, got)
+		}
+	}
+	// And the text inside one is not after the break either.
+	got := lineTextsOf(t, layoutOf(t, 600,
+		`<div id="d">漢`+"\n"+`<span style="display: inline-block">字</span></div>`,
+		`#d { font-family: Courier; font-size: 20px; width: 400px }`), "d")
+	if len(got) != 1 || got[0] != "漢 " {
+		t.Errorf("a break before an inline-block holding an ideograph left the line %q, "+
+			"want [\"漢 \"]: the ideograph inside it is not after the break", got)
+	}
+}
+
 // TestTheLangAttributeReachesTheSegmentBreakRule. §4.1.1's second sentence asks
 // what writing system the break is in, and the answer is an HTML attribute
 // rather than a CSS property — read off the nearest element at or above the
