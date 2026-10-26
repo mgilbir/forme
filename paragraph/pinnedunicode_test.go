@@ -6,14 +6,15 @@ import "testing"
 // tables are generated from, and not from the toolchain's.
 //
 // Every character below was assigned by Unicode 16, which is after the 15.0.0
-// that package unicode answers from under Go 1.26 — the release go.mod names —
-// and every question below was package unicode's until internal/charprop
-// answered it. Under that toolchain each of them came out as though the
-// character did not exist: a Garay letter was not a letter, a Garay digit not a
-// digit, and U+0897 ARABIC PEPET not a mark. With a toolchain whose release is
-// the pinned one the old answers and these agree, which is why the check that
-// nothing asks package unicode at all is cmd/pinnedunicode_test.go and not
-// this.
+// that package unicode answers from under Go 1.26, and every question below
+// was package unicode's until internal/charprop answered it. Under that
+// toolchain each of them came out as though the character did not exist: a
+// Garay letter was not a letter, a Garay digit not a digit, and U+0897 ARABIC
+// PEPET not a mark. With a toolchain whose release is the pinned one the old
+// answers and these agree, which is why the check that nothing asks package
+// unicode at all is cmd/pinnedunicode_test.go and not this. go.mod names Go
+// 1.27, whose package unicode is 17.0.0, the pinned release: this now holds
+// the answers, and only that check tells the two releases apart.
 func TestTheCharacterQuestionsAreThePinnedReleases(t *testing.T) {
 	const (
 		garayCapitalA = "\U00010D50"

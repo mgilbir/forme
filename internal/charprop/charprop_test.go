@@ -7,9 +7,11 @@ import (
 
 // TestTheReleaseItSaysItIs asks the tables about characters whose answer
 // changed after Unicode 15.0, which is the release package unicode answers
-// from under Go 1.26 — the toolchain go.mod names. Tables generated from that
-// release, or from the toolchain rather than the pinned files, get every one
-// of these wrong.
+// from under Go 1.26. Tables generated from that release get every one of
+// these wrong. Tables generated from the toolchain rather than the pinned
+// files did too while go.mod named Go 1.26; from Go 1.27, whose package
+// unicode is 17.0.0, the toolchain and the pin agree and this cannot tell
+// them apart. cmd/pinnedunicode_test.go is the check that can.
 func TestTheReleaseItSaysItIs(t *testing.T) {
 	for _, tc := range []struct {
 		r    rune

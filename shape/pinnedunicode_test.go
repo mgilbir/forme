@@ -5,8 +5,9 @@ import "testing"
 // The character questions the shaper asks are answered from the release its
 // tables are generated from, and not from the toolchain's. Every character
 // below was assigned by Unicode 16, after the 15.0.0 package unicode answers
-// from under Go 1.26 — the release go.mod names — and each question was
-// package unicode's; see paragraph's test of the same name.
+// from under Go 1.26, and each question was package unicode's; see
+// paragraph's test of the same name, which says why under Go 1.27 this holds
+// the answers and no longer tells the two releases apart.
 func TestTheCharacterQuestionsAreThePinnedReleases(t *testing.T) {
 	// HarfBuzz's automatic fractions take any run of decimal digits either
 	// side of U+2044, and the Garay digits are decimal digits.
