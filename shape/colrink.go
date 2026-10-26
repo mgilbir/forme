@@ -3,6 +3,7 @@ package shape
 import (
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/mgilbir/forme/font"
 )
@@ -76,15 +77,31 @@ type colrInk struct {
 	once sync.Once
 	t    *colrTable
 
+	// answers are each glyph's answer once it has one, by the glyph, made
+	// with the table. Each is written once, by the goroutine that measured
+	// the glyph, and read on every ask after that, so a load rather than a
+	// lock: the face is shared by every document set through it, and a mutex
+	// on this read put every goroutine measuring a run of emoji in one queue.
+	// A glyph index past the face's is answered from others, under mu.
+	answers []atomic.Pointer[colrAnswer]
+
+	// mu is held while a glyph is measured, which is the only time others,
+	// the outlines, the budget and spent are read or written: measuring stays
+	// one glyph at a time, in whatever order the goroutines asked, as it was
+	// when mu guarded the answers too, and so the glyphs the budget runs out
+	// on are what they were.
 	mu       sync.Mutex
-	answers  map[int]colrAnswer
+	others   map[int]colrAnswer
 	outlines map[int]box32
 	budget   *font.Budget
 	spent    bool
+
 	// verdicts are what counting a glyph's painting found, by the glyph and
-	// the budget it was counted within, so that PaintGlyph counts a glyph
-	// once and not each time it is painted. See paintCOLR.
-	verdicts map[paintKey]paintVerdict
+	// the budget it was counted within (a paintVerdict under a paintKey), so
+	// that PaintGlyph counts a glyph once and not each time it is painted.
+	// Written once a key and read on every painting, as the answers are. See
+	// paintCOLR.
+	verdicts sync.Map
 }
 
 // colrAnswer is one glyph's answer: its extents, and whether the table paints
@@ -125,16 +142,33 @@ func (c *colrInk) extents(gid int) (extents, bool) {
 	if c.table() == nil {
 		return extents{}, false
 	}
+	var slot *atomic.Pointer[colrAnswer]
+	if gid >= 0 && gid < len(c.answers) {
+		slot = &c.answers[gid]
+		if a := slot.Load(); a != nil {
+			return a.ext, a.painted
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if a, ok := c.answers[gid]; ok {
+	// Asked again under the lock: another goroutine may have measured the
+	// glyph while this one waited, and a glyph is measured, and charged, once.
+	if slot != nil {
+		if a := slot.Load(); a != nil {
+			return a.ext, a.painted
+		}
+	} else if a, ok := c.others[gid]; ok {
 		return a.ext, a.painted
 	}
 	ext, painted := c.measure(gid)
-	if c.answers == nil {
-		c.answers = map[int]colrAnswer{}
+	if slot != nil {
+		slot.Store(&colrAnswer{ext, painted})
+	} else {
+		if c.others == nil {
+			c.others = map[int]colrAnswer{}
+		}
+		c.others[gid] = colrAnswer{ext, painted}
 	}
-	c.answers[gid] = colrAnswer{ext, painted}
 	return ext, painted
 }
 
@@ -144,6 +178,9 @@ func (c *colrInk) table() *colrTable {
 	c.once.Do(func() {
 		c.t = readCOLR(c.colr, c.f.varCoords)
 		c.budget = font.NewBudget(colrInkWork(c))
+		if c.t != nil {
+			c.answers = make([]atomic.Pointer[colrAnswer], max(c.numGlyphs, 0))
+		}
 	})
 	return c.t
 }

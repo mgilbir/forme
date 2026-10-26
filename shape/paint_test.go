@@ -557,9 +557,10 @@ func TestAGlyphPaintedAgainIsPaintedAsItWasFirst(t *testing.T) {
 				}
 			}
 		}
-		for _, v := range f.colr.verdicts {
-			seen[v]++
-		}
+		f.colr.verdicts.Range(func(_, v any) bool {
+			seen[v.(paintVerdict)]++
+			return true
+		})
 	}
 	// A refusal is reached whatever the glyph's bounds: the tree's own faces
 	// refuse only glyphs with a ClipBox, and Noto's (under EMOJI_FONTS) also
