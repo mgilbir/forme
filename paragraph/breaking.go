@@ -618,7 +618,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 			item.Width = item.Width.Sub(item.TrimEnd)
 			item.TrimEnd = 0
 			line = append(line, item)
-			tail.Add(item.Level, br.trailingSpacing(item))
+			tail.Place(item, br.trailingSpacing(item))
 			used = used.Add(item.Width)
 			continue
 		}
@@ -908,7 +908,7 @@ func (br *Breaker) fillOneLine(items []Item, from, fromByte int, width, lineX st
 		if item.Abs == nil && item.Float == nil {
 			// Out of flow draws nothing on this line, so it is neither the
 			// rightmost thing on it nor anything for a level to stand between.
-			tail.Add(item.Level, br.trailingSpacing(item))
+			tail.Place(item, br.trailingSpacing(item))
 		}
 		used = used.Add(item.Width)
 	}
@@ -946,7 +946,7 @@ func (br *Breaker) overflows(used style.Unit, item Item, width style.Unit, tail 
 	// whatever is drawn furthest *right* once this item is placed, which on a
 	// right-to-left line is not this item. The tracker is a value, so placing
 	// the candidate in it answers the question without committing to it.
-	tail.Add(item.Level, br.trailingSpacing(item))
+	tail.Place(item, br.trailingSpacing(item))
 	return used.Add(item.Width).Sub(tail.Tail()) > width
 }
 
@@ -1031,19 +1031,23 @@ func trailingSpacingCounted(item Item, units func() int) style.Unit {
 	}
 	if AllIgnorable(item.Text) {
 		// A run of nothing but zero-width formatting characters. It has no
-		// character of its own for a spacing to follow, and the spacing that
-		// hangs past a line ending here is the one after the letter in front of
-		// it — which is this same number, because a run is cut wherever the
-		// letter-spacing changes, so the letter in front carries what this run
-		// declares.
+		// character of its own for a spacing to follow, so it has none of its
+		// own to discount — only the gap, where it carries one. The spacing that
+		// hangs past a line ending here is the one after the letter drawn
+		// furthest right, and that is not this run's to answer: Rightmost.Place
+		// passes over the run to find that letter.
 		//
-		// Reading it as suppressed instead is the reading the cursive clause
-		// below gives it, and it is wrong in the expensive direction: the line
-		// counts a spacing it does not draw, so a float shrink-wrapped around
-		// "\u200B" and two letters comes out one tracking wider than the text
-		// and then wraps the second letter to a line of its own. The suite
-		// writes it as letter-spacing-202.
-		return out.Add(item.Spacing.Letter)
+		// It used to answer with its own declared value, on the reasoning that
+		// the letter in front carries the same number. A cursive letter carries
+		// none, and a run that begins the line has no letter in front at all;
+		// see Rightmost for the page that cost. Answering "none" while the run
+		// still held the place is wrong in the other direction: the spacing of
+		// the letter in front hangs, and a line that stops discounting it counts
+		// a spacing it does not draw — a float shrink-wrapped around two letters
+		// and a "\u200B" comes out one tracking wider than the text and then
+		// wraps the second letter to a line of its own. The suite writes that as
+		// letter-spacing-202.
+		return out
 	}
 	if cursiveTrackingSuppresses(item.Text, units) {
 		return out
@@ -1526,17 +1530,58 @@ func insetsAfter(items []Item, i int) style.Unit {
 // and k is to the left. That is UAX #9 L2 read for a single pair rather than
 // applied to the whole line, and it makes the running answer O(1) per item — the
 // lowest level since the current rightmost, and one comparison.
+//
+// # A character that draws nothing
+//
+// A run of nothing but zero-width formatting characters — a bidi mark, a joiner,
+// a zero width space — is an item of the line with no character in it for a
+// spacing to follow. The spacing at the right of the line is therefore the
+// spacing of the rightmost item that *does* draw something, and the run is
+// passed over in finding it. Its level is not passed over: it stands between
+// the items either side of it like any other, and L2 reads it.
+//
+// The answer this replaced asked the run itself and gave its declared value,
+// on the reasoning that the letter in front of it carries the same number
+// because a run is cut wherever the letter-spacing changes. That is true of the
+// declaration and not of the letter. The letter may be cursive, which §8.2
+// gives no spacing at all; there may be no letter in front, because the run
+// begins the line; and on a right-to-left line the letter in front is on the
+// other side. U+061C ARABIC LETTER MARK followed by an Arabic letter in a <span>
+// is all three at once: the mark reads right to left, so it is drawn to the
+// right of the letter, and the letter takes no spacing. The line was measured
+// against two pixels of letter-spacing nobody draws, and a float shrink-wrapped
+// around "&#x61C;<a>ع</a>" came out 10px wide around a 12px letter, which was
+// drawn over its edge. FuzzShrinkToFit found it; see
+// TestTheSpacingAfterAFormattingCharacterIsTheLetterBesideIt.
+//
+// Carrying the tail of the item that held the place over to the run, which is
+// the obvious repair, is wrong as well: an item placed *after* the run can be
+// drawn between the two. "x&#x61C;<a>ع</a>" draws x, then ع, then the mark, so
+// the letter beside the mark is the Arabic one and not the x it followed.
+//
+// What such a run can carry is §8.1's gap — insertAutospace puts it on the run
+// in front of a boundary, and a formatting character between an ideograph and
+// a letter is that run. The gap is at its own right edge and hangs where the run
+// is the rightmost item of all, so the rightmost of *every* item is followed as
+// well, and the gap counted where it is one of these runs. See Place.
 type Rightmost struct {
+	// drawn is the rightmost of the items that draw a character, and its tail
+	// is that item's trailing spacing.
+	drawn rightmostPlace
+	// all is the rightmost of every item, and its tail is the gap a run that
+	// draws nothing carries at its right edge — zero where the rightmost item
+	// draws something, whose spacing drawn already has.
+	all rightmostPlace
+}
+
+// rightmostPlace is the comparison Rightmost describes, over one set of items.
+type rightmostPlace struct {
 	has  bool
 	tail style.Unit
 	min  int
 }
 
-// Add places the next item of a line, in logical order.
-//
-// level is its embedding level and tail is the spacing that would hang if this
-// item were the one nothing is drawn to the right of.
-func (r *Rightmost) Add(level int, tail style.Unit) {
+func (r *rightmostPlace) add(level int, tail style.Unit) {
 	if !r.has {
 		r.has, r.tail, r.min = true, tail, level
 		return
@@ -1556,13 +1601,52 @@ func (r *Rightmost) Add(level int, tail style.Unit) {
 	r.min = m
 }
 
-// Tail is the spacing that hangs off the end of the line, or zero where nothing
-// has been placed.
-func (r Rightmost) Tail() style.Unit {
+// pass is an item between two others that cannot hold the place: its level
+// stands between them all the same.
+func (r *rightmostPlace) pass(level int) {
+	if r.has && level < r.min {
+		r.min = level
+	}
+}
+
+func (r rightmostPlace) value() style.Unit {
 	if !r.has {
 		return 0
 	}
 	return r.tail
+}
+
+// Add places the next item of a line, in logical order.
+//
+// level is its embedding level and tail is the spacing that would hang if this
+// item were the one nothing is drawn to the right of.
+func (r *Rightmost) Add(level int, tail style.Unit) {
+	r.drawn.add(level, tail)
+	r.all.add(level, 0)
+}
+
+// Place is Add for an item of a line, with tail its TrailingSpacing.
+//
+// It differs from Add for a run of nothing but zero-width formatting
+// characters, which is passed over in finding the letter whose spacing hangs,
+// and whose own gap, if it carries one, hangs where it is the rightmost item of
+// all. See "A character that draws nothing" above.
+//
+// It is one method so that the fill and the intrinsic pass cannot ask it two
+// ways: both place every run of text on a line through it.
+func (r *Rightmost) Place(item Item, tail style.Unit) {
+	if !AllIgnorable(item.Text) {
+		r.Add(item.Level, tail)
+		return
+	}
+	r.drawn.pass(item.Level)
+	r.all.add(item.Level, tail)
+}
+
+// Tail is the spacing that hangs off the end of the line, or zero where nothing
+// has been placed.
+func (r Rightmost) Tail() style.Unit {
+	return r.drawn.value().Add(r.all.value())
 }
 
 // Reset empties the tracker, for a line that starts again.

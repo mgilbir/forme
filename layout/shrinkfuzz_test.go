@@ -302,3 +302,71 @@ func TestTheIdeographGapInsideARightToLeftLineIsNotDiscounted(t *testing.T) {
 		}
 	}
 }
+
+// TestTheSpacingAfterAFormattingCharacterIsTheLetterBesideIt is the third defect
+// the target above found, pinned on its own.
+//
+// A run of nothing but zero-width formatting characters has no character of its
+// own for §8.2's spacing to follow, so what hangs off a line ending at it is the
+// spacing of the letter drawn beside it. Both walks used to answer for that
+// letter with the run's own declared value, which is right only where the
+// letter takes the declared spacing and is the one in front.
+//
+// U+061C ARABIC LETTER MARK is a bidi mark of the right-to-left kind, so it
+// reads right to left and is drawn to the *right* of an Arabic letter after it,
+// and the letter is cursive, so §8.2 gives it no spacing at all. Nothing on the
+// line has a spacing after it, the line is the letter's 12px, and both walks
+// measured it at 10: a float around "&#x61C;<a>ع</a>" was shrink-wrapped to 10px
+// and the letter drawn over its edge. The mark has to be in a different text
+// node from the letter to show it, because in the same one the two are a single
+// run, which answers for its own last character.
+//
+// The second fixture is the repair that looks right and is not: carrying the
+// spacing of the item before the mark over to it. "x&#x61C;<a>ع</a>" is drawn x,
+// ع, mark — the Arabic letter, placed after the mark, is drawn between the two —
+// so x's spacing is between x and ع and inside the line, and nothing hangs.
+//
+// The other direction, where the letter in front does take a spacing and it
+// hangs past the formatting character, is letter-spacing-202's and is held by
+// TestAFloatIsNotWidenedByTheSpacingAfterAZeroWidthCharacter.
+func TestTheSpacingAfterAFormattingCharacterIsTheLetterBesideIt(t *testing.T) {
+	w, _ := style.FromPx(100000)
+	h, _ := style.FromPx(10000)
+	for _, c := range []struct {
+		text string
+		want float64
+		why  string
+	}{
+		{"\u061C<a>\u0639</a>", 12, "the Arabic letter alone, which takes no spacing"},
+		{"x<b>\u061C</b><a>\u0639</a>", 26,
+			"x, its spacing, and the Arabic letter drawn after it, with nothing hanging"},
+		{"x\u061C<a>\u0639</a>", 26,
+			"x, its spacing, and the Arabic letter drawn after it, with nothing hanging"},
+	} {
+		t.Run(c.text, func(t *testing.T) {
+			built := Build(Input{HTML: `<div id="f">` + c.text + `</div>`,
+				CSS: []Stylesheet{{Source: noDefaults +
+					`#f { float: left; font-family: Courier; font-size: 20px; letter-spacing: 2px }`}}})
+			rec := NewRecorder(nil)
+			f := fragmentFor(Layout(built.Root, Size{W: w, H: h}, built.Fonts, rec), "f")
+			if f == nil {
+				t.Fatalf("%q laid out no float", c.text)
+			}
+			want, _ := style.FromPx(c.want)
+			if got := f.ContentRect().W; got != want {
+				t.Errorf("%q shrink-wraps to %v, want %v — %s", c.text, got, want, c.why)
+			}
+			for _, got := range rec.Findings() {
+				if got.Rule == RuleUnbreakableOverflow {
+					t.Errorf("%q overflows the float wrapped around it: %s", c.text, got.Message)
+				}
+			}
+			// The fuzz body's own question, on the fixture.
+			for i, decl := range shrinkStyles {
+				if decl == "letter-spacing: 2px" {
+					checkShrinkToFit(t, c.text, i)
+				}
+			}
+		})
+	}
+}
