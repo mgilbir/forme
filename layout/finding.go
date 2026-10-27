@@ -105,8 +105,13 @@ const (
 	// for the text is the rule below, and the two are separate because one is a
 	// gap and the other is CSS working.
 	RuleFontFallback Rule = "font-fallback"
-	// RuleNoFace is the set having no face at all — not the requested family,
-	// not the initial one, nothing.
+	// RuleNoFace is a box whose text has no face: not one of the families it
+	// asked for, and not font-family's initial value either. A set with no
+	// faces at all is the obvious case; a set restricted on purpose — only
+	// what the document's @font-face rules bring, say — is the other, where
+	// some boxes resolve and some do not. It names the families the box asked
+	// for and its element, once per family list, so a caller can tell which
+	// families to supply.
 	//
 	// It is separate from RuleFontFallback because it is a different fact and a
 	// different severity. A fallback is CSS working: the family asked for was

@@ -543,9 +543,6 @@ type layouter struct {
 	// keeps the per-cluster family walk off every document that has no such
 	// descriptor, which is almost all of them.
 	restrictedFamilies map[string]bool
-	// reportedNoFace records that the set was found to have no face at all, so
-	// the finding is raised once rather than once per box. See fontFor.
-	reportedNoFace bool
 	// facesUsed is every face text was set in, in the order first used, and
 	// facesSeen the same as a set; what reading their rules ran into is
 	// reported once layout is done. See fontlimits.go.

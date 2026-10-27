@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -84,4 +85,72 @@ func TestASetThatHasTheInitialFamilyIsNotRefused(t *testing.T) {
 	if !drew {
 		t.Error("no text was drawn, so the two cases are not being told apart")
 	}
+}
+
+// TestNoFaceNamesEachFamilyAndItsElement is issue #958's reproduction. A set
+// restricted on purpose — here one with nothing in it, so that only what the
+// document's @font-face rule brings can set text — leaves some boxes resolved
+// and some not. The finding was raised once per document, quoted the initial
+// "serif" whatever the box had asked for, and carried no source, so a caller
+// was refused and could not tell which families to supply or where.
+func TestNoFaceNamesEachFamilyAndItsElement(t *testing.T) {
+	html := `<style>@font-face { font-family: Own; src: url(own.ttf) }</style>` +
+		`<p id="own" style="font-family: Own">covered</p>` +
+		`<p id="sans" style="font-family: sans-serif">not covered</p>` +
+		`<p id="mono" style="font-family: monospace">not covered</p>` +
+		`<p id="mono2" style="font-family: monospace">not covered either</p>` +
+		`<p id="monob" style="font-family: monospace; font-weight: bold">nor this</p>` +
+		`<p id="plain">not covered (initial family)</p>`
+	got := Compose(Input{
+		HTML:      html,
+		Resources: &fileResolver{files: map[string][]byte{"own.ttf": realFont()}},
+		Fonts:     emptyFontSet{},
+	}, Options{})
+
+	if !got.Refused {
+		t.Fatal("text that could not be drawn did not refuse the document")
+	}
+	var noFace []Finding
+	for _, f := range got.Findings {
+		if f.Rule == RuleNoFace {
+			noFace = append(noFace, f)
+		}
+	}
+	// One per family list: sans-serif, monospace and the initial family. The
+	// three monospace paragraphs are one finding: two share a font and are one
+	// lookup, and the bold one is another lookup with the same families. The
+	// paragraph in Own is set and not reported.
+	want := []struct{ quoted, element string }{
+		{`"sans-serif", nor for the initial "serif"`, "sans"},
+		{`"monospace", nor for the initial "serif"`, "mono"},
+		{`"serif", the initial family`, "plain"},
+	}
+	if len(noFace) != len(want) {
+		t.Fatalf("got %d no-face findings, want one per family list (%d): %v",
+			len(noFace), len(want), noFace)
+	}
+	for i, w := range want {
+		f := noFace[i]
+		if !strings.Contains(f.Message, w.quoted) {
+			t.Errorf("finding %d says %q, want it to name %s", i, f.Message, w.quoted)
+		}
+		// The source is the element whose text was dropped: its offset is
+		// where that paragraph's tag begins in the document.
+		at := f.Source.HTMLOffset
+		if at < 0 || at >= len(html) || !strings.HasPrefix(html[at:], `<p id="`+w.element+`"`) {
+			t.Errorf("finding %d points at offset %d, want the <p id=%q> whose text was not drawn",
+				i, at, w.element)
+		}
+	}
+	// And the covered paragraph was drawn: the restriction is not a blank page.
+	var drew bool
+	for _, op := range got.Ops {
+		if d, ok := op.(DrawText); ok && strings.Contains(d.Text, "covered") {
+			drew = true
+		}
+	}
+	if !drew {
+		t.Error("the paragraph in the document's own face was not drawn")
+	}
+	fired[RuleNoFace] = true
 }
