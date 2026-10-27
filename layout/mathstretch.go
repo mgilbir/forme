@@ -71,6 +71,7 @@ func (l *layouter) mathOperatorDrawn(b *Box, op *mathOp, s mathStretch) (mathOpD
 				"formula it is laid out as its text, not stretched or enlarged",
 			Path:     PathOf(b.Element),
 			Property: "direction",
+			Font:     newFontNeed(b, false, string(op.char), "MATH", "rtlm").usedBy(m.face.Name()),
 		})
 	}
 	if got != mathGlyphFound || l.overBudget() {
@@ -232,6 +233,8 @@ func (l *layouter) mathNoConstruction(b *Box, m mathFont, op *mathOp, asked bool
 			", so it is drawn at its text size where the formula asks for it larger",
 		Path:     PathOf(b.Element),
 		Property: "stretchy",
+		// A MATH table with variants or a construction for this character.
+		Font: newFontNeed(b, false, string(op.char), "MATH").usedBy(m.face.Name()),
 	})
 }
 

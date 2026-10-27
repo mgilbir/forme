@@ -407,6 +407,7 @@ func (l *layouter) emphasisFace(b *Box, primary *shape.Face, mark string) *shape
 			", so the marks were not drawn",
 		Path:     PathOf(b.Element),
 		Property: "text-emphasis-style",
+		Font:     newFontNeed(b, false, mark),
 	})
 	return nil
 }

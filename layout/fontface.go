@@ -172,6 +172,22 @@ const (
 	styleOblique
 )
 
+// request is the face a rule declares, as a FontRequest: the low end of each
+// range it gives, and the property's normal value for a descriptor left auto.
+func (r fontFaceRule) request() FontRequest {
+	q := FontRequest{
+		Weight: r.weight.selected(normalRequest.Weight).lo,
+		Width:  r.width.selected(normalRequest.Width).lo,
+	}
+	switch r.style.kind {
+	case styleItalic:
+		q.Slope = SlopeItalic
+	case styleOblique:
+		q.Slope, q.Angle = SlopeOblique, r.style.angles.lo
+	}
+	return q
+}
+
 // offer is what the descriptor offers §5.2's style search. See fontmatch.go.
 func (s faceStyle) offer() slopeOffer {
 	switch s.kind {
@@ -1104,6 +1120,10 @@ func (l *fontFaceLoader) face(p pendingFontFace, r fontFaceRule) (*shape.Face, s
 		Message: "the @font-face for " + quoteValue(r.family) +
 			" loaded no font, so the family is not available: " + joinReasons(why),
 		Property: "@font-face",
+		// The family the rule would have added, in the style it declares: a
+		// face the caller's set answers for it stands in for the one that did
+		// not load.
+		Font: needFor([]string{r.family}, false, r.request(), ""),
 	})
 	return nil, "", false
 }

@@ -275,6 +275,9 @@ func (l *layouter) noteSubstitution(b *Box, primary *shape.Face, runs []faceRun)
 		if r.substituted && got.alt == nil && r.Face != primary {
 			got.alt, got.at = r.Face, b
 		}
+		if r.substituted && r.Face != primary {
+			got.text = needRunes(got.text, r.Text)
+		}
 	}
 }
 
@@ -284,6 +287,9 @@ type substitution struct {
 	set bool
 	alt *shape.Face
 	at  *Box
+	// text is the characters the other faces set, each once and bounded, for
+	// the finding's FontNeed: what a face for the family would have to cover.
+	text string
 }
 
 // gatherSubstitutions starts a paragraph's tally and returns the call that ends
@@ -342,6 +348,7 @@ func (l *layouter) flushSubstitutions() {
 			Source:   sourceOf(boxElement(got.at)),
 			Path:     PathOf(boxElement(got.at)),
 			Property: "font-family",
+			Font:     newFontNeed(got.at, false, got.text).usedBy(got.alt.Name()),
 		})
 	}
 }

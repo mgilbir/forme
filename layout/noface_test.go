@@ -116,17 +116,18 @@ func TestNoFaceNamesEachFamilyAndItsElement(t *testing.T) {
 			noFace = append(noFace, f)
 		}
 	}
-	// One per family list: sans-serif, monospace and the initial family. The
-	// three monospace paragraphs are one finding: two share a font and are one
-	// lookup, and the bold one is another lookup with the same families. The
-	// paragraph in Own is set and not reported.
+	// One per face to supply: sans-serif, monospace, bold monospace and the
+	// initial family. The two regular monospace paragraphs are one finding,
+	// since they need the same face; the bold one needs another, and says so.
+	// The paragraph in Own is set and not reported.
 	want := []struct{ quoted, element string }{
 		{`"sans-serif", nor for the initial "serif"`, "sans"},
 		{`"monospace", nor for the initial "serif"`, "mono"},
+		{`"monospace" (weight 700), nor for the initial "serif"`, "monob"},
 		{`"serif", the initial family`, "plain"},
 	}
 	if len(noFace) != len(want) {
-		t.Fatalf("got %d no-face findings, want one per family list (%d): %v",
+		t.Fatalf("got %d no-face findings, want one per face to supply (%d): %v",
 			len(noFace), len(want), noFace)
 	}
 	for i, w := range want {

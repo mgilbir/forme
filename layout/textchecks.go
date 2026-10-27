@@ -303,6 +303,7 @@ func (l *layouter) checkGlyphs(b *Box, face *shape.Face, text string) {
 				describeRune(r) + ", " + missingGlyphFate(face),
 			Source: sourceOf(b.Element),
 			Path:   PathOf(b.Element),
+			Font:   newFontNeed(b, false, string(r)).usedBy(face.Name()),
 		})
 	}
 }
@@ -520,6 +521,7 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 				" of the size, and the page carries them as uppercase text",
 			Source: sourceOf(boxElement(b)),
 			Path:   PathOf(boxElement(b)),
+			Font:   newFontNeed(b, false, "", missing...).usedBy(face.Name()),
 		})
 		return
 	}
@@ -546,6 +548,7 @@ func (l *layouter) reportCaps(b *Box, face *shape.Face, text string) {
 			"make them out of the letters at a smaller size",
 		Source: sourceOf(boxElement(b)),
 		Path:   PathOf(boxElement(b)),
+		Font:   newFontNeed(b, false, "", missing...).usedBy(face.Name()),
 	})
 }
 
@@ -731,6 +734,7 @@ func (l *layouter) reportNumeric(b *Box, face *shape.Face, text string) {
 				"text was set in the figures the face has",
 			Source: sourceOf(boxElement(b)),
 			Path:   PathOf(boxElement(b)),
+			Font:   newFontNeed(b, false, "", missing...).usedBy(face.Name()),
 		})
 }
 
@@ -854,6 +858,7 @@ func (l *layouter) reportEastAsian(b *Box, face *shape.Face, text string) {
 				"text was set in the forms the face has",
 			Source: sourceOf(boxElement(b)),
 			Path:   PathOf(boxElement(b)),
+			Font:   newFontNeed(b, false, "", missing...).usedBy(face.Name()),
 		})
 }
 
@@ -959,6 +964,7 @@ func (l *layouter) reportPosition(b *Box, face *shape.Face, text string) {
 			"forms a face draws and does not make them out of the ordinary ones",
 		Source: sourceOf(boxElement(b)),
 		Path:   PathOf(boxElement(b)),
+		Font:   newFontNeed(b, false, "", tag).usedBy(face.Name()),
 	})
 }
 
