@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/mgilbir/forme/font"
 )
@@ -122,9 +123,21 @@ type cffInk struct {
 	// outlines is nil where HarfBuzz's accelerator would refuse the table.
 	outlines *cffOutlines
 
-	mu      sync.Mutex
-	answers map[int]cffInkAnswer
-	budget  *font.Budget
+	// answers are each glyph's answer once it has one, by the glyph, made
+	// when the table is read: one for every glyph that can be measured, and
+	// none where none can. Each is written once, by the goroutine that
+	// measured the glyph, and read on every ask after that, so a load rather
+	// than a lock: the face is shared by every document set through it, and
+	// textInk asks the ink of every character it draws.
+	answers []atomic.Pointer[cffInkAnswer]
+
+	// mu is held while a glyph's charstring is run, which is the only time
+	// the budget, capped and spent are written, and a seac fills in the
+	// charset's lookup: measuring stays one glyph at a time, in whatever
+	// order the goroutines asked, and so the glyphs the budget runs out on
+	// are the ones they were when mu guarded the answers too.
+	mu     sync.Mutex
+	budget *font.Budget
 	// capped and spent record the two ways a glyph was left without ink that
 	// were bounds rather than malformed charstrings, for LayoutLimits.
 	capped, spent bool
@@ -157,9 +170,17 @@ func (c *cffInk) extents(gid int) (extents, bool) {
 	case c.cff2 == nil && (o == nil || gid >= len(o.charStrings)):
 		return extents{}, false
 	}
+	// Every glyph past the switch has a slot: answers is as long as the
+	// glyphs there are charstrings for (see makeAnswers).
+	slot := &c.answers[gid]
+	if a := slot.Load(); a != nil {
+		return a.ext, a.ok
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if a, ok := c.answers[gid]; ok {
+	// Asked again under the lock: another goroutine may have measured the
+	// glyph while this one waited, and a glyph is measured, and charged, once.
+	if a := slot.Load(); a != nil {
 		return a.ext, a.ok
 	}
 	if c.cff2 != nil {
@@ -179,10 +200,7 @@ func (c *cffInk) extents(gid int) (extents, bool) {
 	if ok {
 		a.ext = b.extents()
 	}
-	if c.answers == nil {
-		c.answers = map[int]cffInkAnswer{}
-	}
-	c.answers[gid] = a
+	slot.Store(&a)
 	return a.ext, a.ok
 }
 
@@ -191,11 +209,29 @@ func (c *cffInk) load() {
 	c.once.Do(func() {
 		if c.cff2 != nil {
 			c.budget = font.NewBudget(cffInkWork(len(c.cff2.tables["CFF2"])))
+			c.makeAnswers()
 			return
 		}
 		c.outlines, _ = readCFFOutlines(c.table, c.numGlyphs)
 		c.budget = font.NewBudget(cffInkWork(len(c.table)))
+		c.makeAnswers()
 	})
+}
+
+// makeAnswers makes a slot for each glyph extents can measure, once the table
+// has been read: every glyph of a CFF2 face, and for a CFF face every glyph it
+// has a charstring for, which is none where the table was refused. Eight bytes
+// a glyph, and at most 65,535 glyphs, which maxp and a CFF INDEX both count in
+// sixteen bits.
+func (c *cffInk) makeAnswers() {
+	n := c.numGlyphs
+	if c.cff2 == nil {
+		if c.outlines == nil {
+			return
+		}
+		n = min(n, len(c.outlines.charStrings))
+	}
+	c.answers = make([]atomic.Pointer[cffInkAnswer], max(n, 0))
 }
 
 // limits are the bounds measuring glyphs has run into so far, in words that

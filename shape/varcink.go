@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/mgilbir/forme/font"
 )
@@ -29,8 +30,23 @@ type varcFace struct {
 	// one walk at a time: see varcFaceWork.
 	work int64
 
+	numGlyphs int
+	// answers are each glyph's ink once it has been measured, by the glyph,
+	// made the first time a glyph is asked. Each is written once, by the
+	// goroutine that measured the glyph, and read on every ask after that, so
+	// a load rather than a lock: the face is shared by every document set
+	// through it, and textInk asks the ink of every character it draws. A
+	// glyph index past the face's is answered from others, under mu.
+	answersOnce sync.Once
+	answers     []atomic.Pointer[varcAnswer]
+
+	// mu is held while a glyph is measured or drawn, which is the only time
+	// work, others, spent and undrawn are read or written: measuring stays
+	// one glyph at a time, in whatever order the goroutines asked, and so the
+	// glyphs the face's work runs out on are the ones they were when mu
+	// guarded the answers too.
 	mu      sync.Mutex
-	answers map[int]varcAnswer
+	others  map[int]varcAnswer
 	spent   bool
 	undrawn bool
 }
@@ -47,7 +63,7 @@ func newVARCFace(f *Face, tables map[string][]byte, numGlyphs int) *varcFace {
 	if t == nil {
 		return nil
 	}
-	v := &varcFace{f: f, t: t}
+	v := &varcFace{f: f, t: t, numGlyphs: numGlyphs}
 	head := tables["head"]
 	if glyf, loca := tables["glyf"], tables["loca"]; len(glyf) > 0 && len(loca) > 0 && len(head) >= 54 {
 		v.glyf, v.loca = glyf, loca
@@ -104,9 +120,25 @@ func (v *varcFace) glyfEntry(gid int) []byte {
 // extents is VARC::get_extents for a glyph of the face, and false where
 // HarfBuzz's answer is none.
 func (v *varcFace) extents(gid int) (extents, bool) {
+	// Eight bytes a glyph, at most 65,535 of them, which maxp counts in
+	// sixteen bits; made only for a face whose VARC table was read.
+	v.answersOnce.Do(func() { v.answers = make([]atomic.Pointer[varcAnswer], max(v.numGlyphs, 0)) })
+	var slot *atomic.Pointer[varcAnswer]
+	if gid >= 0 && gid < len(v.answers) {
+		slot = &v.answers[gid]
+		if a := slot.Load(); a != nil {
+			return a.ext, a.ok
+		}
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if a, ok := v.answers[gid]; ok {
+	// Asked again under the lock: another goroutine may have measured the
+	// glyph while this one waited, and a glyph is measured, and charged, once.
+	if slot != nil {
+		if a := slot.Load(); a != nil {
+			return a.ext, a.ok
+		}
+	} else if a, ok := v.others[gid]; ok {
 		return a.ext, a.ok
 	}
 	var e extents
@@ -118,10 +150,14 @@ func (v *varcFace) extents(gid int) (extents, bool) {
 		// Face.LayoutLimits says.
 		v.spent = true
 	}
-	if v.answers == nil {
-		v.answers = map[int]varcAnswer{}
+	if slot != nil {
+		slot.Store(&varcAnswer{e, ok})
+	} else {
+		if v.others == nil {
+			v.others = map[int]varcAnswer{}
+		}
+		v.others[gid] = varcAnswer{e, ok}
 	}
-	v.answers[gid] = varcAnswer{e, ok}
 	return e, ok
 }
 
