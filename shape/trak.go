@@ -77,6 +77,10 @@ func trackDataFits(t []byte, at int) bool {
 // tracking is trak::get_h_tracking or get_v_tracking: the normal track at a
 // size, in font units, rounded as HarfBuzz rounds it; and the steps finding
 // it took, a track or a size each.
+//
+// A size that is not greater than zero is CoreText's default, NaN among them:
+// HarfBuzz asks ptem > 0, which a NaN fails, where "ptem <= 0" lets it through
+// to a size lookup no size is at or above, which read the first.
 func (f *Face) tracking(vertical bool, size float64) (v, steps int) {
 	t := f.trak
 	data := font.Be16(t, 6)
@@ -84,14 +88,36 @@ func (f *Face) tracking(vertical bool, size float64) (v, steps int) {
 		data = font.Be16(t, 8)
 	}
 	ptem := float32(size)
-	if ptem <= 0 {
+	if !(ptem > 0) {
 		ptem = coreTextDefaultSize
 	}
 	if data == 0 {
 		return 0, 0
 	}
 	value, steps := trackingAt(t, data, ptem)
-	return int(math.Round(float64(value))), steps
+	return trakPosition(value), steps
+}
+
+// trakPosition is em_scalef's (hb_position_t) roundf(v): a tracking value
+// rounded to a whole unit, as HarfBuzz converts it to a position.
+//
+// The value is not always a number. Two tracks at the normal track's value,
+// zero, make TrackData::get_tracking interpolate between them by nought over
+// nought; two equal tracks either side of the ones it walked past, by a
+// nonzero over nought; and two that differ by a few parts in 65,536, by a
+// factor of tens of thousands. Converting a NaN, an infinity or a value past
+// 32 bits to an int is undefined in C, and what HarfBuzz gives for it is the
+// processor's: x86-64's conversion gives the "integer indefinite", -2^31, for
+// all three, which is what the pinned release adds to each grapheme's
+// advance there (aatpos.expected.txt), and which this is. Go's own conversion
+// gives -2^63 on amd64 and zero on arm64, so the tracking a malformed table
+// gave differed by machine as well as from HarfBuzz.
+func trakPosition(v float32) int {
+	r := math.Round(float64(v))
+	if !(r >= math.MinInt32 && r <= math.MaxInt32) {
+		return math.MinInt32
+	}
+	return int(r)
 }
 
 // trackingAt is TrackData::get_tracking for the normal track, 0: the value
