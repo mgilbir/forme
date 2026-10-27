@@ -61,6 +61,7 @@ func (l *layouter) mathTableOf(b *Box, face *shape.Face) *shape.MathTable {
 			Source:   src,
 			Message:  "the font " + quoteValue(face.Name()) + " has a MATH table this engine cannot read (" + err.Error() + "), so the formula is laid out by MathML Core's fallbacks",
 			Property: "font-family",
+			Font:     newFontNeed(b, false, "", "MATH").usedBy(face.Name()),
 		})
 	case t == nil:
 		// A face with no MATH table sets a formula by §5.1's fallbacks,
@@ -73,6 +74,7 @@ func (l *layouter) mathTableOf(b *Box, face *shape.Face) *shape.MathTable {
 			Message: "the font " + quoteValue(face.Name()) + " has no MATH table, so the formula is " +
 				"laid out by MathML Core's fallback constants and no operator is stretched",
 			Property: "font-family",
+			Font:     newFontNeed(b, false, "", "MATH").usedBy(face.Name()),
 		})
 	}
 	for _, limit := range t.Limits() {

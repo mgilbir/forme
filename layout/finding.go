@@ -537,6 +537,12 @@ type Finding struct {
 	Selector string
 	// Property is the declaration responsible, or empty.
 	Property string
+
+	// Font is what would clear the finding, for a finding a different face
+	// would clear: the family names to supply, the weight, width and style,
+	// the characters, the features. It is nil on every other finding. See
+	// FontNeed, and Composed.FontNeeds for all of them at once.
+	Font *FontNeed
 }
 
 // Error renders the finding for a person, leading with the rule so that a list
@@ -749,7 +755,7 @@ func (r *Recorder) record(f Finding, charged bool) bool {
 	// refused is still counted and still decides whether the render failed —
 	// both happened above — and the list says it is not the whole story.
 	if charged && !r.charge(int64(len(f.Message)+len(f.Path)+len(f.Property)+
-		len(f.Selector)+len(f.Source.Sheet))*costFindingByte, "some findings") {
+		len(f.Selector)+len(f.Source.Sheet)+f.Font.size())*costFindingByte, "some findings") {
 		r.truncated = true
 		return severity == Error
 	}
@@ -806,7 +812,7 @@ func (r *Recorder) record(f Finding, charged bool) bool {
 func keyOf(f Finding) findingDigest {
 	h := sha256.New()
 	for _, s := range [...]string{string(f.Rule), f.Message, f.Path, f.Property,
-		f.Selector, f.Source.Sheet} {
+		f.Selector, f.Source.Sheet, f.Font.key()} {
 		// The length first, so that no two different lists of fields write
 		// the same bytes: "a" then "bc" is not "ab" then "c".
 		var n [8]byte

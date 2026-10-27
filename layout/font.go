@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"strconv"
 	"strings"
 	"sync"
 
@@ -296,8 +297,9 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 		l.rec.ReportDetail(Finding{
 			Rule:     RuleNoFace,
 			Source:   src,
-			Message:  noFaceMessage(families, key.families),
+			Message:  noFaceMessage(families, key.families, fontRequestOf(b.Style)),
 			Property: "font-family",
+			Font:     newFontNeed(b, true, ""),
 		})
 		return nil, false
 	}
@@ -305,8 +307,11 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 		l.rec.ReportDetail(Finding{
 			Rule:     RuleFontFallback,
 			Source:   sourceOf(boxElement(b)),
-			Message:  "no face was available for " + quoteValue(key.families) + ", so a default was used; the metrics and the line breaks will differ",
+			Message:  "no face was available for " + quoteValue(key.families) + requestNote(fontRequestOf(b.Style)) + ", so a default was used; the metrics and the line breaks will differ",
 			Property: "font-family",
+			// The families asked for, and not the initial one: the text is
+			// already in that, and a face for it changes nothing.
+			Font: newFontNeed(b, false, "").usedBy(face.Name()),
 		})
 	}
 	return face, true
@@ -333,13 +338,37 @@ type fontKey struct {
 // and font-family's initial value, which was tried after them. A box that asked
 // for the initial family itself, or for nothing, is told so once rather than
 // twice.
-func noFaceMessage(families []string, written string) string {
+func noFaceMessage(families []string, written string, r FontRequest) string {
 	if len(families) == 0 || (len(families) == 1 && ascii.EqualFold(families[0], initialFamily)) {
-		return "no face is available for " + quoteValue(initialFamily) +
+		return "no face is available for " + quoteValue(initialFamily) + requestNote(r) +
 			", the initial family, so the text was not drawn"
 	}
-	return "no face is available for " + quoteValue(written) + ", nor for the initial " +
-		quoteValue(initialFamily) + ", so the text was not drawn"
+	return "no face is available for " + quoteValue(written) + requestNote(r) +
+		", nor for the initial " + quoteValue(initialFamily) + ", so the text was not drawn"
+}
+
+// requestNote says what a request asks besides a family, as a parenthesis for
+// a finding, or nothing for the normal request. Two boxes asking one family in
+// two weights need two faces, and are two findings that would otherwise read
+// alike.
+func requestNote(r FontRequest) string {
+	var parts []string
+	if r.Weight != normalRequest.Weight {
+		parts = append(parts, "weight "+strconv.FormatFloat(r.Weight, 'g', -1, 64))
+	}
+	if r.Width != normalRequest.Width {
+		parts = append(parts, "width "+strconv.FormatFloat(r.Width, 'g', -1, 64)+"%")
+	}
+	switch r.Slope {
+	case SlopeItalic:
+		parts = append(parts, "italic")
+	case SlopeOblique:
+		parts = append(parts, "oblique "+strconv.FormatFloat(r.Angle, 'g', -1, 64)+"deg")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
 }
 
 func fontKeyOf(b *Box) fontKey {
