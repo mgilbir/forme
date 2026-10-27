@@ -1115,6 +1115,7 @@ func (c *colrInk) cffOutline(gid int) box32 {
 	ink.once.Do(func() {
 		ink.outlines, _ = readCFFOutlines(ink.table, ink.numGlyphs)
 		ink.budget = font.NewBudget(cffInkWork(len(ink.table)))
+		ink.makeAnswers()
 	})
 	if ink.outlines == nil {
 		return void32
