@@ -508,21 +508,17 @@ type paintVerdict struct {
 // paintVerdict is what counting a glyph within a budget found, and false
 // where it has not been counted.
 func (c *colrInk) paintVerdict(gid, work int) (paintVerdict, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	v, ok := c.verdicts[paintKey{gid, work}]
-	return v, ok
+	v, ok := c.verdicts.Load(paintKey{gid, work})
+	if !ok {
+		return paintVerdict{}, false
+	}
+	return v.(paintVerdict), true
 }
 
 // keepPaintVerdict keeps what counting a glyph found. Two goroutines that
 // count the same glyph at once find the same, and either may keep it.
 func (c *colrInk) keepPaintVerdict(gid, work int, v paintVerdict) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.verdicts == nil {
-		c.verdicts = map[paintKey]paintVerdict{}
-	}
-	c.verdicts[paintKey{gid, work}] = v
+	c.verdicts.Store(paintKey{gid, work}, v)
 }
 
 // paintCounter is the painter of the counting walk: it paints nothing, and
