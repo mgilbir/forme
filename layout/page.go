@@ -126,6 +126,21 @@ type Options struct {
 	// takes. A transform that keeps rectangles rectangles is drawn the same
 	// either way, by moving the operations themselves.
 	TransformGroups bool
+	// PDFA says the page is for a PDF/A file, which must embed every font it
+	// shows (ISO 19005-2, 6.2.11.4.1). One of the fourteen standard faces —
+	// what StandardFonts answers for the generic families and for names like
+	// "Arial" — is named in the file rather than embedded, so in this mode
+	// every run drawn in one is reported under RuleFontNotEmbedded, which is an
+	// Error, and the document is refused. The caller fixes it by supplying the
+	// family: an @font-face rule in the document, or a face in Input.Fonts.
+	//
+	// It does not substitute an embedded face for a standard one. A family the
+	// author named is drawn in the face they will get or not at all, which is
+	// what every other guardrail here does; a silent swap to whatever face was
+	// to hand would be a page that passes validation and is not the one asked
+	// for. Nothing else about the layout changes, and with it off nothing
+	// changes at all.
+	PDFA bool
 }
 
 // Composed is a document laid out and painted, ready for a backend.
@@ -333,6 +348,9 @@ func compose(ctx context.Context, in Input, opts Options, budget *shape.ShapingB
 	checkFontSizes(rec, root, applied, scale, opts.MinFontSizePt)
 
 	checkPageOverflow(rec, ops, avail, scale)
+	if opts.PDFA {
+		checkEmbedded(rec, ops, root, applied)
+	}
 
 	return Composed{
 		Ops: ops, Root: root, Page: built.Page, Scale: scale, NaturalSize: natural,

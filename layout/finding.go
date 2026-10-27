@@ -180,6 +180,13 @@ const (
 	// the purest form of silent garbage — a box where a letter should be, which
 	// a reader blames on their PDF viewer.
 	RuleGlyphMissing Rule = "glyph-missing"
+	// RuleFontNotEmbedded is text set in one of the fourteen standard PDF faces
+	// on a page laid out for PDF/A (Options.PDFA). A standard face is named in
+	// the file and not embedded, and PDF/A requires every font a page shows to
+	// be embedded (ISO 19005-2, 6.2.11.4.1), so the file would fail validation
+	// however right it looked. It is only reported in that mode: everywhere else
+	// a standard face is the free, correct default for Latin text.
+	RuleFontNotEmbedded Rule = "font-not-embedded"
 
 	// The size thresholds of §6.1, which are checkable exactly because §5's
 	// scaling is geometric: the effective size of an element is its natural size
@@ -359,6 +366,11 @@ var defaultSeverity = map[Rule]Severity{
 	// is the case where returning no document is better than returning one.
 	RuleUnsupportedScript: Error,
 	RuleGlyphMissing:      Error,
+	// A PDF/A file with a font it does not embed fails validation, and the
+	// author has to supply the family to fix it; no page is better than one
+	// that looks finished and is not what was asked for. It cannot fire unless
+	// the caller asked for PDF/A.
+	RuleFontNotEmbedded: Error,
 	// A document that only fitted by being made illegible is one where no
 	// document is better than the document.
 	RuleMinScale:    Error,
