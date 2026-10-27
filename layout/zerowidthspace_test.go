@@ -264,6 +264,50 @@ func TestTheCharacterAfterTheBreakCrossesABoundaryToo(t *testing.T) {
 	}
 }
 
+// TestABreakIsDecidedByTextThatCollapses pins where the two directions part
+// when the white-space values differ, which is a choice and not an accident.
+//
+// The character before a collapsible break is read whatever white-space the text
+// holding it has: "<span style='white-space: pre'>漢</span>\n字" loses its
+// break. The character after one is read only from text that is itself
+// collapsing: "漢\n<span style='white-space: pre'>字</span>" keeps it.
+//
+// The specification does not settle it. css-text-4 has cut its list of rules
+// and says that what becomes of a collapsible break "depending on the context
+// before and after the break" is "UA-defined in this level"; the cut rules
+// speak of "the character before and after the segment break" and say nothing
+// of the white-space that character is under, and no test in the suite writes
+// the two values side by side. Blink's builder is the one with an answer, and
+// this is its answer: a break left open at the end of collapsing text is
+// decided only when the next text is appended as collapsing text, and the
+// character before a break is read off the text built so far, whatever style
+// built it. Its East Asian arm is compiled out, but the zero width space arm
+// takes the same path. Gecko's check wants a character on both sides within
+// the text it is transforming; whether that text crosses an element with
+// another white-space value was not established.
+//
+// So the asymmetry matches the one engine whose answer is known. Changing the
+// forward half would make "漢\n<pre>字" differ from Blink and gain no test.
+func TestABreakIsDecidedByTextThatCollapses(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		// Forward: the text after the break is not collapsing, so it does not
+		// decide the break, and the break is the space it falls back to.
+		{"漢\n<span style=\"white-space: pre\">字</span>", "漢 字"},
+		{"漢\n<span style=\"white-space: pre-wrap\">字</span>", "漢 字"},
+		{"漢\n<span style=\"white-space: pre-line\">字</span>", "漢 字"},
+		{"aa\n<span style=\"white-space: pre\">&#8203;bb</span>", "aa bb"},
+		// Backward: the character before the break is read from text under any
+		// value.
+		{"<span style=\"white-space: pre\">漢</span>\n字", "漢字"},
+		{"<span style=\"white-space: pre-line\">漢</span>\n字", "漢字"},
+		{"<span style=\"white-space: pre\">aa&#8203;</span>\nbb", "aabb"},
+	} {
+		if got := lineTextOf(t, tc.src); got != tc.want {
+			t.Errorf("%q came out %q, want %q", tc.src, got, tc.want)
+		}
+	}
+}
+
 // TestAnAtomicInlineEndsTheRunBesideIt. A picture or an inline-block after a
 // break is what the break is beside, and the text past it is not the character
 // after the break. css-text-4's "intervening inline box boundaries must be
