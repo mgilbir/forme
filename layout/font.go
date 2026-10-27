@@ -271,20 +271,34 @@ func (l *layouter) fontFor(b *Box) (*shape.Face, bool) {
 	l.fonts[key] = resolvedFont{face: face}
 	l.noteFace(face)
 	if !ok {
-		// Not even the initial family. The set has nothing, so this box's text
-		// is not drawn — and neither is any other box's, since they all end up
-		// here. That was silent: a set with no faces in it produced a blank
-		// page, no finding, and Refused false, which a caller cannot tell from
-		// a document that said nothing.
-		if !l.reportedNoFace {
-			l.reportedNoFace = true
-			l.rec.ReportDetail(Finding{
-				Rule: RuleNoFace,
-				Message: "no font face is available at all, not even for " +
-					quoteValue(initialFamily) + ", so no text was drawn",
-				Property: "font-family",
-			})
-		}
+		// Not even the initial family, so this box's text is not drawn. That
+		// was silent once: a set with no faces in it produced a blank page, no
+		// finding, and Refused false, which a caller cannot tell from a
+		// document that said nothing.
+		//
+		// A set with nothing at all is one case of this and not the only one.
+		// A caller may restrict its set on purpose — only faces with a font
+		// program, a house set, only what the document's @font-face rules
+		// bring — and then some boxes resolve and some do not. What such a
+		// caller has to act on is which families to supply and where, so the
+		// finding names the families this box asked for and the element it is
+		// in, and is raised once per family list rather than once per document:
+		// "sans-serif" and "monospace" are two families to supply, and the
+		// second must not be hidden behind the first.
+		//
+		// Once per list, and not once per box, without anything here keeping
+		// count. Boxes with the same font are answered from l.fonts and never
+		// get here twice; boxes with the same families and a different weight
+		// or size do, and the recorder keeps only the first finding with a
+		// given rule and message (keyOf leaves the offset out), which is the
+		// first element asking for that list. A count kept here as well was
+		// planted away and nothing changed.
+		l.rec.ReportDetail(Finding{
+			Rule:     RuleNoFace,
+			Source:   src,
+			Message:  noFaceMessage(families, key.families),
+			Property: "font-family",
+		})
 		return nil, false
 	}
 	if len(families) > 0 {
@@ -313,6 +327,19 @@ type fontKey struct {
 	weight, width, slope string
 	optical, variations  string
 	size                 style.Unit
+}
+
+// noFaceMessage says what RuleNoFace reports: the families a box asked for,
+// and font-family's initial value, which was tried after them. A box that asked
+// for the initial family itself, or for nothing, is told so once rather than
+// twice.
+func noFaceMessage(families []string, written string) string {
+	if len(families) == 0 || (len(families) == 1 && ascii.EqualFold(families[0], initialFamily)) {
+		return "no face is available for " + quoteValue(initialFamily) +
+			", the initial family, so the text was not drawn"
+	}
+	return "no face is available for " + quoteValue(written) + ", nor for the initial " +
+		quoteValue(initialFamily) + ", so the text was not drawn"
 }
 
 func fontKeyOf(b *Box) fontKey {
