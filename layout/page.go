@@ -178,6 +178,11 @@ type Composed struct {
 	// four hundred alone. The list cannot answer it: deduplication is the whole
 	// reason the list is readable.
 	Counts map[Rule]int
+	// Document is what the document says about itself: its title, language,
+	// direction and <meta> names, from the parse Compose did, so that a
+	// backend filling a file's metadata does not parse the HTML again. It is
+	// set whether or not the document was refused. See DocumentInfo.
+	Document DocumentInfo
 	// Refused is a rule having fired at Error severity. A backend that sees it
 	// should produce nothing: the caller was told not to render, rather than
 	// left to decide.
@@ -280,6 +285,7 @@ func compose(ctx context.Context, in Input, opts Options, budget *shape.ShapingB
 	// into a second recorder loses the counts, spends the bound twice and
 	// deduplicates everything twice — see buildWith.
 	built := buildWith(in, opts.Page, rec)
+	document := documentInfoOf(built.Document, rec)
 	if budget != nil {
 		if err := ctx.Err(); err != nil {
 			return Composed{}, err
@@ -336,6 +342,7 @@ func compose(ctx context.Context, in Input, opts Options, budget *shape.ShapingB
 
 	return Composed{
 		Ops: ops, Root: root, Page: built.Page, Scale: scale, NaturalSize: natural,
+		Document:  document,
 		Findings:  rec.Findings(),
 		Counts:    rec.Counts(),
 		Refused:   rec.Failed(),
