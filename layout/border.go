@@ -100,7 +100,7 @@ func (p *painter) paintEdge(band Rect, kind borderStyle, colour style.RGBA, s si
 		return
 
 	case borderSolid:
-		p.emit(FillRect{Rect: band, Color: colour})
+		p.emit(FillRect{Rect: band, Color: colour, PaintedBy: p.src})
 
 	case borderDouble:
 		// Two lines with a gap, each a third of the width. A double border
@@ -108,17 +108,17 @@ func (p *painter) paintEdge(band Rect, kind borderStyle, colour style.RGBA, s si
 		// specification says to draw it solid rather than to lose a line.
 		third := thickness.Div(3)
 		if third <= 0 {
-			p.emit(FillRect{Rect: band, Color: colour})
+			p.emit(FillRect{Rect: band, Color: colour, PaintedBy: p.src})
 			return
 		}
 		if horizontal {
 			p.emit(
-				FillRect{Rect: Rect{band.X, band.Y, band.W, third}, Color: colour},
-				FillRect{Rect: Rect{band.X, band.Bottom().Sub(third), band.W, third}, Color: colour})
+				FillRect{Rect: Rect{band.X, band.Y, band.W, third}, Color: colour, PaintedBy: p.src},
+				FillRect{Rect: Rect{band.X, band.Bottom().Sub(third), band.W, third}, Color: colour, PaintedBy: p.src})
 		} else {
 			p.emit(
-				FillRect{Rect: Rect{band.X, band.Y, third, band.H}, Color: colour},
-				FillRect{Rect: Rect{band.Right().Sub(third), band.Y, third, band.H}, Color: colour})
+				FillRect{Rect: Rect{band.X, band.Y, third, band.H}, Color: colour, PaintedBy: p.src},
+				FillRect{Rect: Rect{band.Right().Sub(third), band.Y, third, band.H}, Color: colour, PaintedBy: p.src})
 		}
 
 	case borderDashed, borderDotted:
@@ -128,7 +128,7 @@ func (p *painter) paintEdge(band Rect, kind borderStyle, colour style.RGBA, s si
 		p.paint3D(band, colour, kind, s, thickness, horizontal)
 
 	default:
-		p.emit(FillRect{Rect: band, Color: colour})
+		p.emit(FillRect{Rect: band, Color: colour, PaintedBy: p.src})
 	}
 }
 
@@ -168,7 +168,7 @@ func (p *painter) paintDashes(band Rect, colour style.RGBA, horizontal bool,
 		unit = unit.Mul(3)
 	}
 	if unit <= 0 {
-		p.emit(FillRect{Rect: band, Color: colour})
+		p.emit(FillRect{Rect: band, Color: colour, PaintedBy: p.src})
 		return
 	}
 
@@ -181,12 +181,12 @@ func (p *painter) paintDashes(band Rect, colour style.RGBA, horizontal bool,
 	period := unit.Mul(2)
 	count := int(length.Px() / period.Px())
 	if count < 1 {
-		p.emit(FillRect{Rect: band, Color: colour})
+		p.emit(FillRect{Rect: band, Color: colour, PaintedBy: p.src})
 		return
 	}
 	if !p.rec.charge(int64(count)*costOp,
 		"the dashes and dots of the borders past that point, drawn solid") {
-		p.emit(FillRect{Rect: band, Color: colour})
+		p.emit(FillRect{Rect: band, Color: colour, PaintedBy: p.src})
 		return
 	}
 	step := length.Div(float64(count))
@@ -201,7 +201,7 @@ func (p *painter) paintDashes(band Rect, colour style.RGBA, horizontal bool,
 			r = Rect{band.X, band.Y.Add(at), band.W, mark}
 		}
 		// Paid for above, so appended rather than emitted.
-		p.ops = append(p.ops, FillRect{Rect: r, Color: colour})
+		p.ops = append(p.ops, FillRect{Rect: r, Color: colour, PaintedBy: p.src})
 	}
 }
 
@@ -221,15 +221,15 @@ func (p *painter) paint3D(band Rect, colour style.RGBA, kind borderStyle,
 	switch kind {
 	case borderInset:
 		if topLeft {
-			p.emit(FillRect{Rect: band, Color: dark})
+			p.emit(FillRect{Rect: band, Color: dark, PaintedBy: p.src})
 		} else {
-			p.emit(FillRect{Rect: band, Color: light})
+			p.emit(FillRect{Rect: band, Color: light, PaintedBy: p.src})
 		}
 	case borderOutset:
 		if topLeft {
-			p.emit(FillRect{Rect: band, Color: light})
+			p.emit(FillRect{Rect: band, Color: light, PaintedBy: p.src})
 		} else {
-			p.emit(FillRect{Rect: band, Color: dark})
+			p.emit(FillRect{Rect: band, Color: dark, PaintedBy: p.src})
 		}
 	default:
 		// groove and ridge: two halves, and which half is dark is what tells
@@ -243,17 +243,17 @@ func (p *painter) paint3D(band Rect, colour style.RGBA, kind borderStyle,
 		}
 		half := thickness.Div(2)
 		if half <= 0 {
-			p.emit(FillRect{Rect: band, Color: outer})
+			p.emit(FillRect{Rect: band, Color: outer, PaintedBy: p.src})
 			return
 		}
 		if horizontal {
 			p.emit(
-				FillRect{Rect: Rect{band.X, band.Y, band.W, half}, Color: outer},
-				FillRect{Rect: Rect{band.X, band.Y.Add(half), band.W, band.H.Sub(half)}, Color: inner})
+				FillRect{Rect: Rect{band.X, band.Y, band.W, half}, Color: outer, PaintedBy: p.src},
+				FillRect{Rect: Rect{band.X, band.Y.Add(half), band.W, band.H.Sub(half)}, Color: inner, PaintedBy: p.src})
 		} else {
 			p.emit(
-				FillRect{Rect: Rect{band.X, band.Y, half, band.H}, Color: outer},
-				FillRect{Rect: Rect{band.X.Add(half), band.Y, band.W.Sub(half), band.H}, Color: inner})
+				FillRect{Rect: Rect{band.X, band.Y, half, band.H}, Color: outer, PaintedBy: p.src},
+				FillRect{Rect: Rect{band.X.Add(half), band.Y, band.W.Sub(half), band.H}, Color: inner, PaintedBy: p.src})
 		}
 	}
 }

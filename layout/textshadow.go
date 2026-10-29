@@ -54,6 +54,10 @@ import (
 type DrawTextShadow struct {
 	Run    DrawText
 	StdDev style.Unit
+	// PaintedBy is the run's box, and PartShadow — or, for a shadow a
+	// drop-shadow() filter cast, the filtered box. Run's own PaintedBy is not
+	// set: the shadow is not the run.
+	PaintedBy PaintedBy
 }
 
 func (DrawTextShadow) isOp() {}
@@ -183,8 +187,11 @@ func readShadow(item []css.ComponentValue, ctx style.LengthContext, text style.R
 // and overlines, then the text — its glyphs, or for a control character the box
 // drawn in its place — then its emphasis marks, then the line-throughs. A mark
 // is glyphs, so its shadow is a DrawTextShadow like the text's.
-func (p *painter) paintShadows(shadows []textShadow, under []Rect, text *DrawText, glyphs []Rect,
+//
+// Every shadow is attributed to by, the run's box.
+func (p *painter) paintShadows(by *Box, shadows []textShadow, under []Rect, text *DrawText, glyphs []Rect,
 	marks []DrawText, over []Rect) {
+	src := PaintedBy{Box: by, Part: PartShadow}
 	for i := len(shadows) - 1; i >= 0; i-- {
 		s := shadows[i]
 		if s.colour.A == 0 {
@@ -195,31 +202,33 @@ func (p *painter) paintShadows(shadows []textShadow, under []Rect, text *DrawTex
 			for _, r := range rs {
 				out = append(out, FillRect{
 					Rect:  Rect{X: r.X.Add(s.dx), Y: r.Y.Add(s.dy), W: r.W, H: r.H},
-					Color: s.colour, Overhang: true,
+					Color: s.colour, Overhang: true, PaintedBy: src,
 				})
 			}
 			return out
 		}
-		p.shadowFills(moved(under), s)
-		p.shadowFills(moved(glyphs), s)
+		p.shadowFills(moved(under), s, by)
+		p.shadowFills(moved(glyphs), s, by)
 		if text != nil {
 			run := *text
 			run.At = Point{X: run.At.X.Add(s.dx), Y: run.At.Y.Add(s.dy)}
-			run.Color = s.colour
-			p.emit(DrawTextShadow{Run: run, StdDev: s.stdDev})
+			// The run's own attribution is the run's, and the shadow is not
+			// the run.
+			run.Color, run.PaintedBy = s.colour, PaintedBy{}
+			p.emit(DrawTextShadow{Run: run, StdDev: s.stdDev, PaintedBy: src})
 		}
 		for _, m := range marks {
 			m.At = Point{X: m.At.X.Add(s.dx), Y: m.At.Y.Add(s.dy)}
 			m.Color = s.colour
-			p.emit(DrawTextShadow{Run: m, StdDev: s.stdDev})
+			p.emit(DrawTextShadow{Run: m, StdDev: s.stdDev, PaintedBy: src})
 		}
-		p.shadowFills(moved(over), s)
+		p.shadowFills(moved(over), s, by)
 	}
 }
 
 // shadowFills emits the shadows of decoration lines: the lines themselves in
-// the shadow's colour, or blurred in a FilterGroup.
-func (p *painter) shadowFills(fills []Op, s textShadow) {
+// the shadow's colour, or blurred in a FilterGroup made for by, the run's box.
+func (p *painter) shadowFills(fills []Op, s textShadow, by *Box) {
 	if len(fills) == 0 {
 		return
 	}
@@ -228,6 +237,8 @@ func (p *painter) shadowFills(fills []Op, s textShadow) {
 		return
 	}
 	for _, f := range fills {
-		p.emit(newFilterGroup([]FilterFunction{{Kind: FilterBlur, StdDev: s.stdDev}}, []Op{f}))
+		g := newFilterGroup([]FilterFunction{{Kind: FilterBlur, StdDev: s.stdDev}}, []Op{f})
+		g.PaintedBy = PaintedBy{Box: by, Part: PartGroup}
+		p.emit(g)
 	}
 }

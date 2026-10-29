@@ -292,7 +292,7 @@ func dimOps(ops []Op, at int, alpha float64) ([]Op, []groupMark) {
 				continue
 			}
 			g := newTransformGroup(m, inner)
-			g.Clip = v.Clip
+			g.Clip, g.PaintedBy = v.Clip, v.PaintedBy
 			kept = append(kept, g)
 		case DrawImage:
 			marks = append(marks, groupMark{rect: v.Rect, image: true})

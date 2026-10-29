@@ -130,6 +130,10 @@ type FilterGroup struct {
 	// asked for it by every group around it. See newFilterGroup.
 	ink      Rect
 	inkKnown bool
+
+	// PaintedBy is the box that painted this: the filtered box, or the box
+	// a blurred shadow is of, and PartGroup.
+	PaintedBy PaintedBy
 }
 
 // newFilterGroup is a group with its ink worked out, which is how the engine
@@ -592,7 +596,7 @@ func (p *painter) filtering(b *Box, d dim, clip Clip, round *roundClip, paint fu
 		// The groups it made are charged as emit charges a mark, and the
 		// shadows' marks before they are made; the marks themselves were
 		// charged when they were painted.
-		out, groups, cast := p.applyFilters(chain, marks)
+		out, groups, cast := p.applyFilters(chain, marks, b)
 		if groups > 0 && !p.rec.chargeMark(int64(groups)*costOp, "the marks past that point") {
 			out, cast = nil, nil
 		}
@@ -627,7 +631,10 @@ func (p *painter) filtering(b *Box, d dim, clip Clip, round *roundClip, paint fu
 // filtercolour.go), and everything else — and those, where it is not, or where
 // filterPass will not pay for them — a group around what came before. groups is
 // how many groups it made, and cast is the shadows it cast as marks.
-func (p *painter) applyFilters(chain []FilterFunction, ops []Op) (out []Op, groups int, cast []Op) {
+//
+// Every group it makes is attributed to by, the filtered box, and every shadow
+// it casts as well: see shadowOps.
+func (p *painter) applyFilters(chain []FilterFunction, ops []Op, by *Box) (out []Op, groups int, cast []Op) {
 	// own is set while ops is one group this made, to which the next
 	// function is added rather than a group wrapped round it: a group applies
 	// its chain in order, which is what nesting would.
@@ -639,7 +646,9 @@ func (p *painter) applyFilters(chain []FilterFunction, ops []Op) (out []Op, grou
 			ops[0] = g
 			return
 		}
-		ops = []Op{newFilterGroup([]FilterFunction{f}, ops)}
+		g := newFilterGroup([]FilterFunction{f}, ops)
+		g.PaintedBy = PaintedBy{Box: by, Part: PartGroup}
+		ops = []Op{g}
 		own = true
 		groups++
 	}
@@ -670,7 +679,7 @@ func (p *painter) applyFilters(chain []FilterFunction, ops []Op) (out []Op, grou
 			if !p.rec.chargeMark((n+1)*costOp, "the marks past that point") {
 				continue
 			}
-			shadow := shadowOps(ops, f)
+			shadow := shadowOps(ops, f, by)
 			cast = append(cast, shadow...)
 			ops = append(shadow, ops...)
 			own = false

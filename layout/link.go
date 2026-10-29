@@ -92,6 +92,9 @@ import (
 // painter.
 type hyperlink struct {
 	href string
+	// box is the <a>'s box, which its Link is attributed to; nil for an <a>
+	// with "display: contents", which has none.
+	box *Box
 }
 
 // linkSchemes are the schemes a link may name. See above for why it is a
@@ -214,7 +217,13 @@ func (p *painter) linkArea(f *Fragment, clip Clip, l *hyperlink) {
 		return
 	}
 	p.clipping(clip, func() {
-		p.emit(Link{Rects: []Rect{f.BorderRect}, Href: l.href, of: l})
+		by := l.box
+		if by == nil {
+			// A "display: contents" <a>, which has no box: see Link.PaintedBy.
+			by = f.Box
+		}
+		p.emit(Link{Rects: []Rect{f.BorderRect}, Href: l.href, of: l,
+			PaintedBy: PaintedBy{Box: by, Part: PartContent}})
 	})
 }
 

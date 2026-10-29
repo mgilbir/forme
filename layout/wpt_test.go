@@ -1973,6 +1973,12 @@ func renderForCompareDetail(root, file string) (ops []Op, findings []Finding, bl
 	findings = append(findings, rec.Findings()...)
 
 	ops = Paint(laid)
+	// Every operation says which box painted it, in every document the suite
+	// has: the fixtures in source_test.go are one per route through the
+	// painter, and this is every route the suite's documents take.
+	if bad := misattributed(ops); len(bad) > 0 {
+		suiteMisattributed = append(suiteMisattributed, file+": "+bad[0])
+	}
 	// A document that paints nothing cannot be evidence of anything. Two blank
 	// pages match, which is the purest form of the vacuous pass §7.1 warns
 	// about, and no amount of finding-counting detects it.
@@ -2405,12 +2411,25 @@ func num(u style.Unit) string {
 // comparing two different suites, which is the one thing this number cannot say
 // for itself. See WPT_DIRS in the Makefile for what the expansion bought and
 // what it did not.
+// suiteMisattributed is each document rendered for the comparison whose
+// display list had an operation that did not say which box painted it, with
+// the first such operation. See misattributed.
+var suiteMisattributed []string
+
 func TestWPTReftests(t *testing.T) {
 	root := wptDir(t)
 	tests := findReftests(t, root)
 	if len(tests) == 0 {
 		t.Fatalf("no reftests found under %s; is the sparse checkout set?", root)
 	}
+	suiteMisattributed = nil
+	defer func() {
+		if n := len(suiteMisattributed); n > 0 {
+			t.Errorf("%d documents painted an operation that does not say which box "+
+				"painted it; the first %d: %s", n, min(n, 20),
+				strings.Join(suiteMisattributed[:min(n, 20)], "; "))
+		}
+	}()
 
 	var cleanPass, vacuousPass, fail, broke int
 	var failed []string

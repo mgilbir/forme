@@ -93,6 +93,9 @@ import (
 // character of the document.
 type DrawEmphasisMark struct {
 	Mark DrawText
+	// PaintedBy is the box of the run the mark is over, and PartDecoration.
+	// Mark's own PaintedBy is not set: the mark is not the run.
+	PaintedBy PaintedBy
 }
 
 func (DrawEmphasisMark) isOp() {}

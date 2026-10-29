@@ -193,7 +193,7 @@ func (l *layouter) resolveClips(root *Fragment) {
 			// A box clipped on one axis only runs on along the other, and a
 			// corner of it cannot be cut.
 			if x, y := overflowClipsAxes(f.Box.Style); x && y {
-				roundContent = round.with(f.PaddingRect(), f.paddingRadii())
+				roundContent = round.with(f.PaddingRect(), f.paddingRadii(), f.Box)
 			}
 		}
 		if self.Active || content.Active {

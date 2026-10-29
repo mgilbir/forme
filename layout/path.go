@@ -426,6 +426,9 @@ type FillPath struct {
 	// Overhang is FillRect.Overhang, for the rounded background and border of
 	// an inline box.
 	Overhang bool
+
+	// PaintedBy is the box that painted this, and what of the box it is.
+	PaintedBy PaintedBy
 }
 
 func (FillPath) isOp() {}
@@ -447,6 +450,10 @@ func (FillPath) isOp() {}
 type ClipPath struct {
 	Path Path
 	Ops  []Op
+
+	// PaintedBy is the box that painted this: the box whose rounded corners
+	// the path is, or whose rounded border's dashes it cuts, and PartGroup.
+	PaintedBy PaintedBy
 }
 
 func (ClipPath) isOp() {}

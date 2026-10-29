@@ -413,16 +413,19 @@ func (p *painter) reportOnce(b *Box, what string, f Finding) {
 type roundClip struct {
 	box   Rect
 	radii Radii
-	up    *roundClip
+	// by is the box whose curve this is, which the ClipPath it makes is
+	// attributed to.
+	by *Box
+	up *roundClip
 }
 
-// with is a chain with one more rounded rectangle inside it, or the chain as it
-// was when the rectangle's corners are all square.
-func (c *roundClip) with(box Rect, radii Radii) *roundClip {
+// with is a chain with one more rounded rectangle inside it, the curve of box
+// by, or the chain as it was when the rectangle's corners are all square.
+func (c *roundClip) with(box Rect, radii Radii, by *Box) *roundClip {
 	if radii.IsZero() {
 		return c
 	}
-	return &roundClip{box: box, radii: radii, up: c}
+	return &roundClip{box: box, radii: radii, by: by, up: c}
 }
 
 // opBounds is the rectangle an operation may mark, for the question of whether
@@ -473,7 +476,7 @@ func roundOps(ops []Op, at int, chain *roundClip) ([]Op, int) {
 	made := 0
 	for c := chain; c != nil; c = c.up {
 		var n int
-		ops, n = roundOpsOnce(ops, at, c.box, c.radii)
+		ops, n = roundOpsOnce(ops, at, c.box, c.radii, c.by)
 		made += n
 	}
 	return ops, made
@@ -496,14 +499,15 @@ func (p *painter) rounding(at int, chain *roundClip) {
 	}
 }
 
-func roundOpsOnce(ops []Op, at int, box Rect, radii Radii) ([]Op, int) {
+func roundOpsOnce(ops []Op, at int, box Rect, radii Radii, by *Box) ([]Op, int) {
 	tail := append([]Op(nil), ops[at:]...)
 	kept := ops[:at]
 	var group []Op
 	made := 0
 	flush := func() {
 		if len(group) > 0 {
-			kept = append(kept, ClipPath{Path: roundedRect(box, radii), Ops: group})
+			kept = append(kept, ClipPath{Path: roundedRect(box, radii), Ops: group,
+				PaintedBy: PaintedBy{Box: by, Part: PartGroup}})
 			group = nil
 			made++
 		}

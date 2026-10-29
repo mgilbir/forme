@@ -841,6 +841,9 @@ func (b *boxBuilder) elementBox(n *html.Node, parentFontSize style.Unit) *Box {
 	box.ListValue, box.ListNumbered = b.listValueOf(n, listItem)
 	box.Control = b.controlFor(n)
 	box.link = b.hyperlinkOf(n)
+	if box.link != nil {
+		box.link.box = box
+	}
 	if (outer != OuterInline && !box.outOfFlow()) || endsAWord(n) {
 		// A block-level box begins its text afresh, so a word cannot run into it
 		// from the paragraph before. Without this, "<p>hi</p><p>there</p>" under

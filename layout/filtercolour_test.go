@@ -222,7 +222,7 @@ func TestAMatrixOverAPictureIsTheBackends(t *testing.T) {
 	if _, ok := foldMatrix(ops, grayscaleMatrix(1)); ok {
 		t.Error("a matrix was folded over a picture")
 	}
-	out, _, _ := testPainter().applyFilters([]FilterFunction{{Kind: FilterColorMatrix, Matrix: grayscaleMatrix(1)}}, ops)
+	out, _, _ := testPainter().applyFilters([]FilterFunction{{Kind: FilterColorMatrix, Matrix: grayscaleMatrix(1)}}, ops, nil)
 	if len(out) != 1 {
 		t.Fatalf("the filtered picture is %v", out)
 	}
@@ -325,7 +325,7 @@ func TestAShadowIsFilteredByWhatFollowsIt(t *testing.T) {
 func TestADropShadowOverAPictureIsTheBackends(t *testing.T) {
 	ops := []Op{DrawImage{Rect: Rect{W: rpx(10), H: rpx(10)}}}
 	f := FilterFunction{Kind: FilterDropShadow, Offset: Point{X: rpx(20), Y: rpx(5)}, StdDev: rpx(2), Color: blue}
-	out, _, _ := testPainter().applyFilters([]FilterFunction{f}, ops)
+	out, _, _ := testPainter().applyFilters([]FilterFunction{f}, ops, nil)
 	g, ok := out[0].(FilterGroup)
 	if len(out) != 1 || !ok || g.Filters[0].Kind != FilterDropShadow {
 		t.Fatalf("the shadow of a picture is %v, want a group with it", out)

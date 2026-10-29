@@ -299,6 +299,9 @@ type FillGradient struct {
 	// exactly as FillRect.Overhang does: it is set on the background of an
 	// inline box, so that the overflow-page guardrail reads the two alike.
 	Overhang bool
+
+	// PaintedBy is the box that painted this, and what of the box it is.
+	PaintedBy PaintedBy
 }
 
 // Tiles is how many tiles touch the clip on each axis.
