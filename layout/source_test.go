@@ -2,10 +2,12 @@ package layout
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 )
@@ -592,5 +594,142 @@ func TestDisplayContentsKeepsItsElement(t *testing.T) {
 				t.Errorf("\"bonjour\" is in an element whose lang is %q, not fr", lang)
 			}
 		}
+	}
+}
+
+// nodesIn is every operation's Node in a list, groups' contents included, by
+// the kind and part of the operation and the node's text: "DrawText/content
+// \"a \"" — for a test asking which operations name a node and which do not.
+func nodesIn(ops []Op) []string {
+	var out []string
+	var walk func([]Op)
+	walk = func(ops []Op) {
+		for _, op := range ops {
+			by := OpPaintedBy(op)
+			if n := by.Node(); n != nil {
+				out = append(out, fmt.Sprintf("%T/%s %q", op, by.Part, n.Text))
+			}
+			switch v := op.(type) {
+			case ClipPath:
+				walk(v.Ops)
+			case FilterGroup:
+				walk(v.Ops)
+			case TransformGroup:
+				walk(v.Ops)
+			}
+		}
+	}
+	walk(ops)
+	return out
+}
+
+// TestARunLeadsToItsTextNode is #965's acceptance case: the runs either side
+// of a child that makes a stacking context each lead to their own text node,
+// and the nodes' places among the paragraph's children are the document's
+// order, which the order they are painted in is not.
+func TestARunLeadsToItsTextNode(t *testing.T) {
+	out := composeAttributed(t, `<p>a <span style="transform: rotate(10deg); display: inline-block">b</span> c</p>`,
+		"", Options{})
+	at := map[string]int{}
+	nodes := map[string]*html.Node{}
+	for i, op := range out.Ops {
+		v, ok := op.(DrawText)
+		if !ok || strings.TrimSpace(v.Text) == "" {
+			continue
+		}
+		w := strings.TrimSpace(v.Text)
+		at[w], nodes[w] = i, v.PaintedBy.Node()
+		if n := nodes[w]; n == nil || n.Type != html.TextNode || !strings.Contains(n.Text, w) {
+			t.Fatalf("the run %q leads to the node %+v, not to the text node it was taken from", w, n)
+		}
+	}
+	if !(at["c"] < at["b"]) {
+		t.Fatalf("the span is painted at %d and the run after it at %d: the fixture no longer "+
+			"paints out of document order, so it shows nothing", at["b"], at["c"])
+	}
+	p := nodes["a"].Parent
+	if p == nil || p.Name != "p" || nodes["c"].Parent != p {
+		t.Fatalf("the runs' nodes are not both the <p>'s children")
+	}
+	index := func(n *html.Node) int { return slices.Index(p.Children, n) }
+	span := nodes["b"].Parent
+	if ia, is, ic := index(nodes["a"]), index(span), index(nodes["c"]); !(ia >= 0 && ia < is && is < ic) {
+		t.Errorf("among the <p>'s children, a is at %d, the <span> at %d and c at %d", ia, is, ic)
+	}
+}
+
+// TestOnlyTheDocumentsTextHasANode: generated text — content, a marker, a
+// form control's value, an image's alternative text — names no node, and
+// neither does anything drawn of a run that is not the run: its shadow, its
+// emphasis marks, the lines across it, a link around it.
+func TestOnlyTheDocumentsTextHasANode(t *testing.T) {
+	out := composeAttributed(t,
+		`<ol><li>item</li></ol><p class=g>x</p><input value="typed"><img alt="alt text" src="missing.png">`+
+			`<p style="text-shadow: 1px 1px red; text-emphasis: dot; text-decoration: underline">`+
+			`<a href="https://e.org/">linked</a></p>`,
+		`.g::before { content: "gen" }`, Options{})
+	got := nodesIn(out.Ops)
+	sort.Strings(got)
+	want := []string{`layout.DrawText/content "item"`, `layout.DrawText/content "linked"`, `layout.DrawText/content "x"`}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("the operations naming a node are\n%v\nnot\n%v", got, want)
+	}
+	kinds := paintedKinds(out.Ops)
+	for _, k := range []string{"DrawText/marker", "DrawTextShadow/shadow", "DrawEmphasisMark/decoration",
+		"FillRect/decoration", "Link/content"} {
+		if !kinds[k] {
+			t.Errorf("no %s was drawn, so its having no node shows nothing", k)
+		}
+	}
+	var texts []string
+	for _, op := range out.Ops {
+		if v, ok := op.(DrawText); ok {
+			texts = append(texts, v.Text)
+		}
+	}
+	for _, generated := range []string{"gen", "typed", "alt"} {
+		if !slices.Contains(texts, generated) {
+			t.Errorf("%q was not drawn, so its having no node shows nothing: %q", generated, texts)
+		}
+	}
+}
+
+// TestAStretchedOperatorLeadsToItsTextNode: a formula's operator drawn as
+// glyphs is the document's text, and leads to its <mo>'s text node; a
+// radical's sign is the engine's, and leads to none, whether it is drawn as
+// glyphs or, in a face with no construction for it, as text.
+func TestAStretchedOperatorLeadsToItsTextNode(t *testing.T) {
+	_, ops, _ := mathComposedWith(t, mathStretchFace(t, nil),
+		`<math display="block"><mo>∑</mo><msqrt><mi>x</mi></msqrt></math>`, Options{})
+	var sum, surd bool
+	for _, op := range ops {
+		var text string
+		switch v := op.(type) {
+		case DrawGlyphs:
+			text = v.Text
+		case DrawText:
+			if v.Text != "√" {
+				continue
+			}
+			text = v.Text
+		default:
+			continue
+		}
+		n := OpPaintedBy(op).Node()
+		switch text {
+		case "∑":
+			sum = true
+			if n == nil || n.Type != html.TextNode || n.Text != "∑" || n.Parent.Name != "mo" {
+				t.Errorf("the stretched ∑ leads to %+v, not to its <mo>'s text", n)
+			}
+		case "√":
+			surd = true
+			if n != nil {
+				t.Errorf("the radical's sign leads to %+v, which the document did not write", n)
+			}
+		}
+	}
+	if !sum || !surd {
+		t.Fatalf("drew the ∑ as glyphs %v, drew the √ %v: the fixture shows nothing", sum, surd)
 	}
 }

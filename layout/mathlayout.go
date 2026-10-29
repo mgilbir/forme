@@ -114,8 +114,11 @@ type mathGlyphMark struct {
 // baseline, from the content box of the fragment that draws it; the text it
 // stands for; and its glyphs, or none where it is drawn as that text.
 type mathGlyphDraw struct {
-	at     Point
-	text   string
+	at   Point
+	text string
+	// node is the text node text was taken from, nil for text no node
+	// holds: a radical's sign. See PaintedBy.Node.
+	node   *html.Node
 	glyphs []shape.Glyph
 	face   *shape.Face
 	size   style.Unit

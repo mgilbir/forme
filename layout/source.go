@@ -48,7 +48,30 @@ type PaintedBy struct {
 	// element is the element where it is not Box's to find: a Link of an <a>
 	// with "display: contents", which has no box of its own. See Element.
 	element *html.Node
+	// node is the text node the operation draws, for the document's own
+	// text. See Node.
+	node *html.Node
 }
+
+// Node is the text node of the document an operation draws: the html.Node of
+// type TextNode a run of text, or a formula's operator drawn as glyphs, was
+// taken from. It is nil for everything else — text the engine generated
+// (::before and ::after content, a list marker, a form control's value, an
+// image's alternative text, a radical's sign), and every operation that is
+// not the text itself: a shadow, an emphasis mark, a decoration line, a Link.
+//
+// It is what places a run among its element's children. Element says a run
+// belongs to a <p>, and not where in the <p>; and paint order cannot say it
+// either, since a child that makes a stacking context — transformed,
+// positioned, translucent — is painted after the text on both sides of it.
+// The node's place among its parent's Children is the run's place in the
+// document. A text node broken across lines, or into runs of different
+// faces, is several operations with one node.
+//
+// A formula's stretched operator takes the first text node its token holds,
+// which is the whole of its text in every document but one that splits an
+// operator's characters across comments or CDATA.
+func (s PaintedBy) Node() *html.Node { return s.node }
 
 // Element is the element the operation belongs to, which is an element of
 // the document's tree and not of the box tree: Box's own element; for a run of

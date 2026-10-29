@@ -52,6 +52,7 @@ func (p *painter) mathMarks(f *Fragment) {
 		if n := len(g.glyphs) - 1; n > 0 && !p.rec.chargeMark(int64(n)*costOp, "the marks past that point") {
 			continue
 		}
-		p.emit(DrawGlyphs{At: at, Text: g.text, Glyphs: g.glyphs, Face: g.face, Size: g.size, Color: colour})
+		p.emit(DrawGlyphs{At: at, Text: g.text, Glyphs: g.glyphs, Face: g.face, Size: g.size, Color: colour,
+			PaintedBy: PaintedBy{Box: f.Box, Part: PartContent, node: g.node}})
 	}
 }
