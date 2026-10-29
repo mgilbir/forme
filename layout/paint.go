@@ -2682,7 +2682,11 @@ func (p *painter) lineRun(f *Fragment, content Rect, around dim, line *LineFragm
 // words: its shadows, its emphasis marks and the lines ruled across it, each of
 // which says what it is as it is made.
 func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTurn) {
-	p.from(PaintedBy{Box: run.Box, Part: PartContent}, func() { p.paintRunOf(run, at, colour, turn) })
+	src := PaintedBy{Box: run.Box, Part: PartContent}
+	if run.Box != nil {
+		src.node = run.Box.textNode
+	}
+	p.from(src, func() { p.paintRunOf(run, at, colour, turn) })
 }
 
 func (p *painter) paintRunOf(run TextRun, at Point, colour style.RGBA, turn runTurn) {

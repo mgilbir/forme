@@ -303,7 +303,8 @@ func (l *layouter) mathOpContent(b *Box, d mathOpDrawn, text string) mathContent
 	}
 	c.inkAscent, c.inkDescent = c.ascent, c.descent
 	c.glyphs = append(c.glyphs, mathGlyphMark{width: c.width, baseline: style.Unit(0).Sub(d.delta),
-		draw: mathGlyphDraw{text: text, glyphs: mathGlyphsOf(m.face, d.st), face: m.face, size: b.FontSize}})
+		draw: mathGlyphDraw{text: text, node: mathTokenNode(b), glyphs: mathGlyphsOf(m.face, d.st),
+			face: m.face, size: b.FontSize}})
 	return c
 }
 

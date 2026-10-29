@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/forme/css"
+	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/internal/ascii"
 	"github.com/mgilbir/forme/style"
 )
@@ -547,6 +548,18 @@ func (l *layouter) mathRowEnds(p *Box) mathEnds {
 	}
 	l.mathEnds[p] = out
 	return out
+}
+
+// mathTokenNode is the text node a token element's text was taken from: that
+// of the first of its text children, or nil. A text box is made only for a
+// node with text left after white space is collapsed.
+func mathTokenNode(b *Box) *html.Node {
+	for _, c := range b.Children {
+		if c.IsText() && c.textNode != nil {
+			return c.textNode
+		}
+	}
+	return nil
 }
 
 // mathTokenText is a token element's text: its text children's, joined, with
