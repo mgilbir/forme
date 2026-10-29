@@ -418,6 +418,14 @@ type Box struct {
 	// walk makes it one for the link and for nothing else; see
 	// inlineDecor.textLinkArea.
 	contentsLink *hyperlink
+
+	// textNode is the text node a text box's Text was taken from, and nil for
+	// every other box and for text the engine generated — content, a form
+	// control's value, an image's alternative text. It is how PaintedBy.Element
+	// finds the element a run is in where that element generated no box: one
+	// with "display: contents" is in the element tree and not in the box tree,
+	// and its text's box hangs from the nearest box around it.
+	textNode *html.Node
 }
 
 // areaLink is the link a fragment of this box is an area of in its own right:
@@ -1349,6 +1357,7 @@ func (b *boxBuilder) textBox(n *html.Node, inherited style.ComputedStyle, fontSi
 	box := &Box{
 		Outer: OuterInline, Inner: InnerText,
 		Style: inherited, Text: text, FontSize: fontSize, fontSizeKnown: true,
+		textNode: n,
 	}
 	if phase1.WroteOpen {
 		b.openSpaces = append(b.openSpaces, box)

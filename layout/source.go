@@ -44,19 +44,40 @@ type PaintedBy struct {
 	Box *Box
 	// Part is what of Box the operation is.
 	Part Part
+
+	// element is the element where it is not Box's to find: a Link of an <a>
+	// with "display: contents", which has no box of its own. See Element.
+	element *html.Node
 }
 
-// Element is the element the operation belongs to: Box's own, or for a box no
-// element generated — a run's text box, an anonymous block — that of the
+// Element is the element the operation belongs to, which is an element of
+// the document's tree and not of the box tree: Box's own element; for a run of
+// the document's text, the element the text is in; for any other box no
+// element generated — an anonymous block, generated text — that of the
 // nearest box around it that one did. It is nil for the zero PaintedBy.
+//
+// The two trees differ at an element with "display: contents", which
+// generates no box: "<span style='display: contents' lang=fr>bonjour</span>"
+// puts the run's box straight under the paragraph's, and walking the boxes
+// would declare "bonjour" in the paragraph's language. So a run of the
+// document's text is resolved through its text node's parent, and a Link of
+// an <a> with "display: contents" names the <a> itself.
 //
 // A generated box (::before, ::after) carries its originating element, so the
 // text in one leads to that element; a backend that has to tell generated
 // text from written text finds Box.Pseudo on the boxes from Box outwards.
 func (s PaintedBy) Element() *html.Node {
+	if s.element != nil {
+		return s.element
+	}
 	for b := s.Box; b != nil; b = b.Parent {
 		if b.Element != nil {
 			return b.Element
+		}
+		for n := b.textNode; n != nil; n = n.Parent {
+			if n.Type == html.ElementNode {
+				return n
+			}
 		}
 	}
 	return nil

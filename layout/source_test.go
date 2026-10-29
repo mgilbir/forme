@@ -554,3 +554,43 @@ func newGroupBy[G FilterGroup | TransformGroup](g G, by PaintedBy) Op {
 	}
 	return nil
 }
+
+// TestDisplayContentsKeepsItsElement is the review of #964 from pdf0: an
+// element with "display: contents" generates no box, and a walk of the box
+// tree resolved its text to the paragraph around it — "bonjour" declared in
+// the paragraph's language, and a contents <a>'s text and Link placed outside
+// the link. Element resolves through the document's tree instead.
+func TestDisplayContentsKeepsItsElement(t *testing.T) {
+	out := composeAttributed(t, `<p lang=en>a <span style="display: contents" lang=fr>bonjour</span> b `+
+		`<a style="display: contents" href="https://e.org/">dc <b>bold</b></a></p>`+
+		`<p><a style="display: contents" href="https://f.org/"><b>first</b> then</a></p>`, "", Options{})
+	texts := map[string]string{}
+	links := map[string]string{}
+	for _, op := range out.Ops {
+		switch v := op.(type) {
+		case DrawText:
+			if w := strings.TrimSpace(v.Text); w != "" {
+				texts[w] = paintedElement(v)
+			}
+		case Link:
+			links[v.Href] = paintedElement(v)
+		}
+	}
+	for word, want := range map[string]string{"bonjour": "span", "dc": "a", "bold": "b", "a": "p", "then": "a"} {
+		if got := texts[word]; got != want {
+			t.Errorf("%q leads to <%s>, not <%s>", word, got, want)
+		}
+	}
+	for href, want := range map[string]string{"https://e.org/": "a", "https://f.org/": "a"} {
+		if got := links[href]; got != want {
+			t.Errorf("the link to %s leads to <%s>, not <%s>", href, got, want)
+		}
+	}
+	for _, op := range out.Ops {
+		if v, ok := op.(DrawText); ok && strings.TrimSpace(v.Text) == "bonjour" {
+			if lang, _ := v.PaintedBy.Element().AttrExact("lang"); lang != "fr" {
+				t.Errorf("\"bonjour\" is in an element whose lang is %q, not fr", lang)
+			}
+		}
+	}
+}

@@ -93,8 +93,10 @@ import (
 type hyperlink struct {
 	href string
 	// box is the <a>'s box, which its Link is attributed to; nil for an <a>
-	// with "display: contents", which has none.
-	box *Box
+	// with "display: contents", which has none. node is the <a>, which such a
+	// Link names in place of a box. See Link.PaintedBy.
+	box  *Box
+	node *html.Node
 }
 
 // linkSchemes are the schemes a link may name. See above for why it is a
@@ -123,7 +125,7 @@ func (b *boxBuilder) hyperlinkOf(n *html.Node) *hyperlink {
 		})
 		return nil
 	}
-	return &hyperlink{href: target}
+	return &hyperlink{href: target, node: n}
 }
 
 // linkTarget is an href as a link's target, or why it is refused.
@@ -217,13 +219,12 @@ func (p *painter) linkArea(f *Fragment, clip Clip, l *hyperlink) {
 		return
 	}
 	p.clipping(clip, func() {
-		by := l.box
-		if by == nil {
+		src := PaintedBy{Box: l.box, Part: PartContent}
+		if l.box == nil {
 			// A "display: contents" <a>, which has no box: see Link.PaintedBy.
-			by = f.Box
+			src = PaintedBy{Box: f.Box, Part: PartContent, element: l.node}
 		}
-		p.emit(Link{Rects: []Rect{f.BorderRect}, Href: l.href, of: l,
-			PaintedBy: PaintedBy{Box: by, Part: PartContent}})
+		p.emit(Link{Rects: []Rect{f.BorderRect}, Href: l.href, of: l, PaintedBy: src})
 	})
 }
 

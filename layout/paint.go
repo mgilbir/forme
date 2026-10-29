@@ -381,8 +381,8 @@ type Link struct {
 
 	// PaintedBy is the <a>'s box, as the content of it. An <a> with "display:
 	// contents" has no box, and its Link is attributed to the box of its
-	// first area, which is one of those the <a> stands for and whose element
-	// is inside it.
+	// first area, which is one of those the <a> stands for; its Element is
+	// the <a> all the same.
 	PaintedBy PaintedBy
 
 	// of is the <a> the areas belong to, while the paint gathers them into one
