@@ -426,11 +426,16 @@ func shadowable(ops []Op) bool {
 // where no layout decision placed anything, as a text decoration and an
 // outline are, and the overflow-page guardrail, which refuses a document whose
 // boxes leave the page, must not read a shadow past the edge as one of them.
-func shadowOps(ops []Op, f FilterFunction) []Op {
+//
+// Every operation of it is attributed to by, the filtered box, whose shadow it
+// is: the marks it is a shadow of are the content and the dress of boxes inside
+// it, and their shadows are neither.
+func shadowOps(ops []Op, f FilterFunction, by *Box) []Op {
 	marks := shadowMarks(ops, f.Offset, f.Color)
 	if len(marks) == 0 {
 		return nil
 	}
+	castBy(marks, by)
 	var chain []FilterFunction
 	if f.StdDev > 0 {
 		chain = append(chain, FilterFunction{Kind: FilterBlur, StdDev: f.StdDev})
@@ -443,7 +448,44 @@ func shadowOps(ops []Op, f FilterFunction) []Op {
 		// their alphas already.
 		return marks
 	}
-	return []Op{newFilterGroup(chain, marks)}
+	g := newFilterGroup(chain, marks)
+	g.PaintedBy = PaintedBy{Box: by, Part: PartGroup}
+	return []Op{g}
+}
+
+// castBy attributes a shadow's operations to by, in place: each mark as
+// PartShadow and each group as PartGroup, and the run of a shadow of text as
+// nothing, since the shadow is not the run. Every slice it writes to is one
+// shadowMarks made.
+func castBy(ops []Op, by *Box) {
+	shadow, group := PaintedBy{Box: by, Part: PartShadow}, PaintedBy{Box: by, Part: PartGroup}
+	for i, op := range ops {
+		switch v := op.(type) {
+		case FillRect:
+			v.PaintedBy = shadow
+			ops[i] = v
+		case FillPath:
+			v.PaintedBy = shadow
+			ops[i] = v
+		case FillGradient:
+			v.PaintedBy = shadow
+			ops[i] = v
+		case DrawTextShadow:
+			v.PaintedBy, v.Run.PaintedBy = shadow, PaintedBy{}
+			ops[i] = v
+		case DrawGlyphs:
+			v.PaintedBy = shadow
+			ops[i] = v
+		case ClipPath:
+			castBy(v.Ops, by)
+			v.PaintedBy = group
+			ops[i] = v
+		case FilterGroup:
+			castBy(v.Ops, by)
+			v.PaintedBy = group
+			ops[i] = v
+		}
+	}
 }
 
 func shadowMarks(ops []Op, d Point, c style.RGBA) []Op {

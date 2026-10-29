@@ -892,7 +892,7 @@ func (q quarterTurn) mapOp(op Op) (Op, string) {
 		if why != "" {
 			return v, why
 		}
-		return ClipPath{Path: q.path(v.Path), Ops: inner}, ""
+		return ClipPath{Path: q.path(v.Path), Ops: inner, PaintedBy: v.PaintedBy}, ""
 	case DrawImage:
 		if q.turns != 0 {
 			return v, turnsAPicture
@@ -958,7 +958,7 @@ func (q quarterTurn) mapOp(op Op) (Op, string) {
 			return v, why
 		}
 		g := newFilterGroup(filters, inner)
-		g.Clip = q.clip(v.Clip)
+		g.Clip, g.PaintedBy = q.clip(v.Clip), v.PaintedBy
 		return g, ""
 	case TransformGroup:
 		// The group's own matrix acts first, on what it holds, which stays
@@ -1023,6 +1023,10 @@ type TransformGroup struct {
 	// every group around it. See newTransformGroup.
 	ink      Rect
 	inkKnown bool
+
+	// PaintedBy is the box that painted this: the transformed box, and
+	// PartGroup.
+	PaintedBy PaintedBy
 }
 
 func (TransformGroup) isOp() {}
@@ -1169,7 +1173,9 @@ func (p *painter) transformGroup(f *Fragment, at, logAt int, m affine) {
 	}
 	p.ops = append(p.ops[:at], links...)
 	if len(inner) > 0 {
-		p.ops = append(p.ops, newTransformGroup(m, inner))
+		g := newTransformGroup(m, inner)
+		g.PaintedBy = PaintedBy{Box: f.Box, Part: PartGroup}
+		p.ops = append(p.ops, g)
 	}
 	for _, l := range p.transformLogs[logAt:] {
 		if r := l.g.marks[l.i].rect; !r.Empty() {

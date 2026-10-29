@@ -51,6 +51,9 @@ type DrawGlyphs struct {
 	// Clip is §11.1's clipping, when something cuts the glyphs, as a
 	// DrawText's is: set only when the clip really does cut them.
 	Clip Clip
+
+	// PaintedBy is the box that painted this, and what of the box it is.
+	PaintedBy PaintedBy
 }
 
 func (DrawGlyphs) isOp() {}

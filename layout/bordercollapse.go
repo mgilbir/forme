@@ -1095,6 +1095,12 @@ func (p *painter) paintCollapsedBands(f *Fragment) {
 			X: f.BorderRect.X.Add(b.rect.X), Y: f.BorderRect.Y.Add(b.rect.Y),
 			W: b.rect.W, H: b.rect.H,
 		}
-		p.paintEdge(band, b.kind, colour, b.side, b.width)
+		// Each stretch of grid line is the border of the box whose border won
+		// it, which is the box its colour and style are read from.
+		by := b.box
+		if by == nil {
+			by = f.Box
+		}
+		p.from(PaintedBy{Box: by, Part: PartBorder}, func() { p.paintEdge(band, b.kind, colour, b.side, b.width) })
 	}
 }

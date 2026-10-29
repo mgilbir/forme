@@ -51,6 +51,9 @@ import (
 // operation's meaning, once stated, is not changed — so a backend that meets a
 // kind it has no case for has met something new, and should say so rather than
 // draw around it.
+//
+// Every one of them says which box painted it, and what of the box it is, in
+// its PaintedBy: see source.go.
 type Op interface{ isOp() }
 
 // FillRect paints a rectangle in a solid colour.
@@ -78,6 +81,9 @@ type FillRect struct {
 	// in the flow ever measured. The scale-to-fit calculation cannot have
 	// accounted for it, so a guard checking that calculation must not read it.
 	Overhang bool
+
+	// PaintedBy is the box that painted this, and what of the box it is.
+	PaintedBy PaintedBy
 }
 
 // DrawText draws a run of text with the origin of its baseline at At.
@@ -226,6 +232,11 @@ type DrawText struct {
 	// identical to the list of one that does not, which is what the reftest
 	// comparison needs to be able to say the two look the same.
 	Clip Clip
+
+	// PaintedBy is the box that painted this, and what of the box it is: the
+	// text box the run came from and PartContent, or a list item and
+	// PartMarker.
+	PaintedBy PaintedBy
 }
 
 // DrawImage paints a decoded image to fill a rectangle.
@@ -251,6 +262,9 @@ type DrawImage struct {
 	// image into the visible strip rather than cutting the part that is not.
 	// A backend must intersect its own clipping path with this.
 	Clip Clip
+
+	// PaintedBy is the box that painted this, and what of the box it is.
+	PaintedBy PaintedBy
 }
 
 // TileImage paints a picture repeatedly across a rectangle.
@@ -285,6 +299,9 @@ type TileImage struct {
 	Image image.Image
 	// Key identifies the source bytes, so a backend embeds one picture once.
 	Key string
+
+	// PaintedBy is the box that painted this, and what of the box it is.
+	PaintedBy PaintedBy
 }
 
 // Tiles is how many tiles touch the clip on each axis, which is what a consumer
@@ -361,6 +378,12 @@ type Link struct {
 	// never told it; or a fragment, "#x", into the document itself. Every other
 	// scheme is refused before it gets here, and is reported. See link.go.
 	Href string
+
+	// PaintedBy is the <a>'s box, as the content of it. An <a> with "display:
+	// contents" has no box, and its Link is attributed to the box of its
+	// first area, which is one of those the <a> stands for; its Element is
+	// the <a> all the same.
+	PaintedBy PaintedBy
 
 	// of is the <a> the areas belong to, while the paint gathers them into one
 	// Link. It is nil in every Link that leaves Paint.
@@ -765,12 +788,20 @@ func (p *painter) canvasBackground(root *Fragment) {
 	if root == nil || root.canvas.Empty() {
 		return
 	}
-	if b := root.canvasColor; b != nil {
-		if c, ok := p.color(b, "background-color"); ok && c.A > 0 {
-			p.emit(FillRect{Rect: root.canvas, Color: c})
-		}
+	// The page's background is attributed to the box it was taken from, the
+	// root's or <body>'s, which is the box whose background it is.
+	from := root.canvasColor
+	if from == nil {
+		from = root.Box
 	}
-	p.backgroundImages(root.canvasLayers, root.canvasColor)
+	p.from(PaintedBy{Box: from, Part: PartBackground}, func() {
+		if b := root.canvasColor; b != nil {
+			if c, ok := p.color(b, "background-color"); ok && c.A > 0 {
+				p.emit(FillRect{Rect: root.canvas, Color: c, PaintedBy: p.src})
+			}
+		}
+		p.backgroundImages(root.canvasLayers, root.canvasColor)
+	})
 }
 
 // backgroundImages emits the operations of each resolved layer. who is the box
@@ -789,7 +820,7 @@ func (p *painter) backgroundImages(layers []bgPaint, who *Box) {
 			at := len(p.ops)
 			p.backgroundLayer(l, who)
 			var curve *roundClip
-			p.rounding(at, curve.with(l.Area, l.Radii))
+			p.rounding(at, curve.with(l.Area, l.Radii, who))
 			continue
 		}
 		p.backgroundLayer(l, who)
@@ -845,6 +876,10 @@ func (p *painter) emit(ops ...Op) {
 
 type painter struct {
 	ops []Op
+	// src is what from is attributing what is painted to, for a step to
+	// write into the operations it makes: one already attributed is not
+	// copied again. See from.
+	src PaintedBy
 	// rec is the render's recorder, which carries the document's work budget
 	// every operation is charged to. It is never nil. See emit.
 	rec *Recorder
@@ -1908,16 +1943,18 @@ func (p *painter) paintDecorations(f *Fragment) {
 // image is clipped to the curve of its own painting area: CSS Backgrounds 3
 // §4.3. With square ones they are what they always were.
 func (p *painter) paintBackground(f *Fragment) {
-	if bg, ok := p.color(f.Box, "background-color"); ok && bg.A > 0 {
-		if rect := f.bgColorRect; !rect.Empty() {
-			if f.bgColorRadii.IsZero() {
-				p.emit(FillRect{Rect: rect, Color: bg})
-			} else {
-				p.emit(FillPath{Path: roundedRect(rect, f.bgColorRadii), Color: bg})
+	p.from(PaintedBy{Box: f.Box, Part: PartBackground}, func() {
+		if bg, ok := p.color(f.Box, "background-color"); ok && bg.A > 0 {
+			if rect := f.bgColorRect; !rect.Empty() {
+				if f.bgColorRadii.IsZero() {
+					p.emit(FillRect{Rect: rect, Color: bg, PaintedBy: p.src})
+				} else {
+					p.emit(FillPath{Path: roundedRect(rect, f.bgColorRadii), Color: bg, PaintedBy: p.src})
+				}
 			}
 		}
-	}
-	p.backgroundImages(f.background, f.Box)
+		p.backgroundImages(f.background, f.Box)
+	})
 }
 
 // content paints the inline-level marks a fragment carries: its list marker and
@@ -1963,28 +2000,36 @@ func (p *painter) paintContent(f *Fragment) {
 			// CSS Backgrounds 3 §4.3: "replaced element content to the curved
 			// content edge", when the box's corners are rounded.
 			var curve *roundClip
-			curve = curve.with(box, f.contentRadii())
+			curve = curve.with(box, f.contentRadii(), f.Box)
 			p.clippingRound(clip, curve, func() {
-				// Content that is one colour is a fill, not a picture stretched
-				// over the box. The two paint the same pixels and only one of
-				// them says on the page what the document said in its source —
-				// see the note on ReplacedContent.Solid.
-				if r.SVG != nil {
-					// A picture with geometry in it: each rectangle placed
-					// through the viewport transform and clipped to the box.
-					// See svg.go.
-					p.emit(r.SVG.paint(rect)...)
-				} else if r.Solid != nil {
-					p.emit(FillRect{Rect: rect, Color: *r.Solid})
-				} else {
-					p.emit(DrawImage{Rect: rect, Image: r.Image, Key: r.Key})
-				}
+				p.from(PaintedBy{Box: f.Box, Part: PartContent}, func() {
+					// Content that is one colour is a fill, not a picture
+					// stretched over the box. The two paint the same pixels
+					// and only one of them says on the page what the
+					// document said in its source — see the note on
+					// ReplacedContent.Solid.
+					if r.SVG != nil {
+						// A picture with geometry in it: each rectangle
+						// placed through the viewport transform and clipped
+						// to the box. See svg.go.
+						p.emit(r.SVG.paint(rect)...)
+					} else if r.Solid != nil {
+						p.emit(FillRect{Rect: rect, Color: *r.Solid})
+					} else {
+						p.emit(DrawImage{Rect: rect, Image: r.Image, Key: r.Key})
+					}
+				})
 			})
 		}
 	}
 	// A formula's rules and glyphs: content, as a replaced element's is. See
 	// mathpaint.go.
-	p.mathMarks(f)
+	p.from(PaintedBy{Box: f.Box, Part: PartContent}, func() { p.mathMarks(f) })
+	p.from(PaintedBy{Box: f.Box, Part: PartMarker}, func() { p.marker(f, hidden) })
+}
+
+// marker paints a list item's marker: its picture, or its text.
+func (p *painter) marker(f *Fragment, hidden bool) {
 	if m := f.Marker; m != nil && m.Image != nil && m.Image.Image != nil && !hidden {
 		// §12.6.2: the image *replaces* the marker the type would have made, so
 		// the text below is not drawn as well. It is still on the Marker, which
@@ -2001,7 +2046,7 @@ func (p *painter) paintContent(f *Fragment) {
 	} else if m := f.Marker; m != nil && m.Face != nil && !hidden {
 		at := Point{X: f.BorderRect.X.Add(m.At.X), Y: f.BorderRect.Y.Add(m.At.Y)}
 		if len(m.pieces) == 0 {
-			p.emit(DrawText{At: at, Text: m.Text, Face: m.Face, Size: m.Size, Color: m.Color})
+			p.emit(DrawText{At: at, Text: m.Text, Face: m.Face, Size: m.Size, Color: m.Color, PaintedBy: p.src})
 			return
 		}
 		// A marker whose text does not run one way, drawn a stretch at a time
@@ -2078,6 +2123,10 @@ func markOverhang(ops []Op) {
 // the sides only what is left, which is right for a solid border of one colour
 // and is where a proper implementation of border-style would start.
 func (p *painter) borders(f *Fragment) {
+	p.from(PaintedBy{Box: f.Box, Part: PartBorder}, func() { p.bordersOf(f) })
+}
+
+func (p *painter) bordersOf(f *Fragment) {
 	if f.inCollapsedGrid {
 		// §17.6.2: this box's declared border is one of the candidates the grid
 		// lines were resolved from, and it was either drawn as part of one of
@@ -2284,6 +2333,10 @@ func (p *painter) outline(f *Fragment) { p.joinedOutline([]*Fragment{f}) }
 // layout decision accounted for its position, and the overflow-page guardrail
 // must not read a two-pixel ring as a box leaving the paper.
 func (p *painter) joinedOutline(pieces []*Fragment) {
+	p.from(PaintedBy{Box: pieces[0].Box, Part: PartOutline}, func() { p.joinedOutlineOf(pieces) })
+}
+
+func (p *painter) joinedOutlineOf(pieces []*Fragment) {
 	first := pieces[0]
 	w := first.Outline
 	if w <= 0 || first.Box == nil || isHidden(first.Box) {
@@ -2624,7 +2677,15 @@ func (p *painter) lineRun(f *Fragment, content Rect, around dim, line *LineFragm
 
 // paintRun paints one run of text at its pen position, with the lines ruled
 // across it.
+//
+// What it paints is the run's box's content, but for what is not the run's
+// words: its shadows, its emphasis marks and the lines ruled across it, each of
+// which says what it is as it is made.
 func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTurn) {
+	p.from(PaintedBy{Box: run.Box, Part: PartContent}, func() { p.paintRunOf(run, at, colour, turn) })
+}
+
+func (p *painter) paintRunOf(run TextRun, at Point, colour style.RGBA, turn runTurn) {
 	// The run's shadows, which go under everything else it paints: CSS Text
 	// Decoration 3 §5.1. See textshadow.go.
 	shadows := p.shadowsOf(run.Box)
@@ -2644,7 +2705,7 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 			for _, op := range box {
 				rects = append(rects, op.(FillRect).Rect)
 			}
-			p.paintShadows(shadows, nil, nil, rects, nil, nil)
+			p.paintShadows(run.Box, shadows, nil, nil, rects, nil, nil)
 		}
 		p.emit(box...)
 		return
@@ -2676,6 +2737,7 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 		Size:          run.Size,
 		Color:         colour,
 		CharSpacing:   run.LetterSpacing,
+		PaintedBy:     p.src,
 	}
 	if run.combined {
 		// A text-combine-upright composition is drawn across the page in its
@@ -2689,7 +2751,7 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 	// text and under the line-through. See emphasis.go.
 	marks := p.emphasisMarks(run, text, at, turn)
 	if len(shadows) > 0 {
-		p.paintShadows(shadows, rectsOf(under), &text, nil, marks, rectsOf(over))
+		p.paintShadows(run.Box, shadows, rectsOf(under), &text, nil, marks, rectsOf(over))
 	}
 	p.decorate(under)
 	p.emit(text)
@@ -2697,7 +2759,7 @@ func (p *painter) paintRun(run TextRun, at Point, colour style.RGBA, turn runTur
 		// One of a transparent colour is not drawn and is still shadowed, as
 		// a decoration line is: the shadow is of its shape.
 		if m.Color.A > 0 {
-			p.emit(DrawEmphasisMark{Mark: m})
+			p.emit(DrawEmphasisMark{Mark: m, PaintedBy: PaintedBy{Box: run.Box, Part: PartDecoration}})
 		}
 	}
 	p.decorate(over)
@@ -2764,9 +2826,13 @@ func (p *painter) decorationMarks(run TextRun, at Point, turn runTurn, over bool
 		if (d.Kind == decorationLineThrough) != over {
 			continue
 		}
-		colour, ok := p.color(heldBox(d.By), "text-decoration-color")
+		by := heldBox(d.By)
+		colour, ok := p.color(by, "text-decoration-color")
 		if !ok {
 			continue
+		}
+		if by == nil {
+			by = run.Box
 		}
 		// The band in the run's own axes, from an origin at the start of its
 		// baseline: along the line for its length, off the baseline for where
@@ -2789,6 +2855,7 @@ func (p *painter) decorationMarks(run TextRun, at Point, turn runTurn, over bool
 		}
 		out = append(out, FillRect{
 			Rect: placeRun(band, at, turn), Color: colour, Overhang: true,
+			PaintedBy: PaintedBy{Box: by, Part: PartDecoration},
 		})
 	}
 	return out
