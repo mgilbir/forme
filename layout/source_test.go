@@ -555,7 +555,7 @@ func newGroupBy[G FilterGroup | TransformGroup](g G, by PaintedBy) Op {
 	return nil
 }
 
-// TestDisplayContentsKeepsItsElement is the review of #964 from pdf0: an
+// TestDisplayContentsKeepsItsElement is the review of #964 from a backend: an
 // element with "display: contents" generates no box, and a walk of the box
 // tree resolved its text to the paragraph around it — "bonjour" declared in
 // the paragraph's language, and a contents <a>'s text and Link placed outside
