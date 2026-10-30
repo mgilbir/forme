@@ -43,6 +43,8 @@ jobs:
             target: FuzzSFNTCmap
           - package: ./font
             target: FuzzParseCFF
+          - package: ./font
+            target: FuzzSFNTPost
           # The three the audit found missing. WOFF 1 and Type 1 had no target
           # at all, and the glyf transform had one only in name: FuzzDecodeWOFF2
           # reads a whole file, and the fixtures that carry a transformed glyf

@@ -15,16 +15,27 @@ import (
 // shape.Load reads NumGlyphs, WidthByGID, Cmap, GlyphBBox, CmapPartial and
 // CmapState, and of a CFF, GIDToCID and the Registry, Ordering and Supplement;
 // the subsetters read NumGlyphs. WidthByName, WidthByCID, GlyphNames,
-// GlyphPresent, GlyphNonEmpty, ComponentGID, MacCmap, SymbolCmap,
+// GlyphByName, GlyphPresent, GlyphNonEmpty, ComponentGID, MacCmap, SymbolCmap,
 // CmapSubtableCount, CIDGIDs, GIDToFD and BudgetExhausted are read by no code
 // outside this package but tests: they answered questions a PDF/A validator
 // asked of an embedded font, in the repository this package came from. See
 // doc.go.
 type Program struct {
 	// GlyphNames lists the glyph names defined by the program (a Type 1 program,
-	// or a CFF that is not CID-keyed); nil when the format identifies glyphs by
-	// index only.
+	// a CFF that is not CID-keyed, or an sfnt whose post table names its glyphs:
+	// version 1.0, 2.0 or 2.5); nil when the program identifies glyphs by index
+	// only.
 	GlyphNames map[string]bool
+	// GlyphByName gives the glyph index of each name in GlyphNames, for the
+	// programs that have both — a CFF that is not CID-keyed, and an sfnt whose
+	// post table names its glyphs — and is nil otherwise; a Type 1 program
+	// numbers no glyphs. Where a program names two glyphs alike the lower
+	// index is the one given.
+	//
+	// It is what a consumer holding a glyph name falls back on when the cmap
+	// cannot answer: a TrueType font with neither a Unicode nor a Mac Roman
+	// subtable, or a name with no Unicode value. See readPost.
+	GlyphByName map[string]int
 	// WidthByName gives advance widths (1/1000 units) for named glyphs.
 	WidthByName map[string]float64
 	// NumGlyphs is the glyph count (sfnt/CFF).
@@ -253,6 +264,9 @@ func ParseSFNTTablesWithin(tables map[string][]byte, b *Budget) *Program {
 			fp.WidthByGID[gid] = last
 		}
 	}
+
+	// post: the glyph names, after hmtx so that WidthByName can be filled.
+	readPost(fp, tables["post"])
 
 	// The cmap before the glyf walk, because the two share the budget and the
 	// cmap is the one a caller cannot do without: read first, it is whole
@@ -1466,6 +1480,7 @@ func parseCFF(data []byte, b *Budget, withWidths bool) *Program {
 		}
 	} else {
 		fp.GlyphNames = make(map[string]bool, fp.NumGlyphs)
+		fp.GlyphByName = make(map[string]int, fp.NumGlyphs)
 		if withWidths {
 			fp.WidthByName = make(map[string]float64, fp.NumGlyphs)
 		}
@@ -1477,10 +1492,15 @@ func parseCFF(data []byte, b *Budget, withWidths bool) *Program {
 			// entry that stands for every unnamed glyph at once — and so that
 			// WidthByName does not hold one glyph's width under a key the next
 			// unnamed glyph overwrites. WidthByGID still has every glyph.
-			if name == "" {
+			//
+			// A charset naming two glyphs alike is answered by the first of
+			// them, as readPost answers a post table that does, and WidthByName
+			// is that glyph's width so that both maps describe one glyph.
+			if _, seen := fp.GlyphByName[name]; name == "" || seen {
 				continue
 			}
 			fp.GlyphNames[name] = true
+			fp.GlyphByName[name] = g
 			if withWidths {
 				fp.WidthByName[name] = widths[g]
 			}

@@ -24,11 +24,11 @@
 //
 // The package came from a PDF/A validator, which asked questions of an embedded
 // font this engine does not: the width of a glyph by name or by CID, which
-// glyphs a Type 1 program defines, the Macintosh and symbol cmaps, how many
-// cmap subtables a symbolic font has. Program still carries those answers, the
-// CFF and Type 1 readers still compute them, and they are tested and fuzzed like
-// the rest — so they are held to the same standard as what shape reads, for no
-// caller in this engine.
+// glyph a name selects, which glyphs a Type 1 program defines, the Macintosh
+// and symbol cmaps, how many cmap subtables a symbolic font has. Program still
+// carries those answers, the CFF and Type 1 readers still compute them, and
+// they are tested and fuzzed like the rest — so they are held to the same
+// standard as what shape reads, for no caller in this engine.
 //
 // ParseType1 is part of that: reading a font program is this package's scope
 // whichever program it is, and a PDF validator reads the Type 1 programs a PDF
