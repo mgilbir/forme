@@ -390,11 +390,42 @@ type Link struct {
 	of *hyperlink
 }
 
+// Component is where a reported element ended up: an element the backend
+// asked about through Options.Reported — a CSS selector, so the document's
+// markup stays whatever the author meant it to be. A reported element is
+// laid out and painted like any box — the author sizes and places it with
+// CSS, it takes part in flow, floats and pagination — and the paint also
+// hands its border box to the backend, which can draw over the region on
+// its own cadence and without a re-layout: a clock, a live photo, a gauge.
+// The Component is emitted just before the element's own background and
+// border, so whatever the backend draws in its place goes in at the
+// element's own paint order. Name is the element's id (falling back to its
+// name attribute), which is how the backend knows what goes there. The
+// geometry is canvas-space, as for every op; a backend that transforms ops
+// applies its own transforms to Rect.
+type Component struct {
+	Name string
+	Rect Rect
+	Clip Clip
+}
+
+// componentName is a reported element's host-facing name: its id, which is
+// what a selector most naturally names, or its name attribute when the host
+// would rather key the region itself.
+func componentName(n *html.Node) string {
+	if v, ok := n.Attr("id"); ok {
+		return v
+	}
+	v, _ := n.Attr("name")
+	return v
+}
+
 func (FillRect) isOp()  {}
 func (DrawText) isOp()  {}
 func (DrawImage) isOp() {}
 func (TileImage) isOp() {}
 func (Link) isOp()      {}
+func (Component) isOp() {}
 
 // Paint turns a fragment tree into a display list, in painting order.
 //
@@ -463,6 +494,16 @@ func PaintReporting(root *Fragment, rec *Recorder) []Op {
 // what is measured from the page afterwards — the natural size, the font
 // sizes — has to see the box where it was drawn. See transform.go.
 func paintApplying(root *Fragment, rec *Recorder) ([]Op, transformsApplied) {
+	return paintApplyingReported(root, rec, "", nil)
+}
+
+// paintApplyingReported is paintApplying with the host's request for regions
+// (Options.Reported). reported is a CSS selector, or a comma-separated list;
+// every painted fragment whose element it selects comes out as a Component
+// op. document is the painted document, which structural selectors ("p +
+// div", ":root") ask the matcher for. A selector that does not parse is
+// reported and the paint goes on reporting nothing.
+func paintApplyingReported(root *Fragment, rec *Recorder, reported string, doc *html.Node) ([]Op, transformsApplied) {
 	if root == nil {
 		return nil, nil
 	}
@@ -474,6 +515,22 @@ func paintApplying(root *Fragment, rec *Recorder) ([]Op, transformsApplied) {
 	}
 	p := &painter{colors: map[string]style.RGBA{}, rec: rec, filters: root.filters,
 		lengths: root.paintLengths}
+	if ascii.TrimCSSSpace(reported) != "" {
+		vals, verrs := css.ParseComponentValues(reported)
+		for _, e := range verrs {
+			rec.ReportDetail(Finding{Rule: RuleInvalidCSS, Message: e.Message})
+		}
+		if sels, serrs, ok := css.ParseSelectorList(vals); ok {
+			p.reportSel = sels
+			p.matcher = style.NewMatcher(doc)
+		} else {
+			for _, e := range serrs {
+				rec.ReportDetail(Finding{Rule: RuleInvalidCSS, Message: e.Message})
+			}
+			rec.ReportDetail(Finding{Rule: RuleInvalidCSS, Message: "the reported selector \"" +
+				ascii.TrimCSSSpace(reported) + "\" does not parse, so no element is reported"})
+		}
+	}
 	p.dimming(root, 1, nil)
 	p.findInlineLevels(root)
 	p.canvasBackground(root)
@@ -876,6 +933,12 @@ func (p *painter) emit(ops ...Op) {
 
 type painter struct {
 	ops []Op
+	// reportSel and matcher carry the host's request for regions (Options.
+	// Reported): the selectors the backend asked to be told about, and the
+	// matcher to ask. Both nil unless a selector was given — the paint then
+	// runs exactly as it would have, and nothing is reported.
+	reportSel []css.Selector
+	matcher   *style.Matcher
 	// src is what from is attributing what is painted to, for a step to
 	// write into the operations it makes: one already attributed is not
 	// copied again. See from.
@@ -1877,6 +1940,26 @@ func uprightExtent(v DrawText) (along, above, below style.Unit) {
 func (p *painter) decorations(f *Fragment) {
 	if f.Box == nil {
 		return
+	}
+	// A reported element (Options.Reported) has its border box reported to
+	// the host, and is then painted as any box is. Every non-line fragment
+	// passes through here exactly once, so this is where it is reported —
+	// next to the link areas, which have the same shape of problem. A
+	// ::before or ::after box carries its originating element in Element,
+	// and is not that element's box, so it is not reported for it.
+	if p.reportSel != nil && f.Box.Pseudo == "" {
+		if n := f.Box.Element; n != nil && n.Type == html.ElementNode {
+			for _, sel := range p.reportSel {
+				if p.matcher.Match(sel, n) {
+					p.emit(Component{
+						Name: componentName(n),
+						Rect: f.BorderRect,
+						Clip: f.clipSelf,
+					})
+					break
+				}
+			}
+		}
 	}
 	p.grouped(f, func() { p.decorationsIn(f) })
 	// The fragment's area as a link's, where it is one: every fragment that

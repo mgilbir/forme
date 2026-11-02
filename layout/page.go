@@ -116,6 +116,17 @@ type Options struct {
 	// that reflows the text, which is what §5's single geometric scale exists
 	// to avoid.
 	AllowScaleUp bool
+	// Reported is a CSS selector, or a comma-separated list of them, naming
+	// the elements whose position the backend wants to know. Each match is
+	// laid out and painted like any box, and also reported as a Component op
+	// — its border box, its id. It is how an embedding application learns
+	// where a region of the page ended up, to draw over it on its own
+	// cadence: a clock, a live photo, a gauge. A box is reported, not an
+	// element's pieces of lines: an element laid out as an inline box (a
+	// span, by default) is not, and one with any other display — block,
+	// inline-block, flex, table — is. The empty string, the default, reports
+	// nothing.
+	Reported string
 	// TransformGroups says the backend draws a TransformGroup, so a transform
 	// may be drawn at any angle: rotate(30deg), a skew, a mirror, and a
 	// quarter turn of a picture or of text stretched one way. It is off by
@@ -330,7 +341,7 @@ func compose(ctx context.Context, in Input, opts Options, budget *shape.ShapingB
 	// Painted before the page is measured, because a transform is applied by
 	// the paint, and only where what the box painted can be drawn under it:
 	// the natural size is of the boxes where they were drawn.
-	ops, applied := paintApplying(root, rec)
+	ops, applied := paintApplyingReported(root, rec, opts.Reported, built.Document)
 
 	natural := naturalSize(root, applied)
 
