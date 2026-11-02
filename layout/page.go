@@ -117,11 +117,15 @@ type Options struct {
 	// to avoid.
 	AllowScaleUp bool
 	// Reported is a CSS selector, or a comma-separated list of them, naming
-	// the elements the backend wants to paint itself. Each match is laid out
-	// like any box and then reported as a Component op — its border box, its
-	// id — and nothing is drawn for it. It is how an embedding application
-	// reserves layout space and fills it on its own cadence: a clock, a live
-	// photo, a gauge. The empty string, the default, reports nothing.
+	// the elements whose position the backend wants to know. Each match is
+	// laid out and painted like any box, and also reported as a Component op
+	// — its border box, its id. It is how an embedding application learns
+	// where a region of the page ended up, to draw over it on its own
+	// cadence: a clock, a live photo, a gauge. A box is reported, not an
+	// element's pieces of lines: an element laid out as an inline box (a
+	// span, by default) is not, and one with any other display — block,
+	// inline-block, flex, table — is. The empty string, the default, reports
+	// nothing.
 	Reported string
 	// TransformGroups says the backend draws a TransformGroup, so a transform
 	// may be drawn at any angle: rotate(30deg), a skew, a mirror, and a

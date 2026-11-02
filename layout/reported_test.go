@@ -1,12 +1,13 @@
 package layout
 
 import (
+	"reflect"
 	"testing"
 )
 
 // Options.Reported: elements the backend asked to be told about. Each match
-// is laid out like any box and reported as a Component — its border box, its
-// id — and nothing is drawn for it. See Component and Options.Reported.
+// is laid out and painted like any box, and also reported as a Component —
+// its border box, its id. See Component and Options.Reported.
 
 // componentsIn is the Components of a display list, in order.
 func componentsIn(ops []Op) []Component {
@@ -94,5 +95,42 @@ func TestAReportedSelectorThatDoesNotParseIsReportedAndReportsNothing(t *testing
 	}
 	if !found {
 		t.Error("no finding about the malformed Reported selector")
+	}
+}
+
+func TestAReportedElementIsStillPainted(t *testing.T) {
+	html := `<div id="clock" style="display:block; width: 100px; height: 50px; background: red; border: 2px solid blue"><p>words</p></div>`
+	plain := Compose(Input{HTML: html}, Options{}).Ops
+	reported := Compose(Input{HTML: html}, Options{Reported: "#clock"}).Ops
+	if cs := componentsIn(reported); len(cs) != 1 {
+		t.Fatalf("%d components, want 1: %+v", len(cs), cs)
+	}
+	var rest []Op
+	for _, op := range reported {
+		if _, ok := op.(Component); !ok {
+			rest = append(rest, op)
+		}
+	}
+	if len(rest) != len(plain) {
+		t.Fatalf("%d ops besides the component, want the %d painted without a selector", len(rest), len(plain))
+	}
+	for i := range plain {
+		if !reflect.DeepEqual(rest[i], plain[i]) {
+			t.Errorf("op %d is %+v, want %+v as painted without a selector", i, rest[i], plain[i])
+		}
+	}
+}
+
+func TestAGeneratedBoxIsNotReportedForItsElement(t *testing.T) {
+	out := Compose(Input{HTML: `<style>#clock::before { content: "x"; display: block }
+		#clock::after { content: "y"; display: block }</style>
+		<div id="clock" style="display:block; width: 100px; height: 50px"></div>`},
+		Options{Reported: "#clock"})
+	cs := componentsIn(out.Ops)
+	if len(cs) != 1 {
+		t.Fatalf("%d components, want only the element's own box: %+v", len(cs), cs)
+	}
+	if h := cs[0].Rect.H.Px(); h != 50 {
+		t.Errorf("the component is %vpx tall, want the element's 50px", h)
 	}
 }

@@ -390,17 +390,19 @@ type Link struct {
 	of *hyperlink
 }
 
-// Component is a host-drawn region: an element the backend asked to be
-// reported, through Options.Reported — a CSS selector, so the document's
+// Component is where a reported element ended up: an element the backend
+// asked about through Options.Reported — a CSS selector, so the document's
 // markup stays whatever the author meant it to be. A reported element is
-// laid out like any box — the author sizes and places it with CSS, it takes
-// part in flow, floats and pagination — and instead of painting it, the
-// paint hands its border box to the backend. The backend fills the region
-// with whatever the embedding application wants, on its own cadence and
-// without a re-layout: a clock, a live photo, a gauge. Name is the element's
-// id (falling back to its name attribute), which is how the backend knows
-// what goes there. The geometry is canvas-space, as for every op; a backend
-// that transforms ops applies its own transforms to Rect.
+// laid out and painted like any box — the author sizes and places it with
+// CSS, it takes part in flow, floats and pagination — and the paint also
+// hands its border box to the backend, which can draw over the region on
+// its own cadence and without a re-layout: a clock, a live photo, a gauge.
+// The Component is emitted just before the element's own background and
+// border, so whatever the backend draws in its place goes in at the
+// element's own paint order. Name is the element's id (falling back to its
+// name attribute), which is how the backend knows what goes there. The
+// geometry is canvas-space, as for every op; a backend that transforms ops
+// applies its own transforms to Rect.
 type Component struct {
 	Name string
 	Rect Rect
@@ -526,7 +528,7 @@ func paintApplyingReported(root *Fragment, rec *Recorder, reported string, doc *
 				rec.ReportDetail(Finding{Rule: RuleInvalidCSS, Message: e.Message})
 			}
 			rec.ReportDetail(Finding{Rule: RuleInvalidCSS, Message: "the reported selector \"" +
-				ascii.TrimCSSSpace(reported) + " does not parse, so no element is reported"})
+				ascii.TrimCSSSpace(reported) + "\" does not parse, so no element is reported"})
 		}
 	}
 	p.dimming(root, 1, nil)
@@ -1939,12 +1941,13 @@ func (p *painter) decorations(f *Fragment) {
 	if f.Box == nil {
 		return
 	}
-	// A reported element (Options.Reported) is where forme stops and the
-	// host takes over: the box is laid out, the border box is reported,
-	// nothing is drawn. Every non-line fragment passes through here exactly
-	// once, so this is where the hand-off is reported — next to the link
-	// areas, which have the same shape of problem.
-	if p.reportSel != nil {
+	// A reported element (Options.Reported) has its border box reported to
+	// the host, and is then painted as any box is. Every non-line fragment
+	// passes through here exactly once, so this is where it is reported —
+	// next to the link areas, which have the same shape of problem. A
+	// ::before or ::after box carries its originating element in Element,
+	// and is not that element's box, so it is not reported for it.
+	if p.reportSel != nil && f.Box.Pseudo == "" {
 		if n := f.Box.Element; n != nil && n.Type == html.ElementNode {
 			for _, sel := range p.reportSel {
 				if p.matcher.Match(sel, n) {
