@@ -155,9 +155,14 @@ type DrawText struct {
 	// VOriginY and steps its pen down by -YAdvance draws them where layout
 	// placed them.
 	Upright bool
-	Face    *shape.Face
-	Size    style.Unit
-	Color   style.RGBA
+	// Face is the document's own face, not the one the caller's FontSet
+	// handed out: every document is given faces of its own (see FontSet),
+	// so the same font is a different *shape.Face in every document. A
+	// backend that keeps anything per face across documents — glyph masks,
+	// an embedded program — keys it by Face.ID, not by the pointer.
+	Face  *shape.Face
+	Size  style.Unit
+	Color style.RGBA
 	// PreContext and PostContext are the text either side of this run, where the
 	// boundary between it and its neighbour did not break shaping.
 	//

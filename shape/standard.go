@@ -67,6 +67,7 @@ func Standard(name string) (*Face, error) {
 		italic:     m.italic,
 		used:       map[int]bool{},
 		layout:     emptyLayout(),
+		ident:      &faceIdent{},
 	}
 	if m.hasXHeight {
 		f.xHeight = m.xHeight

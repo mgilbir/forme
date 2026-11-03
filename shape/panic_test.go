@@ -568,6 +568,7 @@ func useFace(face *Face) {
 		_, _ = budget.Run(func() error { bounded.ShapeGlyphs("abc"); return nil })
 	}
 
+	_ = face.ID()
 	_ = face.Name()
 	_ = face.Family()
 	_ = face.Subfamily()

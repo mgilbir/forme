@@ -34,6 +34,15 @@ import (
 // range of weights, condensed faces, oblique angles — implements StyledFontSet
 // as well, and is asked the numbers instead; RangedFontSet and FallbackFontSet
 // have numeric forms too.
+//
+// A face a set hands out is not the face a document is set in. A face records
+// the glyphs it was asked to set, which is what a subset is made from, so
+// layout gives every document a copy of its own (shape.Face.Clone, which
+// shares the parse); an instance of a variable face and a face an @font-face
+// rule loads are made per document as well. So the faces in a display list
+// are new in every document, and are not to be compared with the set's or
+// held as identities across documents: shape.Face.ID is the identity, the
+// same for every document set in the same font.
 type FontSet interface {
 	// Face returns the face for a family in a weight and style, and whether the
 	// set has it. The family is matched case-insensitively, as CSS matches one.
