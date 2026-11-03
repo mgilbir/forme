@@ -277,6 +277,9 @@ type Face struct {
 	// math is the face's MATH table, read the first time it is asked for,
 	// and shared by the face's clones. See MathTable.
 	math *mathRead
+	// ident is what ID is computed from, the first time it is asked for, and
+	// shared by the face's clones. See ID.
+	ident *faceIdent
 
 	used    map[int]bool // glyph indices this face has encoded
 	runWork *runWork     // opt-in per-call budget, never shared by Clone
@@ -554,6 +557,7 @@ func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face,
 		varCoords:  coords,
 		used:       map[int]bool{},
 		math:       &mathRead{},
+		ident:      &faceIdent{},
 	}
 	if data != nil {
 		// The tables as they were taken from data, before a bhed is read as
