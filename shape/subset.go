@@ -70,7 +70,7 @@ var requiredTables = []string{"cmap", "glyf", "head", "hhea", "hmtx", "loca", "m
 // truncated loca, a glyf that does not agree with it — rather than emitting a
 // program that claims glyphs it does not have.
 func (f *Face) Subset() ([]byte, error) {
-	data, _, err := f.subset(f.newSubsetWork(0, 0))
+	data, _, err := f.SubsetGlyphs()
 	return data, err
 }
 
@@ -81,7 +81,7 @@ func (f *Face) Subset() ([]byte, error) {
 //
 // What it may cost is w (subsetwork.go).
 func (f *Face) subset(w *subsetWork) ([]byte, []int, error) {
-	notdef, err := f.usedVerdicts()
+	notdef, err := f.usedVerdicts(w)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -120,6 +120,9 @@ func (f *Face) subset(w *subsetWork) ([]byte, []int, error) {
 		newLoca[gid] = uint32(len(newGlyf))
 		if !keep[gid] {
 			continue
+		}
+		if err := w.poll(); err != nil {
+			return nil, nil, err
 		}
 		b, ok := flat[gid]
 		if !ok {
@@ -371,6 +374,9 @@ func (f *Face) keepSet(t glyfTables, notdef bool, w *subsetWork) ([]bool, error)
 		}
 	}
 	for len(work) > 0 {
+		if err := w.poll(); err != nil {
+			return nil, err
+		}
 		gid := work[len(work)-1]
 		work = work[:len(work)-1]
 		comps, err := f.glyfComponents(t, gid, true)

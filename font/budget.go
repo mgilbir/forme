@@ -1,6 +1,9 @@
 package font
 
-import "strconv"
+import (
+	"context"
+	"strconv"
+)
 
 // Budget is the work one font may cost to read, shared by every parser that
 // reads it.
@@ -51,6 +54,13 @@ import "strconv"
 // where the cmap was cut, CmapPartial; ParseCFF returns nil — so a consumer that
 // ignores the budget still cannot mistake a truncated font for a whole one.
 //
+// # A caller's deadline
+//
+// A budget made by NewBudgetContext also stops when its context is done: the
+// work a caller allows is bounded by its deadline as well as by the units, and
+// the readers that draw on the budget are stopped by either in the same way,
+// at the next unit they ask for. Err is then the context's error.
+//
 // A Budget is not safe for concurrent use; it belongs to one parse of one font.
 type Budget struct {
 	left  int
@@ -58,7 +68,17 @@ type Budget struct {
 	// what is the part of the font that was being read when the budget ran
 	// out, for the error that reports it. Empty until then.
 	what string
+	// ctx, where it is not nil, is asked whether it is done each time
+	// untilCtx more units have been charged, and stopped is its error once it
+	// was.
+	ctx      context.Context
+	untilCtx int
+	stopped  error
 }
+
+// budgetCtxEvery is how many units are charged between asking a budget's
+// context whether it is done: a few microseconds of any reader's work.
+const budgetCtxEvery = 1024
 
 // NewBudget returns a budget of the given number of units. A negative number is
 // read as nought: a budget that allows nothing, not one that allows everything.
@@ -69,12 +89,29 @@ func NewBudget(units int) *Budget {
 	return &Budget{left: units, limit: units}
 }
 
+// NewBudgetContext is NewBudget for a caller with a deadline: the budget also
+// refuses every charge once ctx is done, and Err is then ctx's error.
+func NewBudgetContext(ctx context.Context, units int) *Budget {
+	b := NewBudget(units)
+	b.ctx = ctx
+	return b
+}
+
 // charge spends n units on reading what, and reports whether there were n to
 // spend. Once it has said no it keeps saying no, so a parser that ignores one
 // refusal is stopped by the next.
 func (b *Budget) charge(n int, what string) bool {
-	if b.what != "" {
+	if b.what != "" || b.stopped != nil {
 		return false
+	}
+	if b.ctx != nil {
+		if b.untilCtx -= n; b.untilCtx <= 0 {
+			b.untilCtx = budgetCtxEvery
+			if err := b.ctx.Err(); err != nil {
+				b.stopped = err
+				return false
+			}
+		}
 	}
 	if n > b.left {
 		b.left = 0
@@ -94,15 +131,20 @@ func (b *Budget) charge(n int, what string) bool {
 func (b *Budget) Charge(n int, what string) bool { return b.charge(n, what) }
 
 // Exhausted reports whether a parser asked this budget for more than it had,
-// which means some part of the font was not read.
-func (b *Budget) Exhausted() bool { return b.what != "" }
+// or after its context was done, which means some part of the font was not
+// read.
+func (b *Budget) Exhausted() bool { return b.what != "" || b.stopped != nil }
 
 // Spent is the number of units charged so far.
 func (b *Budget) Spent() int { return b.limit - b.left }
 
 // Err is the error for a budget that ran out, naming the part of the font that
-// was being read when it did, and nil for one that did not.
+// was being read when it did, or its context's error for one stopped by its
+// context; and nil for one that was neither.
 func (b *Budget) Err() error {
+	if b.stopped != nil {
+		return b.stopped
+	}
 	if b.what == "" {
 		return nil
 	}

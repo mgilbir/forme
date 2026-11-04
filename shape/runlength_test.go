@@ -1,6 +1,7 @@
 package shape
 
 import (
+	"context"
 	"encoding/binary"
 	"math/rand"
 	"os"
@@ -406,7 +407,7 @@ func TestTheCompositeClosureIsLinearInTheChain(t *testing.T) {
 	run := func(n int) func() {
 		tables := compositeChainTables(n)
 		f := &Face{used: map[int]bool{n - 1: true}}
-		keep, err := f.keepSet(tables, true, f.newSubsetWork(0, 0))
+		keep, err := f.keepSet(tables, true, f.newSubsetWork(context.Background(), SubsetLimits{}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -415,7 +416,7 @@ func TestTheCompositeClosureIsLinearInTheChain(t *testing.T) {
 				t.Fatalf("a chain of %d composites lost glyph %d", n, gid)
 			}
 		}
-		return func() { f.keepSet(tables, true, f.newSubsetWork(0, 0)) }
+		return func() { f.keepSet(tables, true, f.newSubsetWork(context.Background(), SubsetLimits{})) }
 	}
 	growth(t, "closing a chain of n composites, at 4n against n", run, 4000, 16000, 8)
 }

@@ -1,6 +1,7 @@
 package shape
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -86,7 +87,7 @@ func TestASubsetKeepsWhatAHintedSeacIsDrawnFrom(t *testing.T) {
 	if _, missing := f.Encode("Á"); missing != 0 {
 		t.Fatalf("%d runes of the fixture are missing", missing)
 	}
-	data, _, err := f.subset(f.newSubsetWork(0, 0))
+	data, _, err := f.subset(f.newSubsetWork(context.Background(), SubsetLimits{}))
 	if err != nil {
 		t.Fatalf("subsetting: %v", err)
 	}
@@ -188,6 +189,22 @@ func TestTheSeacClosureStopsWhereTheBudgetDoes(t *testing.T) {
 // tree sixteen wide runs 209,713, and a glyph that runs past HarfBuzz's cap is
 // one a subset refuses to carry before any walk of it (glyphcheck.go).
 func TestASubsetOfSeacWalksPastTheBudgetIsRefused(t *testing.T) {
+	// The control: a subset of forty of them is within the allowance.
+	if _, err := seacSubrTree(t, 40).Subset(); err != nil {
+		t.Fatalf("a subset of forty glyphs: %v; the fixture is not the one meant", err)
+	}
+	const n = 100
+	if _, err := seacSubrTree(t, n).Subset(); !errors.Is(err, ErrSubsetLimit) || !strings.Contains(err.Error(), "units of work") {
+		t.Errorf("a subset whose seac walks come to %d times the operator bound "+
+			"returned %v, want the budget's error, as the subset's limit", n, err)
+	}
+}
+
+// seacSubrTree is a face of a hundred glyphs, each of which calls the
+// subroutine tree TestASubsetOfSeacWalksPastTheBudgetIsRefused describes, with
+// the first used of them encoded.
+func seacSubrTree(t *testing.T, used int) *Face {
+	t.Helper()
 	const fanOut, depth, callsubr, ret, endchar = 15, 4, 10, 11, 14
 	operand := func(subr int) byte { return byte(subr - 107 + 139) }
 	subrs := make([][]byte, depth+1)
@@ -210,31 +227,14 @@ func TestASubsetOfSeacWalksPastTheBudgetIsRefused(t *testing.T) {
 		text = append(text, r)
 	}
 	cff := fonttest.CFF(fonttest.CFFOptions{Glyphs: n + 1, Subrs: subrs, Charstrings: charstrings})
-	load := func() *Face {
-		f, err := Load(fonttest.OTTO(cff, fonttest.SFNTOptions{Glyphs: glyphs}))
-		if err != nil {
-			t.Fatalf("loading: %v", err)
-		}
-		return f
+	f, err := Load(fonttest.OTTO(cff, fonttest.SFNTOptions{Glyphs: glyphs}))
+	if err != nil {
+		t.Fatalf("loading: %v", err)
 	}
-
-	// The control: a subset of forty of them is within the allowance.
-	f := load()
-	if _, missing := f.Encode(string(text[:40])); missing != 0 {
+	if _, missing := f.Encode(string(text[:used])); missing != 0 {
 		t.Fatalf("%d runes of the fixture are missing", missing)
 	}
-	if _, err := f.Subset(); err != nil {
-		t.Fatalf("a subset of forty glyphs: %v; the fixture is not the one meant", err)
-	}
-
-	f = load()
-	if _, missing := f.Encode(string(text)); missing != 0 {
-		t.Fatalf("%d runes of the fixture are missing", missing)
-	}
-	if _, err := f.Subset(); !errors.Is(err, ErrSubsetLimit) || !strings.Contains(err.Error(), "units of work") {
-		t.Errorf("a subset whose seac walks come to %d times the operator bound "+
-			"returned %v, want the budget's error, as the subset's limit", n, err)
-	}
+	return f
 }
 
 // cidPrivate is where a Font DICT's Private DICT is: at bytes into the

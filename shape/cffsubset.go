@@ -706,7 +706,8 @@ func (f *Face) subsetOpenTypeCFF(notdef bool, w *subsetWork) ([]byte, []int, err
 	// needs a closure exactly as a composite glyf glyph does. See cffseac.go.
 	//
 	// Both walks draw on the subset's allowance, which is its own: what
-	// reading the font cost at Load is not charged again.
+	// reading the font cost at Load is not charged again. The budget asks the
+	// subset's context as they draw on it.
 	if err := cffSeacClosure(tables["CFF "], keep, w.budget); err != nil {
 		return nil, nil, w.refusal(err)
 	}

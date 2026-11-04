@@ -39,6 +39,9 @@ func (f *Face) flattenKeptVARC(keep []bool, sw *subsetWork) (map[int][]byte, err
 		if !k || v.t.coverageIndex(gid) < 0 {
 			continue
 		}
+		if err := sw.poll(); err != nil {
+			return nil, err
+		}
 		b, err := v.flatEntry(gid, &work)
 		if err != nil {
 			return nil, fmt.Errorf("fonts: glyph %d is a variable composite (VARC) that cannot be written "+

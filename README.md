@@ -205,7 +205,12 @@ whole, with every component it names, or a charstring that runs. A subset is
 refused with a `*GlyphError` naming every glyph the face used that it cannot
 carry, rather than copying a malformed glyph or dropping it, so a caller that
 asks first can draw the runs that need such a glyph some other way and keep the
-rest of the face as text.
+rest of the face as text. `Face.SubsetGlyphsContext` subsets under a context and
+`SubsetLimits` — the work its walks may do and the bytes it may write, by
+default the work Load reads a font under and the larger of twice the program
+and 64 MiB — and returns the context's error, or one wrapping
+`ErrSubsetLimit`, rather than a program, so a caller can charge its ledger
+before it asks.
 
 Glyphs come back in **visual order** — the order a pen draws them, left to right —
 whatever scripts the string mixes, so a caller can draw them as they are.
