@@ -7,7 +7,7 @@ import (
 )
 
 // MarkComposite is ParseSFNT's reading of a composite's components, exported
-// for callers outside the module: pdf0 accounts a font's glyphs by it.
+// for callers outside the module that account a font's glyphs by it.
 
 // TestMarkCompositeIsLenient pins what it marks: each component of a
 // composite, nothing for a simple glyph, and — leniently, as ParseSFNT reads
