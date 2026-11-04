@@ -870,15 +870,26 @@ func (d *cff2Default) numGlyphs() int { return len(d.w.advances) }
 // cff writes the CFF font of the glyphs order, in that order: CID-keyed, each
 // glyph's CID its index in the CFF2 font, and each in the Font DICT it was in.
 // The whole font is order 0, 1, … n−1; a subset is .notdef and the glyphs it
-// keeps. Its box is the font's, which the default instance states.
-func (d *cff2Default) cff(order []int) ([]byte, error) {
+// keeps. Its box is the font's, which the default instance states. A subset's
+// charstrings and the CFF assembled from them are spent from sw, which is nil
+// for the whole font.
+func (d *cff2Default) cff(order []int, sw *subsetWork) ([]byte, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	glyphs := make([][]byte, len(order))
 	fds := make([]int, len(order))
+	size := 0
 	for i, g := range order {
 		glyphs[i] = d.glyphLocked(g)
 		fds[i] = d.w.f.fds[g]
+		size += len(glyphs[i])
+	}
+	if sw != nil {
+		// The charstrings once in the CFF's INDEX, and that INDEX once in
+		// the CFF: as much again as they are, twice.
+		if err := sw.write(2*size, "the CFF2 glyphs written as CFF"); err != nil {
+			return nil, err
+		}
 	}
 	privates, err := d.w.privates()
 	if err != nil {
@@ -899,7 +910,7 @@ func (d *cff2Default) cff(order []int) ([]byte, error) {
 // written empty and reported.
 func (d *cff2Default) programBytes() []byte {
 	d.once.Do(func() {
-		cff, err := d.cff(identityCIDs(d.numGlyphs()))
+		cff, err := d.cff(identityCIDs(d.numGlyphs()), nil)
 		if err != nil {
 			return
 		}
@@ -912,14 +923,14 @@ func (d *cff2Default) programBytes() []byte {
 // CID-keyed subset cffrenumber.go describes, written directly from the kept
 // glyphs — renumbered in their order, each keeping its glyph index as its
 // CID, and the sfnt's glyph-indexed tables renumbered to match.
-func (d *cff2Default) subset(keep []bool, cmap map[rune]int) ([]byte, error) {
+func (d *cff2Default) subset(keep []bool, cmap map[rune]int, w *subsetWork) ([]byte, error) {
 	order := []int{0}
 	for g := 1; g < len(keep); g++ {
 		if keep[g] {
 			order = append(order, g)
 		}
 	}
-	cff, err := d.cff(order)
+	cff, err := d.cff(order, w)
 	if err != nil {
 		return nil, err
 	}
@@ -933,7 +944,7 @@ func (d *cff2Default) subset(keep []bool, cmap map[rune]int) ([]byte, error) {
 	if err := renumberSFNT(out, order, len(keep), cmap); err != nil {
 		return nil, err
 	}
-	return assembleOTTO(out), nil
+	return w.assemble(out, true)
 }
 
 // limits says which glyphs written so far were written empty, and why.
@@ -1162,7 +1173,7 @@ func writeVORG(tops []int) []byte {
 // (glyphcheck.go), so no glyph of the subset but a .notdef nothing used is
 // one the writer wrote empty; that one is written empty, as the subset of
 // any face writes a .notdef it cannot keep.
-func (f *Face) subsetCFF2() ([]byte, []int, error) {
+func (f *Face) subsetCFF2(w *subsetWork) ([]byte, []int, error) {
 	n := f.prog.NumGlyphs
 	keep := make([]bool, n)
 	keep[0] = true // .notdef
@@ -1171,7 +1182,7 @@ func (f *Face) subsetCFF2() ([]byte, []int, error) {
 			keep[gid] = true
 		}
 	}
-	out, err := f.cff2.subset(keep, f.prog.Cmap)
+	out, err := f.cff2.subset(keep, f.prog.Cmap, w)
 	if err != nil {
 		return nil, nil, err
 	}

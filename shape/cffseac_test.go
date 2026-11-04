@@ -105,7 +105,7 @@ func TestASubsetKeepsWhatASeacIsDrawnFrom(t *testing.T) {
 	if _, missing := f.Encode("Á"); missing != 0 {
 		t.Fatalf("%d runes of the fixture are missing", missing)
 	}
-	data, _, err := f.subset()
+	data, _, err := f.subset(f.newSubsetWork(0, 0))
 	if err != nil {
 		t.Fatalf("subsetting: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestASubsetStillDropsWhatNothingNames(t *testing.T) {
 	if _, missing := f.Encode("A"); missing != 0 {
 		t.Fatalf("%d runes of the fixture are missing", missing)
 	}
-	data, _, err := f.subset()
+	data, _, err := f.subset(f.newSubsetWork(0, 0))
 	if err != nil {
 		t.Fatalf("subsetting: %v", err)
 	}

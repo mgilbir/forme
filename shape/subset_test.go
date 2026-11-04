@@ -151,7 +151,7 @@ func TestSubsetKeepsCompositeComponents(t *testing.T) {
 func TestSubsetAlwaysKeepsNotdef(t *testing.T) {
 	f := loadTestFace(t, alphabet()...)
 	f.Encode("a")
-	_, kept, err := f.subset()
+	_, kept, err := f.subset(f.newSubsetWork(0, 0))
 	if err != nil {
 		t.Fatalf("subsetting: %v", err)
 	}

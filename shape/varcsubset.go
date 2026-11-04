@@ -26,7 +26,7 @@ import (
 // flattenKeptVARC is each kept VARC glyph written out as glyf bytes. Each was
 // decided keepable (glyphcheck.go) by writing it out under an allowance of its
 // own; here they share one, the subset's.
-func (f *Face) flattenKeptVARC(keep []bool) (map[int][]byte, error) {
+func (f *Face) flattenKeptVARC(keep []bool, sw *subsetWork) (map[int][]byte, error) {
 	v := f.varc
 	if v == nil {
 		return nil, nil
@@ -43,6 +43,9 @@ func (f *Face) flattenKeptVARC(keep []bool) (map[int][]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("fonts: glyph %d is a variable composite (VARC) that cannot be written "+
 				"out as a glyf outline: %w", gid, err)
+		}
+		if err := sw.write(len(b), "a variable composite glyph written out"); err != nil {
+			return nil, err
 		}
 		out[gid] = b
 	}
