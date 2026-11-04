@@ -10,7 +10,8 @@
 // The rest of shape reads the tables SFNTTables finds for itself — the layout
 // tables, gvar, the instancer's and the subsetter's — with Be16 and Be32; the
 // CFF subsetter's seac closure takes CFFStandardSID, CFFSubrBias and
-// StandardEncodingName. A simple
+// StandardEncodingName. MarkComposite is ParseSFNT's lenient reading of a
+// composite glyph's components, for a caller outside this module. A simple
 // font's encoding is WinAnsiEncodingNames, and GlyphNameToRune says what
 // character each of its names stands for.
 //
