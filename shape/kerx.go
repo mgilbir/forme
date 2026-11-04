@@ -2,6 +2,7 @@ package shape
 
 import (
 	"math"
+	"sync/atomic"
 
 	"github.com/mgilbir/forme/font"
 )
@@ -60,6 +61,11 @@ type kerxTable struct {
 	// ankr is the face's anchor point table, which format 4 reads anchors
 	// from, and nil for a face with none or one HarfBuzz refuses.
 	ankr []byte
+	// memos are the subtables' startsMemo, in one array, and memoLeft how
+	// many words of memo they may still take between them
+	// (startsMemoAllowance).
+	memos    []startsMemo
+	memoLeft atomic.Int64
 }
 
 // kerxSubtable is one subtable: the whole of it, from its header, and what its
@@ -75,6 +81,8 @@ type kerxSubtable struct {
 	// lefts and rights are, for format 0, the glyphs its pairs name on each
 	// side.
 	lefts, rights map[int]bool
+	// memo is what startsAt has answered for each glyph; see startsMemo.
+	memo *startsMemo
 }
 
 // The coverage bits of a kerx subtable.
@@ -140,6 +148,11 @@ func readKerx(tables map[string][]byte, numGlyphs int) *kerxTable {
 		}
 		k.subtables = append(k.subtables, s)
 		at += n
+	}
+	k.memoLeft.Store(startsMemoAllowance(len(b)))
+	k.memos = make([]startsMemo, len(k.subtables))
+	for i := range k.subtables {
+		k.subtables[i].memo = &k.memos[i]
 	}
 	return k
 }
@@ -409,6 +422,11 @@ func (s *kerxSubtable) startsAt(gid, numGlyphs int) bool {
 	return false
 }
 
+// startsAtMemo is startsAt, answered from the memo where it can be.
+func (s *kerxSubtable) startsAtMemo(k *kerxTable, gid int) bool {
+	return s.memo.starts(&k.memoLeft, k.numGlyphs, gid, s.startsAt)
+}
+
 // kerxRun is what applying a kerx keeps beside the run: whether the run is
 // turned round, and whether anything was attached, which is what decides
 // whether attachments are resolved at all, as HarfBuzz's
@@ -501,7 +519,7 @@ func (sh shaper) applyKerx(buf []Glyph, pairs bool) bool {
 		if vertical == (s.coverage&kerxVertical != 0) {
 			for _, g := range buf {
 				looked++
-				if s.startsAt(g.GID, k.numGlyphs) {
+				if s.startsAtMemo(k, g.GID) {
 					intersects = true
 					break
 				}

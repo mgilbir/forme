@@ -15,9 +15,9 @@ import (
 // faces, and require the glyphs and the work to be the same; and bound what the
 // memo may take.
 
-// morxMemoTexts are runs of a face's own characters, as aatCharacters lists
+// memoTexts are runs of a face's own characters, as aatCharacters lists
 // them: the first 64 alone, and 200 runs of up to twelve drawn at random.
-func morxMemoTexts(f *Face, rng *rand.Rand) []string {
+func memoTexts(f *Face, rng *rand.Rand) []string {
 	chars := aatCharacters(f, 4096)
 	if len(chars) == 0 {
 		return nil
@@ -41,7 +41,7 @@ func morxMemoTexts(f *Face, rng *rand.Rand) []string {
 
 func TestTheStartsMemoIsTheUnmemoisedAnswerOverTheAATFonts(t *testing.T) {
 	rng := rand.New(rand.NewSource(9))
-	shaped := 0
+	shaped, kerxShaped := 0, 0
 	for _, path := range aatFonts(t) {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -55,10 +55,10 @@ func TestTheStartsMemoIsTheUnmemoisedAnswerOverTheAATFonts(t *testing.T) {
 			return f
 		}
 		probe := load()
-		if probe.morx == nil {
+		if probe.morx == nil && probe.kerx == nil {
 			continue
 		}
-		texts := morxMemoTexts(probe, rng)
+		texts := memoTexts(probe, rng)
 		if len(texts) == 0 {
 			continue
 		}
@@ -96,12 +96,29 @@ func TestTheStartsMemoIsTheUnmemoisedAnswerOverTheAATFonts(t *testing.T) {
 			}
 		}
 		shaped++
+		// A kerx no run asked about, its memos never made, compared nothing
+		// of them; some fixtures have one that is never applied
+		// (KerxPlanGSUBGPOS).
+		if f.kerx != nil && memosMade(f.kerx.memos) > 0 {
+			kerxShaped++
+		}
 	}
 	// The tree's own fixtures hold more than this; fewer means the walk found
 	// nothing, and a test that shapes nothing passes whatever it compares.
-	if shaped < 35 {
-		t.Fatalf("only %d faces with a morx or mort were shaped", shaped)
+	if shaped < 35 || kerxShaped < 6 {
+		t.Fatalf("only %d faces with a morx, mort or kerx were shaped, %d of them through their kerx's memos", shaped, kerxShaped)
 	}
+}
+
+// memosMade is how many of memos have been made.
+func memosMade(memos []startsMemo) int {
+	n := 0
+	for i := range memos {
+		if memos[i].words != nil {
+			n++
+		}
+	}
+	return n
 }
 
 // scatteredMorx is a morx of one noncontextual subtable whose lookup, of
@@ -169,7 +186,7 @@ func memoWordsTaken(m *morxTable) (taken int64, without int) {
 // TestTheStartsMemoIsBoundedByTheTablesSize: a memo is two bits a glyph a
 // subtable, and a morx of twelve-byte subtables in a face of 65,535 glyphs
 // would take 16 KiB of memo for each of them — 1.3 GB for a table of a
-// megabyte. What they take between them is held to morxMemoAllowance, the
+// megabyte. What they take between them is held to startsMemoAllowance, the
 // table's own size again and 128 KiB; past it, a subtable is asked without one.
 func TestTheStartsMemoIsBoundedByTheTablesSize(t *testing.T) {
 	const subtables = 80000
@@ -179,7 +196,7 @@ func TestTheStartsMemoIsBoundedByTheTablesSize(t *testing.T) {
 		t.Fatal("the morx was not read")
 	}
 	taken, without := memoWordsTaken(m)
-	allowance := morxMemoAllowance(len(b))
+	allowance := startsMemoAllowance(len(b))
 	if taken > allowance {
 		t.Errorf("%d subtables took %d words of memo, past the allowance of %d", subtables, taken, allowance)
 	}
@@ -222,32 +239,156 @@ func TestEveryRealMorxHasRoomForItsMemos(t *testing.T) {
 }
 
 // TestStartsMemosAreFilledUnderClonesShapingAtOnce shapes through clones of
-// one face from several goroutines. Clones share the face's morx, and so its
-// memos, which the first run to ask about a subtable makes and every run
-// fills: run under the race detector, this is what says both are safe to race.
+// one face from several goroutines. Clones share the face's morx and kerx, and
+// so their memos, which the first run to ask about a subtable makes and every
+// run fills: run under the race detector, this is what says both are safe to
+// race.
 func TestStartsMemosAreFilledUnderClonesShapingAtOnce(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join(harfbuzzDir, "fonts", "MorxCases.ttf"))
-	if err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"MorxCases.ttf", "KerxMachines.ttf", "KerxPairs.ttf"} {
+		data, err := os.ReadFile(filepath.Join(harfbuzzDir, "fonts", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		base, err := Load(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if base.morx == nil && base.kerx == nil {
+			t.Fatalf("%s has no morx or kerx", name)
+		}
+		texts := memoTexts(base, rand.New(rand.NewSource(1)))
+		var wg sync.WaitGroup
+		for w := 0; w < 8; w++ {
+			f := base.Clone()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range texts {
+					f.ShapeGlyphsBounded(context.Background(),
+						RunInput{Text: texts[(i+w*7)%len(texts)], Kerns: true}, RunLimits{})
+				}
+			}()
+		}
+		wg.Wait()
+		if base.kerx != nil && memosMade(base.kerx.memos) == 0 {
+			t.Errorf("%s: the clones made no kerx memo, so raced on none", name)
+		}
 	}
-	base, err := Load(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if base.morx == nil {
-		t.Fatal("MorxCases.ttf has no morx")
-	}
-	texts := morxMemoTexts(base, rand.New(rand.NewSource(1)))
-	var wg sync.WaitGroup
-	for w := 0; w < 8; w++ {
-		f := base.Clone()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := range texts {
-				f.ShapeGlyphs(texts[(i+w*7)%len(texts)])
+}
+
+// scatteredKerx is a kerx of two format 0 subtables, the first kerning a pair
+// for each glyph below n that first names, as the pair's left, and the second
+// for each that second does.
+func scatteredKerx(n int, first, second func(gid int) bool) []byte {
+	b := u32(u16(nil, 2, 0), 2)
+	for _, in := range []func(int) bool{first, second} {
+		var pairs []byte
+		count := 0
+		for gid := 0; gid < n; gid++ {
+			if in(gid) {
+				pairs = u16(pairs, gid, gid, 10)
+				count++
 			}
-		}()
+		}
+		b = u32(b, kerxHeader+16+len(pairs), 0, 0, count, 0, 0, 0)
+		b = append(b, pairs...)
 	}
-	wg.Wait()
+	return b
+}
+
+// TestTheKerxStartsMemoAnswersEachGlyphAsItsSubtableDoes is the morx test's
+// (TestTheStartsMemoAnswersEachGlyphAsItsSubtableDoes) for a kerx, of two
+// subtables starting at different glyphs, each asked about every glyph of a
+// thousand, in an order that is not theirs, twice. A kerx whose subtables
+// shared a memo, or whose memo answered for the wrong glyph, would answer one
+// of them as the other: the kerx fixtures' subtables are asked about thirty
+// glyphs or fewer, and most of them start at the same ones.
+func TestTheKerxStartsMemoAnswersEachGlyphAsItsSubtableDoes(t *testing.T) {
+	const n = 1000
+	first := func(gid int) bool { return gid%3 == 0 }
+	second := func(gid int) bool { return gid%7 == 1 }
+	k := readKerx(map[string][]byte{"kerx": scatteredKerx(n, first, second)}, n)
+	if k == nil || len(k.subtables) != 2 {
+		t.Fatal("the kerx was not read")
+	}
+	order := rand.New(rand.NewSource(1)).Perm(n)
+	for pass := range 2 {
+		for _, gid := range order {
+			for i, in := range []func(int) bool{first, second} {
+				s := &k.subtables[i]
+				if got := s.startsAtMemo(k, gid); got != in(gid) || got != s.startsAt(gid, n) {
+					t.Fatalf("pass %d: glyph %d starts subtable %d: memo %v, startsAt %v, its pairs %v",
+						pass, gid, i, got, s.startsAt(gid, n), in(gid))
+				}
+			}
+		}
+	}
+	if memosMade(k.memos) != 2 {
+		t.Fatalf("%d of the 2 subtables have a memo, so this asked too little of them", memosMade(k.memos))
+	}
+}
+
+// kerxMemoWordsTaken is memoWordsTaken for a kerx.
+func kerxMemoWordsTaken(k *kerxTable) (taken int64, without int) {
+	for i := range k.subtables {
+		s := &k.subtables[i]
+		s.startsAtMemo(k, 1)
+		if s.memo.words == nil {
+			without++
+		}
+		taken += int64(len(s.memo.words))
+	}
+	return taken, without
+}
+
+// TestTheKerxStartsMemoIsBoundedByTheTablesSize is the morx test's
+// (TestTheStartsMemoIsBoundedByTheTablesSize) for a kerx of 80,000 twelve-byte
+// subtables over 65,535 glyphs: without startsMemoAllowance, 1.3 GB of memo.
+func TestTheKerxStartsMemoIsBoundedByTheTablesSize(t *testing.T) {
+	const subtables = 80000
+	b := emptyKerx(subtables)
+	k := readKerx(map[string][]byte{"kerx": b}, 0xFFFF)
+	if k == nil || len(k.subtables) != subtables {
+		t.Fatal("the kerx was not read")
+	}
+	taken, without := kerxMemoWordsTaken(k)
+	allowance := startsMemoAllowance(len(b))
+	if taken > allowance {
+		t.Errorf("%d subtables took %d words of memo, past the allowance of %d", subtables, taken, allowance)
+	}
+	if taken == 0 || without == 0 {
+		t.Errorf("%d words taken, %d subtables without: the allowance was not reached, "+
+			"so this bounds nothing", taken, without)
+	}
+	s := &k.subtables[subtables-1]
+	if s.memo.words != nil || s.startsAtMemo(k, 1) != s.startsAt(1, k.numGlyphs) {
+		t.Errorf("the last subtable has a memo, or answers differently without one")
+	}
+}
+
+// TestEveryRealKerxHasRoomForItsMemos: every subtable of every face with a
+// kerx in the tree's fixtures, and in the Google Fonts checkout where it has
+// been fetched, gets its memo. So does every subtable of the 51 faces with a
+// kerx that macOS ships, measured there: the most memo a table took was
+// Hiragino Sans's, 596 words for two subtables over 9,511 glyphs, and Arial
+// Hebrew's 40 subtables took 360, against an allowance of at least 16,384.
+func TestEveryRealKerxHasRoomForItsMemos(t *testing.T) {
+	checked := 0
+	for _, path := range aatFonts(t) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := Load(data)
+		if err != nil || f.kerx == nil {
+			continue
+		}
+		if _, without := kerxMemoWordsTaken(f.kerx); without > 0 {
+			t.Errorf("%s: %d subtables went without a memo", filepath.Base(path), without)
+		}
+		checked++
+	}
+	if checked < 8 {
+		t.Fatalf("only %d faces with a kerx were checked", checked)
+	}
 }

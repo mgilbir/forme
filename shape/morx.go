@@ -3,7 +3,6 @@ package shape
 import (
 	"fmt"
 	"slices"
-	"sync"
 	"sync/atomic"
 
 	"github.com/mgilbir/forme/font"
@@ -109,7 +108,7 @@ type morxTable struct {
 	numGlyphs int
 	// memos are the subtables' startsMemo, in one array, and memoLeft how
 	// many words of memo they may still take between them
-	// (morxMemoAllowance).
+	// (startsMemoAllowance).
 	memos    []startsMemo
 	memoLeft atomic.Int64
 }
@@ -182,7 +181,7 @@ func readMorph(b []byte, numGlyphs int, extended bool) *morxTable {
 	}
 	chainHeader, subHeader := 8+2*size, 4+2*size
 	m := &morxTable{numGlyphs: numGlyphs}
-	m.memoLeft.Store(morxMemoAllowance(len(b)))
+	m.memoLeft.Store(startsMemoAllowance(len(b)))
 	at := 8
 	for range font.Be32(b, 4) {
 		if len(b)-at < chainHeader {
@@ -1090,77 +1089,10 @@ func (b *aatBuf) intersects(m *morxTable, s *morxSubtable) (bool, int) {
 	return false, n
 }
 
-// startsMemo is what a subtable's startsAt has answered, two bits a glyph —
-// not yet asked, no, or yes — so that a glyph is asked once for the face and
-// not at every run that holds it. Asking was a search of the subtable's class
-// table and a read of its start state, for each glyph a run held, at every
-// run: from a tenth to a seventh of the time a line took in the four faces
-// with a morx in Google Fonts that were measured.
-//
-// It is the face's, as the table is, and so a clone's too, which may shape at
-// the same time as the face it was made from: the words are set by atomic
-// OR, which is safe because an answer, once stated, is the same whoever states
-// it.
-//
-// Its words are taken from the table's morxMemoAllowance the first time the
-// subtable is asked about, and a subtable that finds too little left is
-// asked as before, every time. What is charged to the run is unchanged: a
-// glyph asked is a glyph asked, answered from the memo or not.
-type startsMemo struct {
-	once  sync.Once
-	words []atomic.Uint64
-}
-
-// morxMemoAllowance is how many words of startsMemo a morx of n bytes may
-// take, for all its subtables: its own size again, and 128 KiB. A memo is
-// a quarter of a byte a glyph a subtable, and a font states its subtables in
-// its bytes; the largest morx in the font corpora, Siemreap's, takes 32 KiB of
-// memo for 90 KiB of table, and a table of twelve-byte subtables stating
-// 65,535 glyphs would otherwise take 16 KiB of memo for each.
-func morxMemoAllowance(n int) int64 { return int64(n/8) + 1<<14 }
-
 // startsAtMemo is startsAt, answered from the memo where it can be.
 func (s *morxSubtable) startsAtMemo(m *morxTable, gid int) bool {
-	words := s.memoWords(m)
-	if words == nil || gid < 0 || gid >= m.numGlyphs {
-		return s.startsAt(gid, m.numGlyphs)
-	}
-	w, shift := &words[gid>>5], uint(gid&31)*2
-	switch (w.Load() >> shift) & 3 {
-	case 1:
-		return false
-	case 2:
-		return true
-	}
-	ok := s.startsAt(gid, m.numGlyphs)
-	state := uint64(1)
-	if ok {
-		state = 2
-	}
-	w.Or(state << shift)
-	return ok
+	return s.memo.starts(&m.memoLeft, m.numGlyphs, gid, s.startsAt)
 }
-
-// memoWords is the subtable's memo, made the first time it is asked for,
-// and nil where the table's allowance has too little left for it.
-func (s *morxSubtable) memoWords(m *morxTable) []atomic.Uint64 {
-	if s.memo == nil || startsMemoOff {
-		return nil
-	}
-	s.memo.once.Do(func() {
-		n := int64(m.numGlyphs+31) / 32
-		if m.memoLeft.Add(-n) < 0 {
-			m.memoLeft.Add(n)
-			return
-		}
-		s.memo.words = make([]atomic.Uint64, n)
-	})
-	return s.memo.words
-}
-
-// startsMemoOff turns every memo off, so that a test can shape the same text
-// with and without and require the two to agree. Nothing else sets it.
-var startsMemoOff bool
 
 // applyMorxSubtable runs one subtable over the run.
 func (sh shaper) applyMorxSubtable(b *aatBuf, s *morxSubtable, numGlyphs int) {
