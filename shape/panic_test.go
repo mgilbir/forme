@@ -757,6 +757,7 @@ func useFace(face *Face) {
 
 	_, _ = face.Subset()
 	_, _, _ = face.SubsetGlyphs()
+	_, _, _ = face.SubsetGlyphsContext(context.Background(), SubsetLimits{MaxWork: 1 << 16, MaxBytes: 1 << 16})
 	// Glyphs drawn by index, as a formula's size variants are, which no
 	// character reached: the last the face has and two it does not, on a
 	// record of their own, so the subset is asked for a glyph only Use named.

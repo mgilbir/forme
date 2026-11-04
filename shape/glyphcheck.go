@@ -409,8 +409,9 @@ func (f *Face) cffFault(gid int) *glyphFault {
 // usedVerdicts decides every glyph the face used, and .notdef. It returns a
 // GlyphError naming the used glyphs that cannot be kept, or the error that
 // refuses them all; notdef is false when .notdef cannot be kept and the face
-// did not use it, and is to be written empty.
-func (f *Face) usedVerdicts() (notdef bool, err error) {
+// did not use it, and is to be written empty. w's context is asked before
+// each glyph is decided.
+func (f *Face) usedVerdicts(w *subsetWork) (notdef bool, err error) {
 	if err := f.subsettable(); err != nil {
 		return false, err
 	}
@@ -424,6 +425,9 @@ func (f *Face) usedVerdicts() (notdef bool, err error) {
 	sort.Ints(used)
 	var refused *GlyphError
 	for _, gid := range used {
+		if err := w.poll(); err != nil {
+			return false, err
+		}
 		fault, err := f.glyphFault(gid)
 		if err != nil {
 			return false, err

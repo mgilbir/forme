@@ -1,5 +1,7 @@
 package shape
 
+import "context"
+
 // What a document format needs in order to embed a face.
 //
 // A shaper decides where glyphs go; a format that carries the text has to
@@ -414,9 +416,10 @@ func (f *Face) CharacterCollection() (registry, ordering string, supplement int,
 // allowance Load reads the font under, and in bytes written — the program and
 // the tables it is assembled from — the larger of twice the font program and
 // 64 MiB. A subset of a sound font comes nowhere near either. See
-// subsetwork.go.
+// subsetwork.go. SubsetGlyphsContext is the same under a context, and the
+// caller's own limits.
 func (f *Face) SubsetGlyphs() (program []byte, kept []int, err error) {
-	return f.subset(f.newSubsetWork(0, 0))
+	return f.subset(f.newSubsetWork(context.Background(), SubsetLimits{}))
 }
 
 // Cmap is the face's character-to-glyph mapping, copied.

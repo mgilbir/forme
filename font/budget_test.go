@@ -1,7 +1,9 @@
 package font
 
 import (
+	"context"
 	"encoding/binary"
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
@@ -643,5 +645,43 @@ func TestABudgetThatRanOutSaysWhat(t *testing.T) {
 	}
 	if NewBudget(-5).charge(1, "x") {
 		t.Error("a negative budget allowed work")
+	}
+}
+
+// TestABudgetStopsWhenItsContextIsDone: a budget made with a context refuses
+// every charge once the context is done — at the first charge for one done
+// already, and within budgetCtxEvery units for one done part way — and its
+// error is then the context's. One whose context is not done is NewBudget's.
+func TestABudgetStopsWhenItsContextIsDone(t *testing.T) {
+	done, cancel := context.WithCancel(context.Background())
+	cancel()
+	b := NewBudgetContext(done, 100)
+	if b.Charge(1, "anything") || !b.Exhausted() || !errors.Is(b.Err(), context.Canceled) {
+		t.Errorf("a budget whose context is done charged, or says %v", b.Err())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	b = NewBudgetContext(ctx, 1<<20)
+	for range 10 {
+		if !b.Charge(100, "a step") {
+			t.Fatalf("a budget refused before its context was done: %v", b.Err())
+		}
+	}
+	cancel()
+	charged := 0
+	for b.Charge(1, "a step") {
+		charged++
+	}
+	if charged > budgetCtxEvery || !errors.Is(b.Err(), context.Canceled) {
+		t.Errorf("a budget charged %d units after its context was done, and says %v", charged, b.Err())
+	}
+	if b.Charge(1, "a step") {
+		t.Error("a budget stopped by its context charged again")
+	}
+
+	b = NewBudgetContext(context.Background(), 10)
+	if !b.Charge(10, "all of it") || b.Charge(1, "more") || errors.Is(b.Err(), context.Canceled) ||
+		!strings.Contains(b.Err().Error(), "units of work") {
+		t.Errorf("a budget whose context is not done ran out as %v", b.Err())
 	}
 }

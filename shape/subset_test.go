@@ -1,6 +1,7 @@
 package shape
 
 import (
+	"context"
 	"testing"
 
 	"github.com/mgilbir/forme/font"
@@ -151,7 +152,7 @@ func TestSubsetKeepsCompositeComponents(t *testing.T) {
 func TestSubsetAlwaysKeepsNotdef(t *testing.T) {
 	f := loadTestFace(t, alphabet()...)
 	f.Encode("a")
-	_, kept, err := f.subset(f.newSubsetWork(0, 0))
+	_, kept, err := f.subset(f.newSubsetWork(context.Background(), SubsetLimits{}))
 	if err != nil {
 		t.Fatalf("subsetting: %v", err)
 	}
