@@ -1,6 +1,7 @@
 package shape
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -85,7 +86,7 @@ func TestASubsetKeepsWhatAHintedSeacIsDrawnFrom(t *testing.T) {
 	if _, missing := f.Encode("Á"); missing != 0 {
 		t.Fatalf("%d runes of the fixture are missing", missing)
 	}
-	data, _, err := f.subset()
+	data, _, err := f.subset(f.newSubsetWork(0, 0))
 	if err != nil {
 		t.Fatalf("subsetting: %v", err)
 	}
@@ -230,9 +231,9 @@ func TestASubsetOfSeacWalksPastTheBudgetIsRefused(t *testing.T) {
 	if _, missing := f.Encode(string(text)); missing != 0 {
 		t.Fatalf("%d runes of the fixture are missing", missing)
 	}
-	if _, err := f.Subset(); err == nil || !strings.Contains(err.Error(), "units of work") {
+	if _, err := f.Subset(); !errors.Is(err, ErrSubsetLimit) || !strings.Contains(err.Error(), "units of work") {
 		t.Errorf("a subset whose seac walks come to %d times the operator bound "+
-			"returned %v, want the budget's error", n, err)
+			"returned %v, want the budget's error, as the subset's limit", n, err)
 	}
 }
 

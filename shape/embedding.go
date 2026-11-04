@@ -408,8 +408,15 @@ func (f *Face) CharacterCollection() (registry, ordering string, supplement int,
 // states it is refused with a *GlyphError naming every such glyph, as Subset
 // is. CheckGlyph asks the same question of one glyph before it is drawn, which
 // is how a caller avoids the refusal rather than meeting it here.
+//
+// What a subset may cost is bounded, and refused with an error wrapping
+// ErrSubsetLimit where it would cost more: maxFontWork units of work, the
+// allowance Load reads the font under, and in bytes written — the program and
+// the tables it is assembled from — the larger of twice the font program and
+// 64 MiB. A subset of a sound font comes nowhere near either. See
+// subsetwork.go.
 func (f *Face) SubsetGlyphs() (program []byte, kept []int, err error) {
-	return f.subset()
+	return f.subset(f.newSubsetWork(0, 0))
 }
 
 // Cmap is the face's character-to-glyph mapping, copied.

@@ -70,7 +70,7 @@ var requiredTables = []string{"cmap", "glyf", "head", "hhea", "hmtx", "loca", "m
 // truncated loca, a glyf that does not agree with it — rather than emitting a
 // program that claims glyphs it does not have.
 func (f *Face) Subset() ([]byte, error) {
-	data, _, err := f.subset()
+	data, _, err := f.subset(f.newSubsetWork(0, 0))
 	return data, err
 }
 
@@ -78,16 +78,18 @@ func (f *Face) Subset() ([]byte, error) {
 // hands out both, and they must be the same set: a format that describes the
 // glyphs the program carries (PDF's /CIDSet) is describing exactly these, and
 // computing that twice is how the two come to disagree.
-func (f *Face) subset() ([]byte, []int, error) {
+//
+// What it may cost is w (subsetwork.go).
+func (f *Face) subset(w *subsetWork) ([]byte, []int, error) {
 	notdef, err := f.usedVerdicts()
 	if err != nil {
 		return nil, nil, err
 	}
 	if f.cff2 != nil {
-		return f.subsetCFF2()
+		return f.subsetCFF2(w)
 	}
 	if f.cff {
-		return f.subsetOpenTypeCFF(notdef)
+		return f.subsetOpenTypeCFF(notdef, w)
 	}
 	tables := f.sfntTables()
 	t, err := f.glyfTables()
@@ -96,11 +98,11 @@ func (f *Face) subset() ([]byte, []int, error) {
 	}
 	n := t.numGlyphs
 
-	keep, err := f.keepSet(t, notdef)
+	keep, err := f.keepSet(t, notdef, w)
 	if err != nil {
 		return nil, nil, err
 	}
-	flat, err := f.flattenKeptVARC(keep)
+	flat, err := f.flattenKeptVARC(keep, w)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -109,7 +111,10 @@ func (f *Face) subset() ([]byte, []int, error) {
 	// index, which is what makes this a retained-index subset: the numbering is
 	// unchanged and a composite's component references stay valid untouched.
 	// So does a .notdef that cannot be kept, which is not in keep.
-	newGlyf := make([]byte, 0, len(t.glyf))
+	// glyf grows as the glyphs are written rather than starting at the
+	// table's size: overlapping entries can come to many times the table, and
+	// w stops them where the subset's bytes run out.
+	var newGlyf []byte
 	newLoca := make([]uint32, n+1)
 	for gid := 0; gid < n; gid++ {
 		newLoca[gid] = uint32(len(newGlyf))
@@ -125,6 +130,9 @@ func (f *Face) subset() ([]byte, []int, error) {
 			if b, err = stripInstructions(entry); err != nil {
 				return nil, nil, fmt.Errorf("fonts: internal: glyph %d was decided keepable and %w", gid, err)
 			}
+		}
+		if err := w.write((len(b)+3)&^3, "the glyf table"); err != nil {
+			return nil, nil, err
 		}
 		newGlyf = append(newGlyf, b...)
 		for len(newGlyf)%4 != 0 { // glyf entries are long-aligned
@@ -154,6 +162,9 @@ func (f *Face) subset() ([]byte, []int, error) {
 	// Always write the long loca form: the short form stores offsets halved, so
 	// it cannot represent an odd offset, and choosing between them is one more
 	// thing to get wrong for no benefit at this size.
+	if err := w.write(4*(n+1), "the loca table"); err != nil {
+		return nil, nil, err
+	}
 	locaBytes := make([]byte, 4*(n+1))
 	for i, off := range newLoca {
 		binary.BigEndian.PutUint32(locaBytes[4*i:], off)
@@ -164,7 +175,11 @@ func (f *Face) subset() ([]byte, []int, error) {
 	binary.BigEndian.PutUint16(newHead[50:], 1) // indexToLocFormat: long
 	out["head"] = newHead
 
-	return assembleSFNT(out), keptGlyphs(keep), nil
+	prog, err := w.assemble(out, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	return prog, keptGlyphs(keep), nil
 }
 
 // keptGlyphs is the glyphs a subset carries, by the face's own indices: those
@@ -335,7 +350,9 @@ func stripInstructions(g []byte) ([]byte, error) {
 // adds only one level of components — a chain of composites, each built on the
 // one before, took as many rounds as it had links: n rounds of n glyphs, and n
 // sets of n, for one used glyph at the top.
-func (f *Face) keepSet(t glyfTables, notdef bool) ([]bool, error) {
+//
+// Each glyph kept and each component read is a unit of w's work.
+func (f *Face) keepSet(t glyfTables, notdef bool, w *subsetWork) ([]bool, error) {
 	n := t.numGlyphs
 	keep := make([]bool, n)
 	var work []int
@@ -359,6 +376,9 @@ func (f *Face) keepSet(t glyfTables, notdef bool) ([]bool, error) {
 		comps, err := f.glyfComponents(t, gid, true)
 		if err != nil {
 			return nil, fmt.Errorf("fonts: internal: glyph %d was decided keepable and %w", gid, err)
+		}
+		if err := w.charge(1+len(comps), "the composite glyphs"); err != nil {
+			return nil, err
 		}
 		for _, c := range comps {
 			add(c)

@@ -686,7 +686,8 @@ func cffPrivateRegion(data []byte, off, size int, budget *font.Budget) ([]byte, 
 
 // subsetOpenTypeCFF rebuilds an OpenType font around a subsetted CFF table.
 // notdef is whether .notdef can be kept; it is written empty where it cannot.
-func (f *Face) subsetOpenTypeCFF(notdef bool) ([]byte, []int, error) {
+// What it may cost is w (subsetwork.go).
+func (f *Face) subsetOpenTypeCFF(notdef bool, w *subsetWork) ([]byte, []int, error) {
 	tables := f.sfntTables()
 	if tables == nil || tables["CFF "] == nil {
 		return nil, nil, errors.New("fonts: the font no longer carries a CFF table")
@@ -704,15 +705,17 @@ func (f *Face) subsetOpenTypeCFF(notdef bool) ([]byte, []int, error) {
 	// the subroutine INDEXes whole. A seac names two other *glyphs*, so it
 	// needs a closure exactly as a composite glyf glyph does. See cffseac.go.
 	//
-	// Both walks draw on one allowance, of the size Load's has, and it is this
-	// subset's own: what reading the font cost at Load is not charged again.
-	budget := font.NewBudget(maxFontWork)
-	if err := cffSeacClosure(tables["CFF "], keep, budget); err != nil {
-		return nil, nil, err
+	// Both walks draw on the subset's allowance, which is its own: what
+	// reading the font cost at Load is not charged again.
+	if err := cffSeacClosure(tables["CFF "], keep, w.budget); err != nil {
+		return nil, nil, w.refusal(err)
 	}
 
-	sub, order, err := subsetCFF(tables["CFF "], keep, budget)
+	sub, order, err := subsetCFF(tables["CFF "], keep, w.budget)
 	if err != nil {
+		return nil, nil, w.refusal(err)
+	}
+	if err := w.write(len(sub), "the CFF table"); err != nil {
 		return nil, nil, err
 	}
 	out := map[string][]byte{}
@@ -731,7 +734,11 @@ func (f *Face) subsetOpenTypeCFF(notdef bool) ([]byte, []int, error) {
 		}
 	}
 
-	return assembleOTTO(out), keptGlyphs(keep), nil
+	prog, err := w.assemble(out, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	return prog, keptGlyphs(keep), nil
 }
 
 // assembleOTTO writes an OpenType font whose outlines are CFF.
