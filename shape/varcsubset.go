@@ -15,56 +15,31 @@ import (
 // side bearing of its xMin, which puts the origin where HarfBuzz drew from.
 // The advance stays hmtx's, as HarfBuzz's does.
 //
-// It refuses where it cannot write a glyph exactly as drawn, since the
-// document would otherwise show the placeholder with nothing to say so: a
+// A glyph it cannot write exactly as drawn is one the subset cannot keep, since
+// the document would otherwise show the placeholder with nothing to say so: a
 // leaf whose outline is CFF, a glyph past the work one may cost or with more
 // points than glyf holds, a glyf composite built on a VARC glyph (which
 // HarfBuzz draws from that glyph's own glyf entry), and any VARC glyph of a
-// CFF face, whose charstrings cannot hold what VARC draws.
+// CFF face, whose charstrings cannot hold what VARC draws. Each is decided
+// before the subset is written, with the face's other glyphs (glyphcheck.go).
 
-// flattenKeptVARC is each kept VARC glyph written out as glyf bytes.
-func (f *Face) flattenKeptVARC(keep []bool, offsets []uint32, glyf []byte) (map[int][]byte, error) {
+// flattenKeptVARC is each kept VARC glyph written out as glyf bytes. Each was
+// decided keepable (glyphcheck.go) by writing it out under an allowance of its
+// own; here they share one, the subset's.
+func (f *Face) flattenKeptVARC(keep []bool) (map[int][]byte, error) {
 	v := f.varc
 	if v == nil {
 		return nil, nil
-	}
-	n := len(keep)
-	covered := func(gid int) bool { return v.t.coverageIndex(gid) >= 0 }
-	var named []int
-	for gid := 0; gid < n; gid++ {
-		if !keep[gid] || covered(gid) {
-			continue
-		}
-		start, end := offsets[gid], offsets[gid+1]
-		if start >= end || int(end) > len(glyf) {
-			continue
-		}
-		named = componentGlyphs(glyf[start:end], n, named[:0])
-		for _, c := range named {
-			if covered(c) {
-				return nil, fmt.Errorf("fonts: glyph %d has glyph %d as a glyf component, which draws "+
-					"that glyph's own glyf entry where the glyph itself draws its variable composite (VARC); "+
-					"a subset cannot hold both under one glyph index", gid, c)
-			}
-		}
 	}
 	out := map[int][]byte{}
 	// A subset's own share of work, as much as the face's, so that measuring
 	// before it does not leave it none.
 	work := varcFaceWork(f.sfntTables())
-	for gid := 0; gid < n; gid++ {
-		if !keep[gid] || !covered(gid) {
+	for gid, k := range keep {
+		if !k || v.t.coverageIndex(gid) < 0 {
 			continue
 		}
-		o, err := v.outline(gid, v.coords, &work)
-		var g *varGlyph
-		if err == nil {
-			g, err = o.flatGlyph()
-		}
-		var b []byte
-		if err == nil {
-			b, err = encodeVarGlyph(g)
-		}
+		b, err := v.flatEntry(gid, &work)
 		if err != nil {
 			return nil, fmt.Errorf("fonts: glyph %d is a variable composite (VARC) that cannot be written "+
 				"out as a glyf outline: %w", gid, err)
@@ -72,6 +47,20 @@ func (f *Face) flattenKeptVARC(keep []bool, offsets []uint32, glyf []byte) (map[
 		out[gid] = b
 	}
 	return out, nil
+}
+
+// flatEntry is the glyf record of what VARC draws for glyph gid at the face's
+// coordinates, with work spent from work.
+func (v *varcFace) flatEntry(gid int, work *int64) ([]byte, error) {
+	o, err := v.outline(gid, v.coords, work)
+	if err != nil {
+		return nil, err
+	}
+	g, err := o.flatGlyph()
+	if err != nil {
+		return nil, err
+	}
+	return encodeVarGlyph(g)
 }
 
 // flatBearings is hmtx with each written-out glyph's left side bearing set
@@ -92,21 +81,6 @@ func flatBearings(hmtx []byte, longMetrics int, flat map[int][]byte) []byte {
 		}
 	}
 	return out
-}
-
-// usesVARCGlyph is the first glyph the face has used that VARC composes, if
-// any.
-func (f *Face) usesVARCGlyph() (int, bool) {
-	if f.varc == nil {
-		return 0, false
-	}
-	first, found := 0, false
-	for gid := range f.used {
-		if f.varc.t.coverageIndex(gid) >= 0 && (!found || gid < first) {
-			first, found = gid, true
-		}
-	}
-	return first, found
 }
 
 // flatGlyphs are the written-out glyphs' bytes.

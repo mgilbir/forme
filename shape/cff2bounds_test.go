@@ -2,6 +2,7 @@ package shape
 
 import (
 	"encoding/binary"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -188,23 +189,31 @@ func TestACFF2DictBlendIsHeldToItsOperands(t *testing.T) {
 
 // TestACFF2GlyphThatCannotBeRunIsEmbeddedEmptyAndSaid: a charstring HarfBuzz
 // cannot run — here one that pops an empty stack — has no outline to write.
-// Its face still loads; the glyph is written as an empty one at its advance,
-// its ink is that empty glyph's, and the face says which glyph it was.
+// Its face still loads; in the whole program the glyph is written as an empty
+// one at its advance, its ink is that empty glyph's, and the face says which
+// glyph it was. A subset that would carry it is refused instead, naming it:
+// what a document drew with the glyph is not what the font states.
 func TestACFF2GlyphThatCannotBeRunIsEmbeddedEmptyAndSaid(t *testing.T) {
 	data := cff2Sfnt(twoGlyphs([]byte{5, 21}).bytes(), aGlyph) // rlineto, rmoveto on an empty stack
 	f, err := Load(data)
 	if err != nil {
 		t.Fatalf("a CFF2 font with one broken glyph does not load: %v", err)
 	}
-	f.Encode("a")
-	prog, kept, err := f.SubsetGlyphs()
-	if err != nil {
-		t.Fatal(err)
+	if err := f.CheckGlyph(0); err != nil {
+		t.Errorf("CheckGlyph(0) = %v, want the sound .notdef kept", err)
 	}
-	cff := font.SFNTTables(prog)["CFF "]
-	o, err := readCFFOutlines(cff, len(kept))
+	var ge *GlyphError
+	if err := f.CheckGlyph(1); !errors.As(err, &ge) || !slices.Equal(ge.GIDs, []int{1}) {
+		t.Errorf("CheckGlyph(1) = %v, want a GlyphError naming glyph 1", err)
+	}
+	f.Encode("a")
+	if _, _, err := f.SubsetGlyphs(); !errors.As(err, &ge) || !slices.Equal(ge.GIDs, []int{1}) {
+		t.Errorf("a subset carrying the broken glyph returned %v, want a GlyphError naming glyph 1", err)
+	}
+	cff := font.SFNTTables(f.Program())["CFF "]
+	o, err := readCFFOutlines(cff, f.NumGlyphs())
 	if err != nil {
-		t.Fatalf("the subset cannot be read: %v", err)
+		t.Fatalf("the program cannot be read: %v", err)
 	}
 	if segs, ok := cffOutline(o, 1); !ok || len(segs) != 0 {
 		t.Errorf("the broken glyph was written as %v (%v), want an empty glyph", segs, ok)
@@ -286,7 +295,7 @@ func TestACFF2WriterStopsWhereItsWorkAndSizeDo(t *testing.T) {
 	}
 	empty := 0
 	for g := range glyphs {
-		if _, b := w.glyph(g); !b.set {
+		if _, b, _ := w.glyph(g); !b.set {
 			empty++
 		}
 	}
@@ -316,7 +325,7 @@ func TestACFF2WriterStopsWhereItsWorkAndSizeDo(t *testing.T) {
 	w.sizeLimit = 4 << 10
 	empty = 0
 	for g := 1; g < 4; g++ {
-		if _, b := w.glyph(g); !b.set {
+		if _, b, _ := w.glyph(g); !b.set {
 			empty++
 		}
 	}

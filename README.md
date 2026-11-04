@@ -199,6 +199,14 @@ grow with its text rather than bound how long a paragraph may be, and it fails w
 than return a composition that stopped part way. Font parsing and Unicode
 preprocessing keep their own bounds and are not interrupted inside a phase.
 
+**Embedding untrusted fonts.** `Face.CheckGlyph` says, before a glyph is
+drawn, whether a subset can carry it as the font states it: a glyf record read
+whole, with every component it names, or a charstring that runs. A subset is
+refused with a `*GlyphError` naming every glyph the face used that it cannot
+carry, rather than copying a malformed glyph or dropping it, so a caller that
+asks first can draw the runs that need such a glyph some other way and keep the
+rest of the face as text.
+
 Glyphs come back in **visual order** — the order a pen draws them, left to right —
 whatever scripts the string mixes, so a caller can draw them as they are.
 

@@ -163,14 +163,9 @@ func Be32(b []byte, off int) uint32 {
 	return binary.BigEndian.Uint32(b[off:])
 }
 
-// MarkComposite, given one glyph's glyf bytes, marks every glyph index it
-// references as a component (when the glyph is composite, numberOfContours == -1).
-func MarkComposite(g []byte, numGlyphs int, out []bool) {
-	markComposite(g, numGlyphs, out, nil)
-}
-
-// markComposite is MarkComposite charged to a budget, one unit per component
-// record, when b is not nil.
+// markComposite, given one glyph's glyf bytes, marks every glyph index it
+// references as a component (when the glyph is composite, numberOfContours ==
+// -1), charged to a budget, one unit per component record, when b is not nil.
 //
 // The walk is linear in one glyph's bytes, and ParseSFNT makes it once per
 // glyph — which is linear in the table only when the glyphs do not overlap. loca

@@ -181,8 +181,13 @@ func TestTheSeacClosureStopsWhereTheBudgetDoes(t *testing.T) {
 // glyph's charstring sets its width with an hmoveto — which is as far as Load
 // reads — and then calls a subroutine tree the seac walk follows to its
 // operator bound. Sixty-four such glyphs are the allowance; this uses a hundred.
+//
+// The tree is fifteen wide and four deep: 162,721 operators run, which is past
+// the seac walk's bound and inside the 200,000 HarfBuzz runs of one glyph. A
+// tree sixteen wide runs 209,713, and a glyph that runs past HarfBuzz's cap is
+// one a subset refuses to carry before any walk of it (glyphcheck.go).
 func TestASubsetOfSeacWalksPastTheBudgetIsRefused(t *testing.T) {
-	const fanOut, depth, callsubr, ret, endchar = 16, 4, 10, 11, 14
+	const fanOut, depth, callsubr, ret, endchar = 15, 4, 10, 11, 14
 	operand := func(subr int) byte { return byte(subr - 107 + 139) }
 	subrs := make([][]byte, depth+1)
 	for i := 0; i < depth; i++ {

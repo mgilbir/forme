@@ -230,6 +230,12 @@ func decodeComposite(g *varGlyph, b []byte, numGlyphs int) error {
 		flags := font.Be16(b, at)
 		gid := font.Be16(b, at+2)
 		at += 4
+		if flags&compGID24 != 0 {
+			// A component named by a 24-bit index, which moves every field
+			// after it along a byte: read as the 16-bit form, the record
+			// names some other glyph and its arguments are misread.
+			return fmt.Errorf("fonts: a composite glyph names a component by a 24-bit glyph index, which is not read here")
+		}
 		if gid >= numGlyphs {
 			return fmt.Errorf("fonts: a composite glyph names component %d, which the font does not have", gid)
 		}
