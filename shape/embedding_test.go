@@ -114,7 +114,13 @@ func TestAGlyphDrawnByIndexIsKept(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, f := range map[string]*Face{"glyf": noto.Clone(), "CFF": cff.Clone()} {
+		// The last glyph a subset can keep: the CFF fixture's last few run
+		// past the operators HarfBuzz runs of one glyph, which no subset
+		// carries (glyphcheck.go).
 		last := f.NumGlyphs() - 1
+		for last > 1 && f.CheckGlyph(last) != nil {
+			last--
+		}
 		if last < 2 {
 			t.Fatalf("%s: the face has %d glyphs", name, f.NumGlyphs())
 		}

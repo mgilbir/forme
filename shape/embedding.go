@@ -401,7 +401,13 @@ func (f *Face) CharacterCollection() (registry, ordering string, supplement int,
 // face but a CID-keyed CFF the subset keeps those numbers. A CID-keyed CFF's
 // subset is renumbered: kept[i] is glyph i of the program. Nothing a document
 // writes changes with it, because such a face is addressed by CID (GlyphCode)
-// and the subset's charset gives each glyph the CID it had.
+// and the subset's charset gives each glyph the CID it had. .notdef is always
+// in kept; where it cannot be kept and nothing used it, it is written empty.
+//
+// A face that used a glyph whose data the subset cannot carry as the font
+// states it is refused with a *GlyphError naming every such glyph, as Subset
+// is. CheckGlyph asks the same question of one glyph before it is drawn, which
+// is how a caller avoids the refusal rather than meeting it here.
 func (f *Face) SubsetGlyphs() (program []byte, kept []int, err error) {
 	return f.subset()
 }

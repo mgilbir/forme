@@ -165,6 +165,13 @@ func Be32(b []byte, off int) uint32 {
 
 // MarkComposite, given one glyph's glyf bytes, marks every glyph index it
 // references as a component (when the glyph is composite, numberOfContours == -1).
+//
+// It reads the record as ParseSFNT does, leniently: a component index past
+// numGlyphs is skipped, and the walk stops where the records run out. That is
+// the answer to which glyphs the font uses as components — what a reader
+// accounting for a font's glyphs asks, as Program.ComponentGID does. Whether a
+// glyph can be carried in a subset is a stricter question, and shape's
+// Face.CheckGlyph answers it.
 func MarkComposite(g []byte, numGlyphs int, out []bool) {
 	markComposite(g, numGlyphs, out, nil)
 }

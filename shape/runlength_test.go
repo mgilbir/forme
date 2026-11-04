@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonttest"
 )
 
@@ -405,69 +404,49 @@ func compositeChain(n int) ([]uint32, []byte) {
 // whole font per round.
 func TestTheCompositeClosureIsLinearInTheChain(t *testing.T) {
 	run := func(n int) func() {
-		offsets, glyf := compositeChain(n)
+		tables := compositeChainTables(n)
 		f := &Face{used: map[int]bool{n - 1: true}}
-		keep := f.keepSet(offsets, glyf, n)
+		keep, err := f.keepSet(tables, true)
+		if err != nil {
+			t.Fatal(err)
+		}
 		for gid := 0; gid < n; gid++ {
 			if !keep[gid] {
 				t.Fatalf("a chain of %d composites lost glyph %d", n, gid)
 			}
 		}
-		return func() { f.keepSet(offsets, glyf, n) }
+		return func() { f.keepSet(tables, true) }
 	}
 	growth(t, "closing a chain of n composites, at 4n against n", run, 4000, 16000, 8)
 }
 
-// TestComponentGlyphsWalksAsMarkCompositeDoes holds the worklist's reader of a
-// composite to font.MarkComposite, the one every other caller shares, over every
-// glyph of the bundled face and over glyphs of random bytes.
-func TestComponentGlyphsWalksAsMarkCompositeDoes(t *testing.T) {
-	check := func(g []byte, n int) {
-		t.Helper()
-		want := make([]bool, n)
-		font.MarkComposite(g, n, want)
-		got := make([]bool, n)
-		for _, c := range componentGlyphs(g, n, nil) {
-			got[c] = true
+// TestDecidingTheTopOfAChainIsLinearInTheChain is the same for the decision
+// that comes before the closure: deciding the composite at the top of a chain
+// decides every glyph under it, and each once.
+func TestDecidingTheTopOfAChainIsLinearInTheChain(t *testing.T) {
+	run := func(n int) func() {
+		tables := compositeChainTables(n)
+		f := &Face{}
+		c := newGlyphChecks()
+		if v := c.glyf(f, tables, n-1); v != nil {
+			t.Fatalf("a chain of %d sound composites was refused: %v", n, v.describe(n-1))
 		}
-		for i := range want {
-			if want[i] != got[i] {
-				t.Fatalf("glyph %x: component %d marked %v by MarkComposite and %v here", g, i, want[i], got[i])
-			}
+		if len(c.verdicts) != n-1 {
+			t.Fatalf("deciding the top of a chain of %d decided %d glyphs, want every one but .notdef", n, len(c.verdicts))
 		}
+		return func() { newGlyphChecks().glyf(f, tables, n-1) }
 	}
-	data := notoSansBytes(t)
-	tables := font.SFNTTables(data)
-	f, err := Load(data)
-	if err != nil {
-		t.Fatal(err)
+	growth(t, "deciding the top of a chain of n composites, at 4n against n", run, 4000, 16000, 8)
+}
+
+// compositeChainTables is compositeChain as the subsetter reads it.
+func compositeChainTables(n int) glyfTables {
+	offsets, glyf := compositeChain(n)
+	loca := make([]byte, 4*len(offsets))
+	for i, o := range offsets {
+		binary.BigEndian.PutUint32(loca[4*i:], o)
 	}
-	n := f.NumGlyphs()
-	long := binary.BigEndian.Uint16(tables["head"][50:]) == 1
-	offsets, err := parseLoca(tables["loca"], n, long)
-	if err != nil {
-		t.Fatal(err)
-	}
-	composites := 0
-	for gid := 0; gid < n; gid++ {
-		g := tables["glyf"][offsets[gid]:offsets[gid+1]]
-		if len(g) >= 2 && int16(binary.BigEndian.Uint16(g)) == -1 {
-			composites++
-		}
-		check(g, n)
-	}
-	if composites == 0 {
-		t.Fatal("the face has no composite glyphs; the comparison would prove nothing")
-	}
-	rng := rand.New(rand.NewSource(3))
-	for trial := 0; trial < 5000; trial++ {
-		g := make([]byte, rng.Intn(40))
-		rng.Read(g)
-		if len(g) >= 2 && rng.Intn(2) == 0 {
-			g[0], g[1] = 0xFF, 0xFF
-		}
-		check(g, 1+rng.Intn(300))
-	}
+	return glyfTables{loca: loca, glyf: glyf, long: true, numGlyphs: n}
 }
 
 // TestMarksHangingFromOneBaseAreResolvedInLinearTime is the last step of a

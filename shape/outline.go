@@ -163,7 +163,8 @@ func newOutlineCache(programLen int, tables map[string][]byte) *outlineCache {
 // A CFF2 glyph the conversion to CFF could not write — one whose charstring
 // cannot be run, or that came after the work or size allowed ran out — is
 // written by it as an empty glyph, and is drawn as one here; Face.LayoutLimits
-// says when that has happened, as it does for the glyph's box.
+// says when that has happened, as it does for the glyph's box, and CheckGlyph
+// refuses it, since a subset would carry the empty glyph and not the font's.
 func (f *Face) GlyphOutline(gid int, yield func(Segment) bool) error {
 	segs, err := f.glyphOutline(gid)
 	if err != nil {

@@ -61,7 +61,12 @@ var requiredTables = []string{"cmap", "glyf", "head", "hhea", "hmtx", "loca", "m
 // Subset returns a font program carrying only the glyphs this face has encoded,
 // together with .notdef and the components any kept composite glyph needs.
 //
-// It reports an error when the original font cannot be taken apart — a
+// Each glyph the face used is decided first, as CheckGlyph decides it, and a
+// subset that would have to carry a glyph whose data cannot be carried as the
+// font states it is refused with a *GlyphError naming the glyphs: none is
+// copied as it stands, and none is quietly dropped. See glyphcheck.go.
+//
+// It reports an error too when the original font cannot be taken apart — a
 // truncated loca, a glyf that does not agree with it — rather than emitting a
 // program that claims glyphs it does not have.
 func (f *Face) Subset() ([]byte, error) {
@@ -74,62 +79,28 @@ func (f *Face) Subset() ([]byte, error) {
 // glyphs the program carries (PDF's /CIDSet) is describing exactly these, and
 // computing that twice is how the two come to disagree.
 func (f *Face) subset() ([]byte, []int, error) {
-	if f.std != nil {
-		return nil, nil, errors.New("fonts: a standard font has no program to subset")
-	}
-	if f.bitmapOnly {
-		return nil, nil, errors.New("fonts: the font's glyphs are only bitmaps, and a font program " +
-			"embedded in a document has to carry outlines")
-	}
-	n := f.prog.NumGlyphs
-	if n <= 0 {
-		// A font declaring no glyphs at all. Every sfnt has .notdef at index
-		// zero, so this is a malformed maxp rather than an empty font — and the
-		// subsetter would otherwise write .notdef into a slice with no room for
-		// it. That holds whatever the outlines are: a CFF or CFF2 face sizes
-		// its keep set from the same count, and went past it the same way.
-		return nil, nil, fmt.Errorf("fonts: the font declares %d glyphs; every font has at least .notdef", n)
-	}
-	if f.cff2 != nil || f.cff {
-		if gid, ok := f.usesVARCGlyph(); ok {
-			// A CFF charstring cannot carry the outline VARC draws, so the
-			// program would draw the glyph's placeholder: see varcsubset.go.
-			// A CFF2 face is embedded as the CFF font it draws, and the same
-			// holds for it.
-			return nil, nil, fmt.Errorf("fonts: glyph %d is a variable composite (VARC) in a CFF face, "+
-				"whose drawn outline a CFF program cannot carry", gid)
-		}
+	notdef, err := f.usedVerdicts()
+	if err != nil {
+		return nil, nil, err
 	}
 	if f.cff2 != nil {
 		return f.subsetCFF2()
 	}
 	if f.cff {
-		return f.subsetOpenTypeCFF()
+		return f.subsetOpenTypeCFF(notdef)
 	}
 	tables := f.sfntTables()
-	if tables == nil {
-		return nil, nil, errors.New("fonts: the font program is no longer an sfnt")
-	}
-	head, loca, glyf := tables["head"], tables["loca"], tables["glyf"]
-	if len(head) < 54 || loca == nil || glyf == nil {
-		return nil, nil, errors.New("fonts: the font program lacks head, loca or glyf")
-	}
-	longLoca := binary.BigEndian.Uint16(head[50:]) == 1
-
-	offsets, err := parseLoca(loca, n, longLoca)
+	t, err := f.glyfTables()
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(offsets) < n+1 {
-		// loca holds one offset per glyph plus a terminator; the closure below
-		// reads offsets[gid+1] for every kept glyph.
-		return nil, nil, fmt.Errorf(
-			"fonts: loca holds %d offsets for %d glyphs; it needs one more than the glyph count",
-			len(offsets), n)
-	}
+	n := t.numGlyphs
 
-	keep := f.keepSet(offsets, glyf, n)
-	flat, err := f.flattenKeptVARC(keep, offsets, glyf)
+	keep, err := f.keepSet(t, notdef)
+	if err != nil {
+		return nil, nil, err
+	}
+	flat, err := f.flattenKeptVARC(keep)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -137,25 +108,25 @@ func (f *Face) subset() ([]byte, []int, error) {
 	// Rebuild glyf and loca. A dropped glyph gets a zero-length entry at its own
 	// index, which is what makes this a retained-index subset: the numbering is
 	// unchanged and a composite's component references stay valid untouched.
-	newGlyf := make([]byte, 0, len(glyf))
+	// So does a .notdef that cannot be kept, which is not in keep.
+	newGlyf := make([]byte, 0, len(t.glyf))
 	newLoca := make([]uint32, n+1)
 	for gid := 0; gid < n; gid++ {
 		newLoca[gid] = uint32(len(newGlyf))
 		if !keep[gid] {
 			continue
 		}
-		if b, ok := flat[gid]; ok {
-			newGlyf = append(newGlyf, b...)
-			for len(newGlyf)%4 != 0 {
-				newGlyf = append(newGlyf, 0)
+		b, ok := flat[gid]
+		if !ok {
+			entry, err := t.entry(gid)
+			if err != nil {
+				return nil, nil, fmt.Errorf("fonts: glyph %d %w", gid, err)
 			}
-			continue
+			if b, err = stripInstructions(entry); err != nil {
+				return nil, nil, fmt.Errorf("fonts: internal: glyph %d was decided keepable and %w", gid, err)
+			}
 		}
-		start, end := offsets[gid], offsets[gid+1]
-		if start > end || int(end) > len(glyf) {
-			return nil, nil, fmt.Errorf("fonts: glyph %d lies outside the glyf table", gid)
-		}
-		newGlyf = append(newGlyf, stripInstructions(glyf[start:end])...)
+		newGlyf = append(newGlyf, b...)
 		for len(newGlyf)%4 != 0 { // glyf entries are long-aligned
 			newGlyf = append(newGlyf, 0)
 		}
@@ -189,17 +160,71 @@ func (f *Face) subset() ([]byte, []int, error) {
 	}
 	out["loca"] = locaBytes
 
-	newHead := append([]byte(nil), head...)
+	newHead := append([]byte(nil), t.head...)
 	binary.BigEndian.PutUint16(newHead[50:], 1) // indexToLocFormat: long
 	out["head"] = newHead
 
-	keptList := make([]int, 0, countTrue(keep))
-	for gid, k := range keep {
-		if k {
-			keptList = append(keptList, gid)
+	return assembleSFNT(out), keptGlyphs(keep), nil
+}
+
+// keptGlyphs is the glyphs a subset carries, by the face's own indices: those
+// keep says, and .notdef, which every subset carries whether it was kept or
+// written empty.
+func keptGlyphs(keep []bool) []int {
+	out := make([]int, 0, countTrue(keep)+1)
+	out = append(out, 0)
+	for gid := 1; gid < len(keep); gid++ {
+		if keep[gid] {
+			out = append(out, gid)
 		}
 	}
-	return assembleSFNT(out), keptList, nil
+	return out
+}
+
+// glyfTables are a TrueType face's head, loca and glyf, checked as far as a
+// subset needs them as a whole: present, and loca long enough to place every
+// glyph the font declares. Whether each glyph lies inside glyf is the glyph's
+// own question (entry).
+type glyfTables struct {
+	head, loca, glyf []byte
+	long             bool
+	numGlyphs        int
+}
+
+func (f *Face) glyfTables() (glyfTables, error) {
+	tables := f.sfntTables()
+	if tables == nil {
+		return glyfTables{}, errors.New("fonts: the font program is no longer an sfnt")
+	}
+	t := glyfTables{head: tables["head"], loca: tables["loca"], glyf: tables["glyf"], numGlyphs: f.prog.NumGlyphs}
+	if len(t.head) < 54 || t.loca == nil || t.glyf == nil {
+		return glyfTables{}, errors.New("fonts: the font program lacks head, loca or glyf")
+	}
+	t.long = binary.BigEndian.Uint16(t.head[50:]) == 1
+	// loca holds one offset per glyph plus a terminator.
+	need := 2 * (t.numGlyphs + 1)
+	if t.long {
+		need = 4 * (t.numGlyphs + 1)
+	}
+	if len(t.loca) < need {
+		return glyfTables{}, fmt.Errorf("fonts: loca holds %d bytes, too few for %d glyphs", len(t.loca), t.numGlyphs)
+	}
+	return t, nil
+}
+
+// entry is glyph gid's glyf record, and an error for one loca places outside
+// glyf, or ending before it starts.
+func (t glyfTables) entry(gid int) ([]byte, error) {
+	var start, end int
+	if t.long {
+		start, end = int(font.Be32(t.loca, 4*gid)), int(font.Be32(t.loca, 4*gid+4))
+	} else {
+		start, end = 2*font.Be16(t.loca, 2*gid), 2*font.Be16(t.loca, 2*gid+2)
+	}
+	if start > end || end > len(t.glyf) {
+		return nil, errors.New("lies outside the glyf table")
+	}
+	return t.glyf[start:end], nil
 }
 
 // stripInstructions removes a glyph's hinting instructions, leaving its outline
@@ -222,31 +247,42 @@ func (f *Face) subset() ([]byte, []int, error) {
 // there the splice is a truncation and the flag is cleared. The component
 // references themselves are untouched, which is the property the whole
 // subsetter is built on.
-func stripInstructions(g []byte) []byte {
+//
+// It is given glyphs the subset has decided it can keep (glyphcheck.go), whose
+// records have been read whole, and an error is a record that is not one of
+// those: it used to hand such a record back as it was, which is how a subset
+// came to carry bytes it could not read.
+func stripInstructions(g []byte) ([]byte, error) {
+	if len(g) == 0 {
+		return g, nil // an empty glyph: a space, and nothing to strip
+	}
 	if len(g) < 10 {
-		return g // an empty glyph: a space, and nothing to strip
+		return nil, errors.New("its record is too short for a glyph header")
 	}
 	contours := int(int16(binary.BigEndian.Uint16(g)))
 	if contours >= 0 {
 		at := 10 + 2*contours
 		if at+2 > len(g) {
-			return g
+			return nil, errors.New("its instruction length is past the end of its record")
 		}
 		n := int(binary.BigEndian.Uint16(g[at:]))
-		if n == 0 || at+2+n > len(g) {
-			return g
+		if n == 0 {
+			return g, nil
+		}
+		if at+2+n > len(g) {
+			return nil, errors.New("its instructions run past the end of its record")
 		}
 		out := make([]byte, 0, len(g)-n)
 		out = append(out, g[:at]...)
 		out = append(out, 0, 0) // instructionLength
-		return append(out, g[at+2+n:]...)
+		return append(out, g[at+2+n:]...), nil
 	}
 
 	// A composite: walk to the last component, which is the one that says
 	// whether instructions follow it.
 	for at := 10; ; {
 		if at+4 > len(g) {
-			return g
+			return nil, errors.New("its component records run past the end of its record")
 		}
 		flags := int(binary.BigEndian.Uint16(g[at:]))
 		flagsAt := at
@@ -265,27 +301,33 @@ func stripInstructions(g []byte) []byte {
 			at += 8
 		}
 		if at > len(g) {
-			return g
+			return nil, errors.New("its component records run past the end of its record")
 		}
 		if flags&compMoreComponents != 0 {
 			continue
 		}
 		if flags&compHaveInstructions == 0 {
-			return g
+			return g, nil
 		}
 		out := append([]byte(nil), g[:at]...)
 		binary.BigEndian.PutUint16(out[flagsAt:], uint16(flags&^compHaveInstructions))
-		return out
+		return out, nil
 	}
 }
 
-// keepSet decides which glyph indices survive: .notdef, every glyph this face
-// encoded, and — transitively — every component those glyphs are built from.
+// keepSet decides which glyph indices survive: .notdef where it can be kept,
+// every glyph this face used, and — transitively — every component those
+// glyphs are built from.
 //
 // The closure matters. An accented letter is usually a composite referring to a
 // base letter and a mark, and dropping either leaves a glyph that renders as
 // nothing. It follows components of components, because a component may itself
 // be composite.
+//
+// Every glyph it starts from has been decided keepable, which decided its
+// components too (glyphcheck.go), so the components it reads are the ones that
+// decision read, by the same decoder; a VARC glyph names none, since what it
+// is written as is its own.
 //
 // It is a worklist: each glyph kept is read once, and what it names is queued if
 // it was not kept already. It was a fixed point instead, re-reading every kept
@@ -293,70 +335,36 @@ func stripInstructions(g []byte) []byte {
 // adds only one level of components — a chain of composites, each built on the
 // one before, took as many rounds as it had links: n rounds of n glyphs, and n
 // sets of n, for one used glyph at the top.
-func (f *Face) keepSet(offsets []uint32, glyf []byte, n int) []bool {
+func (f *Face) keepSet(t glyfTables, notdef bool) ([]bool, error) {
+	n := t.numGlyphs
 	keep := make([]bool, n)
 	var work []int
 	add := func(gid int) {
-		if gid >= 0 && gid < n && !keep[gid] {
+		if !keep[gid] {
 			keep[gid] = true
 			work = append(work, gid)
 		}
 	}
-	add(0) // .notdef is always present
-	for gid := range f.used {
-		add(gid)
+	if notdef {
+		add(0)
 	}
-	var named []int
+	for gid := range f.used {
+		if gid >= 0 && gid < n {
+			add(gid)
+		}
+	}
 	for len(work) > 0 {
 		gid := work[len(work)-1]
 		work = work[:len(work)-1]
-		start, end := offsets[gid], offsets[gid+1]
-		if start >= end || int(end) > len(glyf) {
-			continue
+		comps, err := f.glyfComponents(t, gid, true)
+		if err != nil {
+			return nil, fmt.Errorf("fonts: internal: glyph %d was decided keepable and %w", gid, err)
 		}
-		named = componentGlyphs(glyf[start:end], n, named[:0])
-		for _, c := range named {
+		for _, c := range comps {
 			add(c)
 		}
 	}
-	return keep
-}
-
-// componentGlyphs lists the glyph indices a glyph's bytes name as components.
-//
-// It is font.MarkComposite's walk, step for step, returning the indices rather
-// than marking them in a set the size of the font — which is what a worklist
-// needs, since clearing or scanning that set per glyph would cost the font per
-// glyph again. TestComponentGlyphsWalksAsMarkCompositeDoes holds the two to the
-// same answer.
-func componentGlyphs(g []byte, numGlyphs int, out []int) []int {
-	if len(g) < 2 || int16(font.Be16(g, 0)) != -1 {
-		return out
-	}
-	for o := 10; o+4 <= len(g); {
-		flags := font.Be16(g, o)
-		if c := font.Be16(g, o+2); c >= 0 && c < numGlyphs {
-			out = append(out, c)
-		}
-		o += 4
-		if flags&0x0001 != 0 { // ARG_1_AND_2_ARE_WORDS
-			o += 4
-		} else {
-			o += 2
-		}
-		switch {
-		case flags&0x0008 != 0: // WE_HAVE_A_SCALE
-			o += 2
-		case flags&0x0040 != 0: // WE_HAVE_AN_X_AND_Y_SCALE
-			o += 4
-		case flags&0x0080 != 0: // WE_HAVE_A_TWO_BY_TWO
-			o += 8
-		}
-		if flags&0x0020 == 0 { // no MORE_COMPONENTS
-			break
-		}
-	}
-	return out
+	return keep, nil
 }
 
 func countTrue(b []bool) int {

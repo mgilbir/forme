@@ -39,7 +39,8 @@ import (
 // subsetCFF rewrites a CFF program to carry outlines only for the kept glyphs.
 //
 // The kept slice is indexed by glyph, as the glyf subsetter's is, so both take
-// the same decision from the same place.
+// the same decision from the same place. .notdef is in every subset, and is
+// written empty where keep says it is not kept.
 //
 // What a font can make this repeat — a Private DICT and its subroutine INDEX
 // read again for every Font DICT that names them, and a CID-keyed font's
@@ -346,6 +347,12 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 		regionOf := make([]int, len(order))
 		for i, g := range order {
 			glyphs[i] = charStrings.items[g]
+			if g == 0 && !keep[0] {
+				// A .notdef the subset cannot keep, which is in every
+				// subset all the same: written empty, as a glyph dropped
+				// from a font that is not renumbered is.
+				glyphs[i] = []byte{14} // endchar
+			}
 			regionOf[i] = fdRegion[newFDs[i]]
 		}
 		locals := make([][][]byte, len(regionParts))
@@ -678,14 +685,15 @@ func cffPrivateRegion(data []byte, off, size int, budget *font.Budget) ([]byte, 
 }
 
 // subsetOpenTypeCFF rebuilds an OpenType font around a subsetted CFF table.
-func (f *Face) subsetOpenTypeCFF() ([]byte, []int, error) {
+// notdef is whether .notdef can be kept; it is written empty where it cannot.
+func (f *Face) subsetOpenTypeCFF(notdef bool) ([]byte, []int, error) {
 	tables := f.sfntTables()
 	if tables == nil || tables["CFF "] == nil {
 		return nil, nil, errors.New("fonts: the font no longer carries a CFF table")
 	}
 	n := f.prog.NumGlyphs
 	keep := make([]bool, n)
-	keep[0] = true // .notdef
+	keep[0] = notdef
 	for gid := range f.used {
 		if gid >= 0 && gid < n {
 			keep[gid] = true
@@ -723,13 +731,7 @@ func (f *Face) subsetOpenTypeCFF() ([]byte, []int, error) {
 		}
 	}
 
-	kept := make([]int, 0, len(keep))
-	for gid, k := range keep {
-		if k {
-			kept = append(kept, gid)
-		}
-	}
-	return assembleOTTO(out), kept, nil
+	return assembleOTTO(out), keptGlyphs(keep), nil
 }
 
 // assembleOTTO writes an OpenType font whose outlines are CFF.

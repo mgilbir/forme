@@ -8,9 +8,10 @@
 // can cost to read is bounded for the font as a whole and not per parser; a
 // budget that runs out is an error Load reports, never a quietly smaller font.
 // The rest of shape reads the tables SFNTTables finds for itself — the layout
-// tables, gvar, the instancer's — with Be16 and Be32; the TrueType subsetter
-// takes MarkComposite for a composite glyph's components, and the CFF one's
-// seac closure CFFStandardSID, CFFSubrBias and StandardEncodingName. A simple
+// tables, gvar, the instancer's and the subsetter's — with Be16 and Be32; the
+// CFF subsetter's seac closure takes CFFStandardSID, CFFSubrBias and
+// StandardEncodingName. MarkComposite is ParseSFNT's lenient reading of a
+// composite glyph's components, for a caller outside this module. A simple
 // font's encoding is WinAnsiEncodingNames, and GlyphNameToRune says what
 // character each of its names stands for.
 //

@@ -188,7 +188,11 @@ func TestStrippingInstructionsLeavesTheOutlineAlone(t *testing.T) {
 		}
 		for gid, g := range glyfEntries(t, data) {
 			n, has := glyphInstructions(g)
-			stripped := stripInstructions(g)
+			stripped, err := stripInstructions(g)
+			if err != nil {
+				t.Errorf("%s glyph %d: %v", filepath.Base(name), gid, err)
+				continue
+			}
 			if !has || n == 0 {
 				if len(stripped) != len(g) {
 					t.Errorf("%s glyph %d has no instructions and was changed from "+

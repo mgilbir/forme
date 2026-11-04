@@ -3,6 +3,7 @@ package shape
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -412,7 +413,26 @@ func FuzzLoadAndUse(f *testing.F) {
 // and CFF readers instead, and held to the same glyphs and advances.
 func checkSubset(t *testing.T, f *Face) {
 	t.Helper()
+	// The subset's decision about each glyph is CheckGlyph's: a GlyphError
+	// names exactly the used glyphs CheckGlyph refuses as theirs, and a
+	// subset of a face that used none of those is not refused with one.
+	var refused []int
+	for _, gid := range f.Used() {
+		var ge *GlyphError
+		if errors.As(f.CheckGlyph(gid), &ge) {
+			refused = append(refused, gid)
+		}
+	}
 	prog, kept, err := f.SubsetGlyphs()
+	var ge *GlyphError
+	switch {
+	case errors.As(err, &ge):
+		if !slices.Equal(ge.GIDs, refused) {
+			t.Fatalf("the subset refused glyphs %v and CheckGlyph %v", ge.GIDs, refused)
+		}
+	case err == nil && len(refused) > 0:
+		t.Fatalf("the subset carried glyphs %v, which CheckGlyph refuses", refused)
+	}
 	if err != nil || len(prog) == 0 {
 		return
 	}
@@ -452,6 +472,11 @@ func checkSubset(t *testing.T, f *Face) {
 		if got, want := sub.advanceGID(at), f.advanceGID(gid); got != want {
 			t.Fatalf("glyph %d advances %v in the subset and %v in the font",
 				gid, got, want)
+		}
+		// And what the subset carries is what it decided it could: no glyph
+		// of it is one the subsetter would refuse to carry again.
+		if err := sub.CheckGlyph(at); err != nil {
+			t.Fatalf("glyph %d of the subset cannot be kept in a subset of it: %v", gid, err)
 		}
 	}
 }
@@ -611,6 +636,7 @@ func useFace(face *Face) {
 		_, _, _ = face.HalfWidthTrim(gid)
 		_, _, _, _, _ = face.GlyphExtents(gid)
 		_ = face.GlyphOutline(gid, func(Segment) bool { return true })
+		_ = face.CheckGlyph(gid)
 		_ = face.GlyphColour(gid, 0)
 		paintBalanced(face, gid, PaintOptions{})
 	}

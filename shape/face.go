@@ -57,6 +57,11 @@
 // A font whose outlines are CFF2 is read as the CFF font it draws where it is
 // cut (cff2cff.go), and is subsetted and embedded as that.
 //
+// Every glyph a subset is to carry is decided first, and the subset is refused
+// with a GlyphError naming those whose data it cannot carry as the font states
+// it; CheckGlyph asks the same of one glyph, before it is drawn. See
+// glyphcheck.go.
+//
 // Both glyf and CFF outlines are subsetted, by the same rule: glyph indices are
 // retained and a dropped glyph becomes an empty one. A CID-keyed CFF is the
 // exception. Its subset holds only the glyphs kept, renumbered in their order,
@@ -169,6 +174,9 @@ type Face struct {
 	// and is nil only for a face with no font program. See outline.go.
 	glyfOut  *colrInk
 	outlines *outlineCache
+	// checks is what the face has decided about which of its glyphs a subset
+	// can keep, shared by its clones as outlines is. See glyphcheck.go.
+	checks *glyphChecks
 	// colr measures the ink of a colour glyph by painting it, which is asked
 	// before the outline is: nil for a face with no COLR table. See
 	// colrink.go.
@@ -613,6 +621,7 @@ func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face,
 		f.glyfOut = newCOLRInk(f, tables, prog.NumGlyphs)
 	}
 	f.outlines = newOutlineCache(programSize(data, tables), tables)
+	f.checks = newGlyphChecks()
 	f.morx = readMorx(tables, prog.NumGlyphs)
 	f.feat = readFeat(tables["feat"])
 	f.ltag = readLtag(tables["ltag"])

@@ -185,26 +185,39 @@ func newCFF2Writer(f *cff2Font, blend *cff2Blend, advances []int, budget *font.B
 // glyph writes glyph g as a CFF charstring, and returns its bounds. A glyph
 // whose charstring cannot be run, or whose CFF form cannot state a number it
 // draws, or that comes after the work or the size allowed ran out, is written
-// as an empty glyph at its advance, and said to be (limits).
-func (w *cff2Writer) glyph(g int) ([]byte, floatBounds) {
+// as an empty glyph at its advance, and said to be (limits); err says which,
+// and is a *cff2Limit for the last two, which are no fault of the glyph's.
+func (w *cff2Writer) glyph(g int) (code []byte, b floatBounds, err error) {
 	fd := w.f.fds[g]
 	w.events, w.hintArgs = w.events[:0], w.hintArgs[:0]
-	ok := false
-	if !w.spent && !w.full {
+	switch {
+	case w.spent:
+		err = &cff2Limit{work: true}
+	case w.full:
+		err = &cff2Limit{}
+	default:
 		w.run.capped = false
-		_, ok = w.run.bounds(g, false)
+		_, ok := w.run.bounds(g, false)
 		w.spent = w.run.spent
-	}
-	var code []byte
-	var err error
-	if ok {
-		code, err = writeType2Glyph(w.events, w.advances[g], w.defaults[fd], w.nominals[fd])
-		if err == nil && w.written+len(code) > w.sizeLimit {
-			w.full, err = true, errors.New("past the size allowed")
+		switch {
+		case w.spent:
+			err = &cff2Limit{work: true}
+		case w.run.capped:
+			err = fmt.Errorf("has a charstring that runs past the %d operators HarfBuzz runs of one glyph", cffMaxOps)
+		case !ok:
+			err = errors.New("has a charstring that cannot be run")
 		}
 	}
-	if !ok || err != nil {
-		if !w.spent && !w.full {
+	if err == nil {
+		code, err = writeType2Glyph(w.events, w.advances[g], w.defaults[fd], w.nominals[fd])
+		if err != nil {
+			err = fmt.Errorf("draws what a CFF charstring cannot state: %w", err)
+		} else if w.written+len(code) > w.sizeLimit {
+			w.full, err = true, &cff2Limit{}
+		}
+	}
+	if err != nil {
+		if _, limit := err.(*cff2Limit); !limit {
 			w.failed = append(w.failed, g)
 		}
 		w.events = w.events[:0]
@@ -213,7 +226,18 @@ func (w *cff2Writer) glyph(g int) ([]byte, floatBounds) {
 		code, _ = writeType2Glyph(nil, w.advances[g], w.defaults[fd], w.nominals[fd])
 	}
 	w.written += len(code)
-	return code, penBounds(w.events)
+	return code, penBounds(w.events), err
+}
+
+// cff2Limit is a CFF2 glyph written empty because writing the font's glyphs as
+// CFF ran out of the work or the size allowed before it came to this one.
+type cff2Limit struct{ work bool }
+
+func (e *cff2Limit) Error() string {
+	if e.work {
+		return "fonts: writing the CFF2 outlines as CFF ran past the work one font may cost before it came to this glyph"
+	}
+	return "fonts: writing the CFF2 outlines as CFF ran past the size one font may come to before it came to this glyph"
 }
 
 // privates writes each Font DICT's Private DICT in CFF's form.
@@ -266,7 +290,7 @@ func cff2ToCFF(f *cff2Font, blend *cff2Blend, advances []int, name string, budge
 	conv := &cff2Converted{bounds: make([]floatBounds, n)}
 	glyphs := make([][]byte, n)
 	for g := range glyphs {
-		glyphs[g], conv.bounds[g] = w.glyph(g)
+		glyphs[g], conv.bounds[g], _ = w.glyph(g)
 	}
 	privates, err := w.privates()
 	if err != nil {
@@ -776,6 +800,8 @@ type cff2Default struct {
 	mu     sync.Mutex
 	w      *cff2Writer
 	glyphs map[int][]byte
+	// errs is why each glyph written empty was, as the writer said it.
+	errs map[int]error
 
 	once    sync.Once
 	program []byte
@@ -807,7 +833,7 @@ func newCFF2Default(tables map[string][]byte, budget *font.Budget) (*cff2Default
 	if name == "" {
 		name = "CFF2"
 	}
-	return &cff2Default{tables: tables, name: name, w: w, glyphs: map[int][]byte{}}, nil
+	return &cff2Default{tables: tables, name: name, w: w, glyphs: map[int][]byte{}, errs: map[int]error{}}, nil
 }
 
 // glyph is glyph g's CFF charstring, written the first time it is asked for.
@@ -821,9 +847,21 @@ func (d *cff2Default) glyphLocked(g int) []byte {
 	if code, ok := d.glyphs[g]; ok {
 		return code
 	}
-	code, _ := d.w.glyph(g)
+	code, _, err := d.w.glyph(g)
 	d.glyphs[g] = code
+	if err != nil {
+		d.errs[g] = err
+	}
 	return code
+}
+
+// check is why glyph g was written as an empty glyph, writing it if it has not
+// been, and nil when it was written as it draws. See cff2Writer.glyph.
+func (d *cff2Default) check(g int) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.glyphLocked(g)
+	return d.errs[g]
 }
 
 // numGlyphs is how many glyphs the font has.
@@ -1119,6 +1157,11 @@ func writeVORG(tops []int) []byte {
 // subsetCFF2 is Subset for a face whose outlines are CFF2, read at its default
 // instance: the CID-keyed subset of the CFF font it draws, written from the
 // kept glyphs alone. See cff2Default.subset.
+//
+// Every glyph the face used has been decided keepable, which wrote it
+// (glyphcheck.go), so no glyph of the subset but a .notdef nothing used is
+// one the writer wrote empty; that one is written empty, as the subset of
+// any face writes a .notdef it cannot keep.
 func (f *Face) subsetCFF2() ([]byte, []int, error) {
 	n := f.prog.NumGlyphs
 	keep := make([]bool, n)
@@ -1132,11 +1175,5 @@ func (f *Face) subsetCFF2() ([]byte, []int, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	kept := make([]int, 0, len(keep))
-	for gid, k := range keep {
-		if k {
-			kept = append(kept, gid)
-		}
-	}
-	return out, kept, nil
+	return out, keptGlyphs(keep), nil
 }
