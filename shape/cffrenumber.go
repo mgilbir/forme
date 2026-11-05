@@ -646,10 +646,8 @@ func renumberSFNT(out map[string][]byte, order []int, numGlyphs int, cmap map[ru
 	}
 	// A version 2 post names glyphs by index, and a CFF carries its own names
 	// anyway; version 3 is the header alone and names none.
-	if post := out["post"]; len(post) >= 32 {
-		p := append([]byte(nil), post[:32]...)
-		binary.BigEndian.PutUint32(p, 0x00030000)
-		out["post"] = p
+	if post, ok := out["post"]; ok {
+		out["post"] = postWithoutNames(post)
 	}
 	return nil
 }

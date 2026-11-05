@@ -498,8 +498,9 @@ func keptMapNoCharacter(f *Face, kept []int) bool {
 
 // checkUnmappedSubset holds a subset Load refuses for its empty character map
 // to what the subset is for. Its map has to be the reason, read and empty; the
-// program has to parse, with its CFF, as exactly the kept glyphs, renumbered
-// in order; and each has to advance as it did in the face.
+// program has to parse, with its CFF where it has one, as the kept glyphs
+// renumbered in order for a CID-keyed face and as the face's own glyphs for
+// any other; and each kept glyph has to advance as it did in the face.
 func checkUnmappedSubset(t *testing.T, f *Face, prog []byte, kept []int) {
 	t.Helper()
 	fp := font.ParseSFNT(prog, maxFontWork)
@@ -509,14 +510,33 @@ func checkUnmappedSubset(t *testing.T, f *Face, prog []byte, kept []int) {
 	if len(fp.Cmap) != 0 || fp.CmapPartial {
 		t.Fatalf("the subset maps %d characters and Load refuses it", len(fp.Cmap))
 	}
-	if fp.NumGlyphs != len(kept) {
-		t.Fatalf("the subset holds %d glyphs and kept %d", fp.NumGlyphs, len(kept))
+	// A CID-keyed face's subset is renumbered to the glyphs it kept; every
+	// other keeps the face's numbering, and with it the face's glyph count.
+	renumbered := f.IsCIDKeyed()
+	want := f.NumGlyphs()
+	if renumbered {
+		want = len(kept)
 	}
-	if cff := font.ParseCFFGlyphs(font.SFNTTables(prog)["CFF "], font.NewBudget(maxFontWork)); cff == nil || cff.NumGlyphs != len(kept) {
-		t.Fatalf("the subset's CFF does not parse as its %d glyphs", len(kept))
+	if fp.NumGlyphs != want {
+		t.Fatalf("the subset holds %d glyphs, want %d", fp.NumGlyphs, want)
+	}
+	if table := font.SFNTTables(prog)["CFF "]; table != nil {
+		if cff := font.ParseCFFGlyphs(table, font.NewBudget(maxFontWork)); cff == nil || cff.NumGlyphs != want {
+			t.Fatalf("the subset's CFF does not parse as its %d glyphs", want)
+		}
 	}
 	for i, gid := range kept {
-		if got, want := fp.WidthByGID[i], f.advanceGID(gid); got != want {
+		at := gid
+		if renumbered {
+			at = i
+		}
+		// Read as Face.advanceGID reads it: a glyph the font gives no width,
+		// one with no hmtx, advances 0.
+		got := 0.0
+		if at < len(fp.WidthByGID) {
+			got = fp.WidthByGID[at]
+		}
+		if want := f.advanceGID(gid); got != want {
 			t.Fatalf("glyph %d advances %v in the subset and %v in the font", gid, got, want)
 		}
 	}

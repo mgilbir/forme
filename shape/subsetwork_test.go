@@ -171,11 +171,16 @@ func TestASubsetsWorkIsItsLimitToo(t *testing.T) {
 // program it produced: the program, and the tables it was assembled from
 // before that — glyf, each VARC glyph written out before it was copied in, and
 // loca; or the CFF table, or for a CFF2 face the charstrings it was written
-// from, twice: once in their INDEX and once in the table.
+// from, twice: once in their INDEX and once in the table; and for a subset
+// that keeps the face's numbering, the tables around its outlines it wrote
+// again (writtenAround).
 func writtenAtLeast(t *testing.T, f *Face, prog []byte) int {
 	t.Helper()
 	tables := font.SFNTTables(prog)
 	n := len(prog)
+	if !f.IsCIDKeyed() {
+		n += writtenAround(f, tables)
+	}
 	if cff := tables["CFF "]; cff != nil {
 		if f.cff2 == nil {
 			return n + len(cff)
@@ -208,6 +213,21 @@ func writtenAtLeast(t *testing.T, f *Face, prog []byte) int {
 				n += max(0, len(b)-3) // its record, less what padding it may have
 			}
 		}
+	}
+	return n
+}
+
+// writtenAround is what a subset that keeps the face's numbering wrote again
+// of the tables around its outlines (subsettables.go): its cmap, unless the
+// face is a simple one, and its horizontal metrics where it cut them.
+func writtenAround(f *Face, sub map[string][]byte) int {
+	n := 0
+	if !f.simple {
+		n += len(sub["cmap"])
+	}
+	if hhea := f.sfntTables()["hhea"]; len(hhea) >= 36 && len(sub["hhea"]) >= 36 &&
+		font.Be16(sub["hhea"], 34) != font.Be16(hhea, 34) {
+		n += len(sub["hmtx"]) + len(sub["hhea"])
 	}
 	return n
 }

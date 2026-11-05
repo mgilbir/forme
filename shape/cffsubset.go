@@ -733,6 +733,8 @@ func (f *Face) subsetOpenTypeCFF(notdef bool, w *subsetWork) ([]byte, []int, err
 		if err := renumberSFNT(out, order, n, f.prog.Cmap); err != nil {
 			return nil, nil, err
 		}
+	} else if err := f.leanTables(out, keep, w); err != nil {
+		return nil, nil, err
 	}
 
 	prog, err := w.assemble(out, true)
