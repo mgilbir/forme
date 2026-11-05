@@ -35,11 +35,13 @@ import (
 //   - The CID is the glyph index throughout — in /CIDToGIDMap /Identity, in
 //     /CIDSet, in /W. One numbering end to end is a property worth paying for.
 //
-// What is left on the table is loca and hmtx, which stay at full length: four
-// and four bytes per glyph in the original font. For a 20,000-glyph CJK face
-// that is 160 KB against the megabytes of outline data that glyf sheds. The
-// trade is deliberate, and it is the thing to revisit if that 160 KB ever
-// matters more than the correctness it buys.
+// What is left on the table is loca, which stays at full length: four bytes per
+// glyph in the original font, 80 KB for a 20,000-glyph CJK face against the
+// megabytes of outline data that glyf sheds. The trade is deliberate, and it is
+// the thing to revisit if that ever matters more than the correctness it buys.
+// hmtx was left at full length too, and is no longer: it was the same four
+// bytes a glyph again, and a table whose glyphs past the last kept one can
+// share a metric need not carry one for each (subsettables.go).
 //
 // A CID-keyed CFF is the exception, and is renumbered. The codes written for it
 // are CIDs, not glyph indices, and its charset maps them to glyphs — so a
@@ -50,7 +52,10 @@ import (
 //
 // Everything not needed to render the kept glyphs: layout tables (GSUB, GPOS,
 // GDEF), kerning, hinting programs, and any vendor table. What remains is the
-// set a conforming reader requires, plus OS/2 where the original had one.
+// set a conforming reader requires, plus OS/2 where the original had one, and
+// of those the ones that describe glyphs describe the kept ones: post names
+// none, hmtx stops at the last kept glyph, and cmap maps only the characters
+// whose glyph was kept (subsettables.go).
 
 // requiredTables are the tables a subset font keeps. Hinting (cvt, fpgm, prep)
 // is dropped with the rest: it improves rendering at small sizes and costs
@@ -177,6 +182,10 @@ func (f *Face) subset(w *subsetWork) ([]byte, []int, error) {
 	newHead := append([]byte(nil), t.head...)
 	binary.BigEndian.PutUint16(newHead[50:], 1) // indexToLocFormat: long
 	out["head"] = newHead
+
+	if err := f.leanTables(out, keep, w); err != nil {
+		return nil, nil, err
+	}
 
 	prog, err := w.assemble(out, false)
 	if err != nil {

@@ -769,9 +769,7 @@ func cff2Tables(tables map[string][]byte, cff []byte) map[string][]byte {
 	}
 	out["CFF "] = cff
 	if post := out["post"]; len(post) >= 32 && font.Be32(post, 0) == 0x00020000 {
-		p := append([]byte(nil), post[:32]...)
-		binary.BigEndian.PutUint32(p, 0x00030000)
-		out["post"] = p
+		out["post"] = postWithoutNames(post)
 	}
 	return out
 }
