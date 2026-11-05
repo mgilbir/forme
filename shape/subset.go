@@ -178,6 +178,21 @@ func (f *Face) subset(w *subsetWork) ([]byte, []int, error) {
 	binary.BigEndian.PutUint16(newHead[50:], 1) // indexToLocFormat: long
 	out["head"] = newHead
 
+	// What a subset need not say (#979). Its glyph names (post format 2)
+	// name every glyph of the font, kept or not, and are most of a subset of
+	// a large font: format 3 says the same font with no names, as OpenType
+	// allows. Its long horizontal metrics stop at the last kept glyph, or
+	// before it where the advances up to it are all the same: every kept
+	// glyph keeps its advance and side bearing, and the empty glyphs after
+	// the last kept one, which draw nothing and are shown by nothing, read
+	// its advance.
+	if post, ok := out["post"]; ok {
+		out["post"] = postWithoutNames(post)
+	}
+	if hmtx, hhea := out["hmtx"], out["hhea"]; hmtx != nil && len(hhea) >= 36 {
+		out["hmtx"], out["hhea"] = trimHMetrics(hmtx, hhea, n, keep)
+	}
+
 	prog, err := w.assemble(out, false)
 	if err != nil {
 		return nil, nil, err
@@ -475,4 +490,74 @@ func sfntChecksum(b []byte) uint32 {
 		sum += binary.BigEndian.Uint32(last[:])
 	}
 	return sum
+}
+
+// postWithoutNames is a post table as format 3: its header, with the version
+// that says no glyph names follow. A table too short to have one is kept.
+func postWithoutNames(post []byte) []byte {
+	if len(post) < 32 {
+		return post
+	}
+	out := append([]byte(nil), post[:32]...)
+	binary.BigEndian.PutUint32(out, 0x00030000)
+	return out
+}
+
+// lastKept is the highest glyph keep keeps, 0 (.notdef) when it keeps none.
+func lastKept(keep []bool) int {
+	for g := len(keep) - 1; g > 0; g-- {
+		if keep[g] {
+			return g
+		}
+	}
+	return 0
+}
+
+// trimHMetrics is the hmtx of a subset of n glyphs, keep the ones it keeps,
+// whose long metrics stop at the last kept glyph, and before it where the
+// advances up to it end in a run of equal ones, with the hhea saying how many
+// there are. Every kept glyph keeps its advance and left side bearing; a
+// glyph past the long metrics reads the last one's advance, and one the
+// subset does not keep, which is empty, a left side bearing of 0. Tables it
+// cannot read as the hhea states them are kept as they are.
+func trimHMetrics(hmtx, hhea []byte, n int, keep []bool) ([]byte, []byte) {
+	upto := lastKept(keep) + 1
+	long := int(binary.BigEndian.Uint16(hhea[34:]))
+	if long < 1 || long > n || len(hmtx) < 4*long+2*(n-long) {
+		return hmtx, hhea
+	}
+	adv := func(g int) uint16 {
+		if g >= long {
+			g = long - 1
+		}
+		return binary.BigEndian.Uint16(hmtx[4*g:])
+	}
+	lsb := func(g int) []byte {
+		if g < long {
+			return hmtx[4*g+2 : 4*g+4]
+		}
+		return hmtx[4*long+2*(g-long) : 4*long+2*(g-long)+2]
+	}
+	k := min(long, max(upto, 1))
+	for k > 1 && adv(k-2) == adv(k-1) {
+		k--
+	}
+	if k == long {
+		return hmtx, hhea
+	}
+	out := make([]byte, 0, 4*k+2*(n-k))
+	for g := 0; g < k; g++ {
+		out = binary.BigEndian.AppendUint16(out, adv(g))
+		out = append(out, lsb(g)...)
+	}
+	for g := k; g < n; g++ {
+		if g < len(keep) && keep[g] {
+			out = append(out, lsb(g)...)
+		} else {
+			out = append(out, 0, 0)
+		}
+	}
+	newHhea := append([]byte(nil), hhea...)
+	binary.BigEndian.PutUint16(newHhea[34:], uint16(k))
+	return out, newHhea
 }
