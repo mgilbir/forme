@@ -27,12 +27,6 @@ import (
 // naming a custom language would report the font's family name as its language
 // tag — a font that loads, names itself correctly, and lies about one field.
 
-// nameRecord is one record of the table being built.
-type nameRecord struct {
-	platform, encoding, language, id int
-	value                            []byte
-}
-
 // buildNameTable assembles a name table in either format. Strings are packed in
 // the order the records are given, and a record whose value is already in the
 // block points at the existing copy — which is the overlap the rebuild exists to
