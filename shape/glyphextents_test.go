@@ -20,7 +20,7 @@ func TestGlyphExtentsIsHarfBuzzsAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gid, ok := face.GlyphIDForTest('口')
+	gid, ok := face.CmapGlyph('口')
 	if !ok || gid != 3482 {
 		t.Fatalf("口 maps to glyph %d (%v), want 3482", gid, ok)
 	}
@@ -30,7 +30,7 @@ func TestGlyphExtentsIsHarfBuzzsAnswer(t *testing.T) {
 			xb, yb, w, h, ok)
 	}
 	// A space is a glyph with no ink, which is an answer and not a failure.
-	space, _ := face.GlyphIDForTest(' ')
+	space, _ := face.CmapGlyph(' ')
 	if xb, yb, w, h, ok := face.GlyphExtents(space); !ok || xb|yb|w|h != 0 {
 		t.Errorf("the space has extents %d %d %d %d (%v), want zeros and true", xb, yb, w, h, ok)
 	}
