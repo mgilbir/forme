@@ -247,7 +247,7 @@ func TestUnjoinedScriptIsUntouched(t *testing.T) {
 	}
 	glyphs, _ := f.ShapeGlyphs("abc")
 	for i, g := range glyphs {
-		want, _ := f.GlyphIDForTest(rune('a' + i))
+		want, _ := f.CmapGlyph(rune('a' + i))
 		if g.GID != want {
 			t.Errorf("glyph %d was substituted: %d, want %d", i, g.GID, want)
 		}

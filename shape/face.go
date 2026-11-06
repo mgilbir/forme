@@ -1334,16 +1334,10 @@ func (f *Face) NumGlyphs() int {
 // GlyphIDForTest returns the glyph index a character maps to in the font
 // program, whatever encoding the face will be embedded with.
 //
-// GlyphID answers a different question — the number the *content stream* will
-// carry, which for a simple font is a character code and not a glyph index — so
-// a test checking what the subsetter kept needs this one. There is no other
-// caller, and the name says so.
+// Deprecated: use CmapGlyph, which is the same lookup under a name for
+// production use.
 func (f *Face) GlyphIDForTest(r rune) (int, bool) {
-	if f.prog == nil {
-		return 0, false
-	}
-	gid, ok := f.prog.Cmap[r]
-	return gid, ok && gid != 0
+	return f.CmapGlyph(r)
 }
 
 // Clone returns a face that shares this one's parsing but keeps its own record

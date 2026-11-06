@@ -1,6 +1,9 @@
 package shape
 
-import "context"
+import (
+	"context"
+	"iter"
+)
 
 // What a document format needs in order to embed a face.
 //
@@ -438,4 +441,40 @@ func (f *Face) Cmap() map[rune]int {
 		out[r] = gid
 	}
 	return out
+}
+
+// CmapGlyph is the glyph index the font program maps r to, reporting whether
+// it maps r to a glyph at all — a character the cmap sends to .notdef is not
+// mapped.
+//
+// It is one entry of Cmap without the copy, and the number is the program's
+// whatever the face is embedded as. GlyphID answers a different question: the
+// number a content stream carries, which for a simple face is a character code
+// and not a glyph index. A standard face has no program, and maps nothing.
+func (f *Face) CmapGlyph(r rune) (gid int, ok bool) {
+	if f.prog == nil {
+		return 0, false
+	}
+	gid, ok = f.prog.Cmap[r]
+	return gid, ok && gid != 0
+}
+
+// CmapAll yields every entry of the face's character-to-glyph mapping — what
+// Cmap returns, without the copy — in no particular order. A character the
+// font maps to .notdef is yielded with glyph 0, as Cmap has it, and CmapGlyph
+// reports it unmapped. A standard face has no program, and yields nothing.
+//
+// The mapping is the face's own and shared with every clone of it, so it is
+// read, never written: a caller that wants to change it wants Cmap.
+func (f *Face) CmapAll() iter.Seq2[rune, int] {
+	return func(yield func(rune, int) bool) {
+		if f.prog == nil {
+			return
+		}
+		for r, gid := range f.prog.Cmap {
+			if !yield(r, gid) {
+				return
+			}
+		}
+	}
 }

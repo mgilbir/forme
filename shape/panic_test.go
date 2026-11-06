@@ -628,6 +628,8 @@ func useFace(face *Face) {
 	_ = face.FeaturesAt(Features{}, 24)
 	_ = face.Descriptor()
 	_ = face.Cmap()
+	for range face.CmapAll() {
+	}
 	_ = face.Used()
 	_ = face.Scripts()
 	_ = face.Features()
@@ -711,6 +713,7 @@ func useFace(face *Face) {
 	for _, r := range []rune{'a', 0x0628, 0x0915, 0x1B13, 0x2011, 0x3000, 0x10FFFF} {
 		_, _ = face.GlyphID(r)
 		_, _ = face.Advance(r)
+		_, _ = face.CmapGlyph(r)
 		_, _ = face.GlyphIDForTest(r)
 		_ = face.StandsIn(r)
 		_, _ = face.MirroredForm(r)
