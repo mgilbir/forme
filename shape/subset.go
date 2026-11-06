@@ -55,7 +55,10 @@ import (
 // set a conforming reader requires, plus OS/2 where the original had one, and
 // of those the ones that describe glyphs describe the kept ones: post names
 // none, hmtx stops at the last kept glyph, and cmap maps only the characters
-// whose glyph was kept (subsettables.go).
+// whose glyph was kept (subsettables.go). name keeps the font's notices —
+// copyright, trademark, licence — and the names it goes by, and drops the
+// rest: the descriptive records, the IDs only tables a subset does not carry
+// refer to, and the Macintosh duplicates (subsetName).
 
 // requiredTables are the tables a subset font keeps. Hinting (cvt, fpgm, prep)
 // is dropped with the rest: it improves rendering at small sizes and costs

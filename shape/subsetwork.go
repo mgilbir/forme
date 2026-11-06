@@ -178,8 +178,18 @@ func sfntSize(tables map[string][]byte) int {
 	return n
 }
 
-// assemble writes the sfnt of tables, its bytes spent from w.
+// assemble writes the sfnt of tables, its bytes spent from w. Every subset is
+// assembled here, so this is where its name table is cut to what a subset
+// keeps (subsetName), whichever way its outlines were written.
 func (w *subsetWork) assemble(tables map[string][]byte, otto bool) ([]byte, error) {
+	if name, ok := tables["name"]; ok {
+		if cut := subsetName(name); cut != nil && len(cut) < len(name) {
+			if err := w.write(len(cut), "the name table"); err != nil {
+				return nil, err
+			}
+			tables["name"] = cut
+		}
+	}
 	if err := w.write(sfntSize(tables), "the font program"); err != nil {
 		return nil, err
 	}

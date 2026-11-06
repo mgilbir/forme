@@ -1273,6 +1273,31 @@ func clampAxis(a varAxis, v float64) float64 {
 // one block that records index into, and may overlap: there is nowhere to write
 // a longer string and no way to know which other record shares the old one.
 func replacePostScriptName(name []byte, psName string) []byte {
+	return rebuildName(name, func(records []nameRecord) []nameRecord {
+		for i := range records {
+			if records[i].id == 6 {
+				records[i].value = encodeNameString(psName, records[i].platform)
+			}
+		}
+		return records
+	})
+}
+
+// nameRecord is one record of a name table, with the string it states.
+type nameRecord struct {
+	platform, encoding, language, id int
+	value                            []byte
+}
+
+// rebuildName reads a name table's records, hands them to edit, and writes
+// the table again with the records edit returns, in the order it returns
+// them. It returns nil where the table cannot be read or what edit returns
+// cannot be written.
+//
+// Format 1 states language tags of its own after the records, and records name
+// their language by pointing into that list, so the list travels whole, whatever
+// edit keeps.
+func rebuildName(name []byte, edit func([]nameRecord) []nameRecord) []byte {
 	if len(name) < 6 {
 		return nil
 	}
@@ -1282,8 +1307,6 @@ func replacePostScriptName(name []byte, psName string) []byte {
 	if 6+12*count > len(name) {
 		return nil
 	}
-	// Format 1 states language tags of its own after the records, and records
-	// name their language by pointing into that list, so it travels with them.
 	langAt := 6 + 12*count
 	langCount := 0
 	if format == 1 {
@@ -1296,14 +1319,10 @@ func replacePostScriptName(name []byte, psName string) []byte {
 		}
 	}
 
-	type record struct {
-		platform, encoding, language, id int
-		value                            []byte
-	}
-	records := make([]record, 0, count)
+	records := make([]nameRecord, 0, count)
 	for i := 0; i < count; i++ {
 		rec := 6 + 12*i
-		r := record{
+		r := nameRecord{
 			platform: font.Be16(name, rec),
 			encoding: font.Be16(name, rec+2),
 			language: font.Be16(name, rec+4),
@@ -1315,19 +1334,23 @@ func replacePostScriptName(name []byte, psName string) []byte {
 			return nil
 		}
 		r.value = name[off : off+length]
-		if r.id == 6 {
-			r.value = encodeNameString(psName, r.platform)
-		}
 		records = append(records, r)
 	}
+	records = edit(records)
+	outCount := len(records)
 
-	head := 6 + 12*count
+	head := 6 + 12*outCount
 	if format == 1 {
 		head += 2 + 4*langCount
 	}
+	// The storage offset is a sixteen-bit field: a name table whose records do
+	// not fit under it cannot be written at all.
+	if head > 0xFFFF {
+		return nil
+	}
 	out := make([]byte, head)
 	binary.BigEndian.PutUint16(out[0:], uint16(format))
-	binary.BigEndian.PutUint16(out[2:], uint16(count))
+	binary.BigEndian.PutUint16(out[2:], uint16(outCount))
 	binary.BigEndian.PutUint16(out[4:], uint16(head))
 	// Each distinct string is written once, and every record or language tag
 	// stating it points at the one copy, as the fonts that share strings do.
@@ -1350,24 +1373,26 @@ func replacePostScriptName(name []byte, psName string) []byte {
 		strs = append(strs, v...)
 		return strAt[string(v)], true
 	}
-	for i := range records {
-		if _, ok := place(records[i].value); !ok {
+	for i, r := range records {
+		at, ok := place(r.value)
+		if !ok {
 			return nil
 		}
-	}
-	for i, r := range records {
 		rec := 6 + 12*i
 		binary.BigEndian.PutUint16(out[rec:], uint16(r.platform))
 		binary.BigEndian.PutUint16(out[rec+2:], uint16(r.encoding))
 		binary.BigEndian.PutUint16(out[rec+4:], uint16(r.language))
 		binary.BigEndian.PutUint16(out[rec+6:], uint16(r.id))
 		binary.BigEndian.PutUint16(out[rec+8:], uint16(len(r.value)))
-		binary.BigEndian.PutUint16(out[rec+10:], uint16(strAt[string(r.value)]))
+		binary.BigEndian.PutUint16(out[rec+10:], uint16(at))
+	}
+	if format == 1 {
+		binary.BigEndian.PutUint16(out[6+12*outCount:], uint16(langCount))
 	}
 	for i := 0; i < langCount; i++ {
-		at := 6 + 12*count + 2 + 4*i
-		length := font.Be16(name, at)
-		off := storage + font.Be16(name, at+2)
+		in := langAt + 2 + 4*i
+		length := font.Be16(name, in)
+		off := storage + font.Be16(name, in+2)
 		if off+length > len(name) {
 			return nil
 		}
@@ -1375,16 +1400,9 @@ func replacePostScriptName(name []byte, psName string) []byte {
 		if !ok {
 			return nil
 		}
+		at := 6 + 12*outCount + 2 + 4*i
 		binary.BigEndian.PutUint16(out[at:], uint16(length))
 		binary.BigEndian.PutUint16(out[at+2:], uint16(tagAt))
-	}
-	if format == 1 {
-		binary.BigEndian.PutUint16(out[6+12*count:], uint16(langCount))
-	}
-	// The storage offset is a sixteen-bit field: a name table whose records do
-	// not fit under it cannot be written at all.
-	if head > 0xFFFF || len(strs) > 0xFFFF {
-		return nil
 	}
 	return append(out, strs...)
 }

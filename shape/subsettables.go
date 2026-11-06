@@ -31,8 +31,8 @@ import (
 //
 // The numbering does not change, so nothing a document wrote moves. loca stays
 // at full length: four bytes a glyph is what keeping the numbering costs (see
-// subset.go). name is kept as the font has it, since OpenType requires it and
-// it says whose font this is.
+// subset.go). name is cut for every subset, whatever its numbering, by
+// subsetName below.
 //
 // A CID-keyed subset is renumbered, and renumberSFNT writes its tables for the
 // glyphs it keeps already; it takes its post from postWithoutNames too.
@@ -137,4 +137,55 @@ func trimHMetrics(hmtx, hhea []byte, n int, keep []bool) ([]byte, []byte) {
 	newHhea := append([]byte(nil), hhea...)
 	binary.BigEndian.PutUint16(newHhea[34:], uint16(k))
 	return out, newHhea
+}
+
+// subsetNameIDs are the name IDs a subset's name table keeps: what says whose
+// font it is and on what terms, and what names it.
+//
+//   - 0 copyright, 7 trademark, 13 licence description and 14 licence URL: the
+//     notices. A licence may ask that they travel with the font software, and a
+//     subset is the font software a document carries; whether this one may go
+//     without them is not a question forme answers on a font's behalf.
+//   - 1, 2, 4, 16, 17, 21 and 22, the family, subfamily and full names; 6, the
+//     PostScript name a PDF's /BaseFont is; 3, the unique identifier; and 5, the
+//     version. They are what a reader or a font tool shows of the font, and what
+//     Load reads it by.
+//
+// The rest go. 8 to 12 — manufacturer, designer, description and their URLs —
+// say who made the font and are not what it is licensed under; 18 is a Mac
+// QuickDraw name; 19 is sample text; 20 a PostScript CID findfont name. 23, 24
+// and 25 are named by CPAL and fvar, and every ID from 256 up by fvar, STAT,
+// GSUB, GPOS or CPAL: a subset carries none of those tables (requiredTables,
+// and the CFF subsets' own list), so in a subset nothing names them.
+var subsetNameIDs = map[int]bool{
+	0: true, 1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true,
+	13: true, 14: true, 16: true, 17: true, 21: true, 22: true,
+}
+
+// subsetName is the name table a subset carries: the records of the IDs
+// subsetNameIDs keeps, each in the Windows and Unicode platforms' records, and
+// in the Macintosh platform's only where neither of those states it. The
+// Macintosh records duplicate the others in a single-byte encoding for readers
+// that no longer exist, and where a font has nothing else they are what names
+// it, so they stay.
+//
+// It returns nil where the table cannot be read or written again, and the
+// subset carries the table as the font has it: a name a subset could have done
+// without is no reason to refuse it.
+func subsetName(name []byte) []byte {
+	return rebuildName(name, func(records []nameRecord) []nameRecord {
+		modern := map[int]bool{}
+		for _, r := range records {
+			if r.platform == 0 || r.platform == 3 {
+				modern[r.id] = true
+			}
+		}
+		kept := records[:0]
+		for _, r := range records {
+			if subsetNameIDs[r.id] && (r.platform != 1 || !modern[r.id]) {
+				kept = append(kept, r)
+			}
+		}
+		return kept
+	})
 }
