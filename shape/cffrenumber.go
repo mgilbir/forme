@@ -597,6 +597,34 @@ func rebuildPrivate(ops []cffOp, raw [][]byte, subrs [][]byte) ([]byte, int) {
 	return d, size
 }
 
+// hmtxLongMetrics is how many long metrics an hmtx of numGlyphs glyphs holds,
+// refused as parseHmtx refuses it: hhea's count, past the glyphs none are read.
+func hmtxLongMetrics(t []byte, numberOfHMetrics, numGlyphs int) (int, error) {
+	if numberOfHMetrics <= 0 {
+		return 0, errors.New("fonts: hhea states no horizontal metrics")
+	}
+	numberOfHMetrics = min(numberOfHMetrics, numGlyphs)
+	if 4*numberOfHMetrics > len(t) {
+		return 0, fmt.Errorf("fonts: hmtx holds %d bytes, too few for %d metrics", len(t), numberOfHMetrics)
+	}
+	return numberOfHMetrics, nil
+}
+
+// hmtxMetric is glyph gid's advance and left side bearing, as parseHmtx reads
+// them, from an hmtx of nh long metrics (hmtxLongMetrics): a renumbered subset
+// reads its kept glyphs' and not the font's every one (#987).
+func hmtxMetric(t []byte, nh, gid int) (advance, bearing int) {
+	if gid < nh {
+		return font.Be16(t, 4*gid), int(int16(uint16(font.Be16(t, 4*gid+2))))
+	}
+	advance = font.Be16(t, 4*(nh-1))
+	// A truncated tail of bearings is read as 0, as parseHmtx reads it.
+	if at := 4*nh + 2*(gid-nh); at+2 <= len(t) {
+		bearing = int(int16(uint16(font.Be16(t, at))))
+	}
+	return advance, bearing
+}
+
 // renumberSFNT rewrites the tables of the sfnt around a renumbered CFF that are
 // indexed by glyph: maxp's count, hmtx and the count in hhea, cmap, and post.
 // order[g] is the original glyph index of the subset's glyph g, and numGlyphs
@@ -617,14 +645,15 @@ func renumberSFNT(out map[string][]byte, order []int, numGlyphs int, cmap map[ru
 	}
 	hhea, hmtx := out["hhea"], out["hmtx"]
 	if len(hhea) >= 36 && hmtx != nil {
-		adv, lsb, err := parseHmtx(hmtx, font.Be16(hhea, 34), numGlyphs)
+		longs, err := hmtxLongMetrics(hmtx, font.Be16(hhea, 34), numGlyphs)
 		if err != nil {
 			return err
 		}
 		h := make([]byte, 0, 4*len(order))
 		for _, old := range order {
-			h = binary.BigEndian.AppendUint16(h, uint16(adv[old]))
-			h = binary.BigEndian.AppendUint16(h, uint16(int16(lsb[old])))
+			adv, lsb := hmtxMetric(hmtx, longs, old)
+			h = binary.BigEndian.AppendUint16(h, uint16(adv))
+			h = binary.BigEndian.AppendUint16(h, uint16(int16(lsb)))
 		}
 		out["hmtx"] = h
 		nh := append([]byte(nil), hhea...)

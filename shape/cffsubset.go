@@ -52,6 +52,14 @@ import (
 // of each of the subset's glyphs in order; nil for any other program, whose
 // numbering is kept.
 func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, error) {
+	return subsetCFFFrom(newCFFReader(data), keep, budget)
+}
+
+// subsetCFFFrom is subsetCFF of the table r reads. What r has read for an
+// earlier subset is read again from it, and is not written to: the slices
+// below that a subset changes are its own.
+func subsetCFFFrom(r *cffReader, keep []bool, budget *font.Budget) ([]byte, []int, error) {
+	data := r.data
 	if len(data) > maxCFFSize {
 		return nil, nil, fmt.Errorf("fonts: CFF program of %d bytes is too large to subset", len(data))
 	}
@@ -63,22 +71,22 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 		return nil, nil, fmt.Errorf("fonts: CFF header size %d is not usable", hdrSize)
 	}
 
-	nameIndex, err := readCFFIndex(data, hdrSize)
+	nameIndex, err := r.index(hdrSize)
 	if err != nil {
 		return nil, nil, err
 	}
-	topIndex, err := readCFFIndex(data, nameIndex.end)
+	topIndex, err := r.index(nameIndex.end)
 	if err != nil {
 		return nil, nil, err
 	}
 	if len(topIndex.items) != 1 {
 		return nil, nil, fmt.Errorf("fonts: CFF holds %d Top DICTs; only a single-font program is supported", len(topIndex.items))
 	}
-	stringIndex, err := readCFFIndex(data, topIndex.end)
+	stringIndex, err := r.index(topIndex.end)
 	if err != nil {
 		return nil, nil, err
 	}
-	gsubrIndex, err := readCFFIndex(data, stringIndex.end)
+	gsubrIndex, err := r.index(stringIndex.end)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -126,7 +134,7 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 	if charStringsOff <= 0 {
 		return nil, nil, errors.New("fonts: CFF Top DICT names no CharStrings")
 	}
-	charStrings, err := readCFFIndex(data, charStringsOff)
+	charStrings, err := r.index(charStringsOff)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -154,7 +162,7 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 		// glyph, and written again for the kept glyphs alone: each keeps the
 		// CID it had, which is the number a document addresses it by. The
 		// charstrings wait for the subroutines, below.
-		cids, err := cffCharsetSIDs(data, charsetOff, n)
+		cids, err := r.charsetSIDs(charsetOff, n)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -172,7 +180,7 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 				newCharStrings[i] = charStrings.items[i]
 				continue
 			}
-			newCharStrings[i] = []byte{14} // endchar
+			newCharStrings[i] = cffEndchar
 		}
 		// And the subroutines, cut down to the ones a kept glyph reaches, as
 		// a CID-keyed font's are below and by the same walk. Keeping the
@@ -185,7 +193,7 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 		// one of its 738 global and 648 local subroutines, the outlines of
 		// the rest of the font factored into shared pieces.
 		if privSize > 0 {
-			if privBlob, err = cffPrivateRegion(data, privOff, privSize, budget); err != nil {
+			if privBlob, err = cffPrivateRegion(r, privOff, privSize, budget); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -193,12 +201,10 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 		regions := make([]int, n)
 		var locals [][][]byte
 		if privSize > 0 {
-			ops, raw, subrs, err := privateParts(privBlob, privSize)
-			if err != nil {
+			if privParts, err = r.privateParts(privOff, privBlob, privSize); err != nil {
 				return nil, nil, err
 			}
-			privParts = privateRegion{ops, raw, subrs}
-			locals = [][][]byte{subrs}
+			locals = [][][]byte{privParts.subrs}
 		} else {
 			// No Private DICT: no local subroutines to call, and a call to one
 			// names nothing, which the walk refuses rather than renumbers.
@@ -234,7 +240,7 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 		// A Top DICT Private in a CID-keyed font, where each glyph's Private
 		// DICT is reached through its Font DICT instead: it is held to the
 		// same checks as any other, as it always was.
-		if privBlob, err = cffPrivateRegion(data, privOff, privSize, budget); err != nil {
+		if privBlob, err = cffPrivateRegion(r, privOff, privSize, budget); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -271,7 +277,7 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 		if err != nil {
 			return nil, nil, err
 		}
-		fdIndex, err := readCFFIndex(data, fdArrayOff)
+		fdIndex, err := r.index(fdArrayOff)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -297,9 +303,9 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 			region := -1
 			if size > 0 {
 				key := [2]int{off, size}
-				r, seen := regions[key]
+				at, seen := regions[key]
 				if !seen {
-					blob, err := cffPrivateRegion(data, off, size, budget)
+					blob, err := cffPrivateRegion(r, off, size, budget)
 					if err != nil {
 						return nil, nil, err
 					}
@@ -307,17 +313,17 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 						return nil, nil, errors.New("fonts: a CID-keyed CFF's Private DICTs " +
 							"overlap, and copying each would make the subset larger than the font")
 					}
-					ops, raw, subrs, err := privateParts(blob, size)
+					part, err := r.privateParts(off, blob, size)
 					if err != nil {
 						return nil, nil, err
 					}
-					r = len(fdPrivBlobs)
-					regions[key] = r
+					at = len(fdPrivBlobs)
+					regions[key] = at
 					fdPrivBlobs = append(fdPrivBlobs, blob)
-					regionParts = append(regionParts, privateRegion{ops, raw, subrs})
+					regionParts = append(regionParts, part)
 					regionSize = append(regionSize, size)
 				}
-				region = r
+				region = at
 			}
 			fontDicts = append(fontDicts, ops)
 			fontDictsRaw = append(fontDictsRaw, raw)
@@ -329,14 +335,14 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 		// new number. A glyph the FDSelect gives none, or one past the
 		// FDArray, has no Private DICT to be drawn with, and a font that keeps
 		// one is refused rather than given another's.
-		fds := fdSelectFDs(fdSelectBlob, n)
+		fds := r.fdSelect(fdSelectOff, fdSelectBlob, n)
 		newFDs := make([]int, len(order))
 		for i, g := range order {
-			if fd := fds[g]; fd < 0 || fd >= len(fontDicts) {
+			if fd := int(fds[g]); fd < 0 || fd >= len(fontDicts) {
 				return nil, nil, fmt.Errorf("fonts: a CID-keyed CFF's FDSelect gives glyph %d "+
 					"no Font DICT of the %d its FDArray holds", g, len(fontDicts))
 			}
-			newFDs[i] = fds[g]
+			newFDs[i] = int(fds[g])
 		}
 		fdSelectBlob = writeFDSelect(newFDs)
 
@@ -351,7 +357,7 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 				// A .notdef the subset cannot keep, which is in every
 				// subset all the same: written empty, as a glyph dropped
 				// from a font that is not renumbered is.
-				glyphs[i] = []byte{14} // endchar
+				glyphs[i] = cffEndchar
 			}
 			regionOf[i] = fdRegion[newFDs[i]]
 		}
@@ -659,7 +665,8 @@ func sliceEncoding(data []byte, off int) ([]byte, error) {
 // took the region from the DICT's start to the INDEX's end without asking.
 //
 // The DICT's bytes and the INDEX's entries are charged to budget.
-func cffPrivateRegion(data []byte, off, size int, budget *font.Budget) ([]byte, error) {
+func cffPrivateRegion(r *cffReader, off, size int, budget *font.Budget) ([]byte, error) {
+	data := r.data
 	if off < 0 || size < 0 || off > len(data) || size > len(data)-off {
 		return nil, errors.New("fonts: a CFF Private DICT lies outside the font")
 	}
@@ -679,7 +686,7 @@ func cffPrivateRegion(data []byte, off, size int, budget *font.Budget) ([]byte, 
 			return nil, errors.New("fonts: a CFF Private DICT names local " +
 				"subroutines inside itself")
 		}
-		idx, err := readCFFIndex(data, off+e.operands[0])
+		idx, err := r.index(off + e.operands[0])
 		if err != nil {
 			return nil, err
 		}
@@ -693,6 +700,11 @@ func cffPrivateRegion(data []byte, off, size int, budget *font.Budget) ([]byte, 
 	}
 	return data[off:end], nil
 }
+
+// cffEndchar is the charstring a glyph a subset drops is written as: a bare
+// endchar. It is one slice for every such glyph, read and never written, as
+// the kept glyphs' charstrings are the font's own bytes.
+var cffEndchar = []byte{14}
 
 // subsetOpenTypeCFF rebuilds an OpenType font around a subsetted CFF table.
 // notdef is whether .notdef can be kept; it is written empty where it cannot.
@@ -718,11 +730,12 @@ func (f *Face) subsetOpenTypeCFF(notdef bool, w *subsetWork) ([]byte, []int, err
 	// Both walks draw on the subset's allowance, which is its own: what
 	// reading the font cost at Load is not charged again. The budget asks the
 	// subset's context as they draw on it.
-	if err := cffSeacClosure(tables["CFF "], keep, w.budget); err != nil {
+	r := f.cffReaderFor(tables["CFF "])
+	if err := cffSeacClosureFrom(r, keep, w.budget); err != nil {
 		return nil, nil, w.refusal(err)
 	}
 
-	sub, order, err := subsetCFF(tables["CFF "], keep, w.budget)
+	sub, order, err := subsetCFFFrom(r, keep, w.budget)
 	if err != nil {
 		return nil, nil, w.refusal(err)
 	}

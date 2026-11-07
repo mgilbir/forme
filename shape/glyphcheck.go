@@ -233,6 +233,9 @@ type glyphChecks struct {
 	// and the fault for one that cannot. A refusal that is not a fault of the
 	// glyph's is not kept here, and is asked again.
 	verdicts map[int]*glyphFault
+	// cff reads a CFF face's table for its subsets, once for all of them
+	// (cffread.go); nil until a subset asks for it.
+	cff *cffReader
 }
 
 func newGlyphChecks() *glyphChecks {
