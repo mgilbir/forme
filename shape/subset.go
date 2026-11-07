@@ -123,9 +123,10 @@ func (f *Face) subset(w *subsetWork) ([]byte, []int, error) {
 	// table's size: overlapping entries can come to many times the table, and
 	// w stops them where the subset's bytes run out.
 	var newGlyf []byte
-	newLoca := make([]uint32, n+1)
+	// loca is written as the long form it goes out in, once (#985).
+	locaBytes := make([]byte, 4*(n+1))
 	for gid := 0; gid < n; gid++ {
-		newLoca[gid] = uint32(len(newGlyf))
+		binary.BigEndian.PutUint32(locaBytes[4*gid:], uint32(len(newGlyf)))
 		if !keep[gid] {
 			continue
 		}
@@ -150,7 +151,7 @@ func (f *Face) subset(w *subsetWork) ([]byte, []int, error) {
 			newGlyf = append(newGlyf, 0)
 		}
 	}
-	newLoca[n] = uint32(len(newGlyf))
+	binary.BigEndian.PutUint32(locaBytes[4*n:], uint32(len(newGlyf)))
 
 	out := map[string][]byte{}
 	for _, tag := range requiredTables {
@@ -175,10 +176,6 @@ func (f *Face) subset(w *subsetWork) ([]byte, []int, error) {
 	// thing to get wrong for no benefit at this size.
 	if err := w.write(4*(n+1), "the loca table"); err != nil {
 		return nil, nil, err
-	}
-	locaBytes := make([]byte, 4*(n+1))
-	for i, off := range newLoca {
-		binary.BigEndian.PutUint32(locaBytes[4*i:], off)
 	}
 	out["loca"] = locaBytes
 
@@ -459,18 +456,24 @@ func assembleSFNT(tables map[string][]byte) []byte {
 	binary.BigEndian.PutUint16(dir[8:], uint16(entrySelector))
 	binary.BigEndian.PutUint16(dir[10:], uint16(16*n-searchRange))
 
-	out := append([]byte(nil), dir...)
+	// Each table starts on a four-byte boundary, and the last is not padded
+	// after it: the length is known before anything is written, so the
+	// program is allocated once rather than grown by every table (#985).
+	size := len(dir)
+	for _, tag := range tags {
+		size = (size+3)&^3 + len(tables[tag])
+	}
+	out := make([]byte, size)
+	at := len(dir)
 	for i, tag := range tags {
 		body := tables[tag]
-		for len(out)%4 != 0 {
-			out = append(out, 0)
-		}
+		at = (at + 3) &^ 3
 		rec := 12 + 16*i
 		copy(dir[rec:], tag)
 		binary.BigEndian.PutUint32(dir[rec+4:], sfntChecksum(body))
-		binary.BigEndian.PutUint32(dir[rec+8:], uint32(len(out)))
+		binary.BigEndian.PutUint32(dir[rec+8:], uint32(at))
 		binary.BigEndian.PutUint32(dir[rec+12:], uint32(len(body)))
-		out = append(out, body...)
+		at += copy(out[at:], body)
 	}
 	copy(out, dir)
 	return out
