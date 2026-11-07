@@ -127,7 +127,7 @@ func readVARC(t []byte) *varcTable {
 		return nil
 	}
 	v := &varcTable{t: t}
-	off := func(at int) int { return int(font.Be32(t, at)) }
+	off := func(at int) int { return font.Off32(t, at) }
 	v.coverage, v.store, v.conditions = off(4), off(8), off(12)
 	axes, records := off(16), off(20)
 	if v.coverage != 0 && !s.coverage(int64(v.coverage)) {
@@ -309,7 +309,7 @@ func (x varcIndex) offsetAt(t []byte, i int) int {
 	case 3:
 		return be24(t, at)
 	case 4:
-		return int(font.Be32(t, at))
+		return font.Off32(t, at)
 	}
 	return 0
 }
@@ -714,7 +714,7 @@ func (v *varcTable) delta(varIdx uint32, coords []int, out []float32) {
 	if outer >= font.Be16(t, at+6) {
 		return
 	}
-	d := int(font.Be32(t, at+8+4*outer))
+	d := font.Off32(t, at+8+4*outer)
 	if d == 0 {
 		return
 	}
@@ -741,7 +741,7 @@ func (v *varcTable) delta(varIdx uint32, coords []int, out []float32) {
 // axes' scalars, and 1 for a region with no axes — a null region among them.
 func (v *varcTable) regionScalar(region int, coords []int) float32 {
 	t := v.t
-	list := int(font.Be32(t, v.store+2))
+	list := font.Off32(t, v.store+2)
 	if list == 0 {
 		return 0
 	}
@@ -749,7 +749,7 @@ func (v *varcTable) regionScalar(region int, coords []int) float32 {
 	if region >= font.Be16(t, base) {
 		return 0
 	}
-	r := int(font.Be32(t, base+2+4*region))
+	r := font.Off32(t, base+2+4*region)
 	if r == 0 {
 		return 1
 	}
@@ -797,7 +797,7 @@ func (v *varcTable) condition(i uint32, coords []int) bool {
 	if v.conditions == 0 || int64(i) >= int64(font.Be32(v.t, v.conditions)) {
 		return false
 	}
-	off := int(font.Be32(v.t, v.conditions+4+4*int(i)))
+	off := font.Off32(v.t, v.conditions+4+4*int(i))
 	if off == 0 {
 		return false
 	}

@@ -75,8 +75,8 @@ func (f *Face) listStrikes() *strikeList {
 		}
 	}
 	if s := f.sbix; s != nil {
-		for i := range int(font.Be32(s.table, 4)) {
-			at := int(font.Be32(s.table, 8+4*i))
+		for i := range font.Off32(s.table, 4) {
+			at := font.Off32(s.table, 8+4*i)
 			if at == 0 {
 				continue // the null strike
 			}
@@ -87,7 +87,7 @@ func (f *Face) listStrikes() *strikeList {
 	}
 	if e := f.strikes; e != nil {
 		// newEBDTStrikes has checked that the count fits in the table.
-		for i := range int(font.Be32(e.loc, 4)) {
+		for i := range font.Off32(e.loc, 4) {
 			if st, ok := e.strikeAt(8 + bitmapSizeTableSize*i); ok {
 				out = append(out, e.public(st))
 			}

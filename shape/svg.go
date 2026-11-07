@@ -33,7 +33,7 @@ func readSVG(b []byte) *svgTable {
 	if len(b) < 10 {
 		return nil
 	}
-	index := int(font.Be32(b, 2))
+	index := font.Off32(b, 2)
 	if index == 0 {
 		return nil
 	}

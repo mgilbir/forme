@@ -74,7 +74,7 @@ func parseVarStore(t []byte) (*varStore, error) {
 	if f := font.Be16(t, 0); f != 1 {
 		return nil, fmt.Errorf("the item variation store is format %d, which this does not read", f)
 	}
-	regionsOff := int(font.Be32(t, 2))
+	regionsOff := font.Off32(t, 2)
 	count := font.Be16(t, 6)
 	if 8+4*count > len(t) {
 		return nil, errors.New("the item variation store's offset array is cut short")
@@ -113,7 +113,7 @@ func parseVarStore(t []byte) (*varStore, error) {
 	// see varStoreRegionAllowance.
 	allowance := varStoreRegionAllowance(t)
 	for i := range s.data {
-		off := int(font.Be32(t, 8+4*i))
+		off := font.Off32(t, 8+4*i)
 		if off < 0 || off+6 > len(t) {
 			return nil, fmt.Errorf("the item variation store's group %d lies outside it", i)
 		}
@@ -337,7 +337,7 @@ func parseHVAR(t []byte) (*hvarTable, error) {
 	if font.Be16(t, 0) != 1 {
 		return nil, fmt.Errorf("fonts: HVAR is version %d, which this does not read", font.Be16(t, 0))
 	}
-	storeOff := int(font.Be32(t, 4))
+	storeOff := font.Off32(t, 4)
 	if storeOff <= 0 || storeOff >= len(t) {
 		return nil, errors.New("fonts: HVAR's item variation store lies outside it")
 	}
@@ -346,7 +346,7 @@ func parseHVAR(t []byte) (*hvarTable, error) {
 		return nil, fmt.Errorf("fonts: HVAR: %w", err)
 	}
 	h := &hvarTable{store: store}
-	if off := int(font.Be32(t, 8)); off != 0 {
+	if off := font.Off32(t, 8); off != 0 {
 		if off < 0 || off >= len(t) {
 			return nil, errors.New("fonts: HVAR's advance mapping lies outside it")
 		}

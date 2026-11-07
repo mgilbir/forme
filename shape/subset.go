@@ -244,7 +244,7 @@ func (f *Face) glyfTables() (glyfTables, error) {
 func (t glyfTables) entry(gid int) ([]byte, error) {
 	var start, end int
 	if t.long {
-		start, end = int(font.Be32(t.loca, 4*gid)), int(font.Be32(t.loca, 4*gid+4))
+		start, end = font.Off32(t.loca, 4*gid), font.Off32(t.loca, 4*gid+4)
 	} else {
 		start, end = 2*font.Be16(t.loca, 2*gid), 2*font.Be16(t.loca, 2*gid+2)
 	}

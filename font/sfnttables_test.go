@@ -63,9 +63,9 @@ func TestATableRunningPastTheFileIsReadAsFarAsItGoes(t *testing.T) {
 	}
 
 	// Starting at the end of the file or past it: no bytes, no table.
-	for _, at := range []int{len(data), len(data) + 1, 1<<32 - 1} {
+	for _, at := range []uint32{uint32(len(data)), uint32(len(data)) + 1, 1<<32 - 1} {
 		moved := append([]byte(nil), data...)
-		binary.BigEndian.PutUint32(moved[rec+8:], uint32(at))
+		binary.BigEndian.PutUint32(moved[rec+8:], at)
 		if got, ok := SFNTTables(moved)[tag]; ok {
 			t.Errorf("%s, starting at %d of a %d-byte file, reads as %d bytes", tag, at, len(data), len(got))
 		}

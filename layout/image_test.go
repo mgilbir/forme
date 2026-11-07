@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -140,7 +141,14 @@ func TestImagePixelCapFiresAtItsRealValue(t *testing.T) {
 	if box := findBox(t, built.Root, "i"); box.Replaced != nil {
 		t.Fatal("a 3.6-gigapixel image was accepted")
 	}
-	requireFinding(t, built.Findings, RuleImageUndecodable, "this engine will decode")
+	// Where int is 32 bits, image/png refuses the header itself — its width
+	// times its height overflows an int there — before the cap is asked. The
+	// image is refused either way, which is what this is for.
+	want := "this engine will decode"
+	if strconv.IntSize == 32 {
+		want = "dimension overflow"
+	}
+	requireFinding(t, built.Findings, RuleImageUndecodable, want)
 	fired[RuleImageUndecodable] = true
 }
 

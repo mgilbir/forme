@@ -375,7 +375,7 @@ func (p *paintContext) dispatch(at int) {
 	fword := func(off, v int) float32 { return float32(float32(signed16(t.u16(at+off))) + t.delta(at, v)) }
 	switch t.u8(at) {
 	case 1: // PaintColrLayers
-		n, first := t.u8(at+1), int(t.u32(at+2))
+		n, first := t.u8(at+1), t.off32(at+2)
 		p.layers.enter()
 		defer p.layers.leave()
 		for i := first; i < first+n; i++ {
@@ -837,18 +837,18 @@ func readCOLR(b []byte, coords []float64) *colrTable {
 	}
 	t := &colrTable{
 		b: b, version: font.Be16(b, 0),
-		numBaseGlyphs: font.Be16(b, 2), baseGlyphs: int(font.Be32(b, 4)),
-		layers: int(font.Be32(b, 8)), numLayers: font.Be16(b, 12),
+		numBaseGlyphs: font.Be16(b, 2), baseGlyphs: font.Off32(b, 4),
+		layers: font.Off32(b, 8), numLayers: font.Be16(b, 12),
 		coords: coords,
 	}
 	if t.version >= 1 && len(b) >= 34 {
-		t.baseGlyphList = int(font.Be32(b, 14))
-		t.layerList = int(font.Be32(b, 18))
-		t.clipList = int(font.Be32(b, 22))
-		if off := int(font.Be32(b, 26)); off > 0 && off < len(b) {
+		t.baseGlyphList = font.Off32(b, 14)
+		t.layerList = font.Off32(b, 18)
+		t.clipList = font.Off32(b, 22)
+		if off := font.Off32(b, 26); off > 0 && off < len(b) {
 			t.varIdxMap, _ = parseDeltaSetIndexMap(b[off:])
 		}
-		if off := int(font.Be32(b, 30)); off > 0 && off < len(b) {
+		if off := font.Off32(b, 30); off > 0 && off < len(b) {
 			t.varStore, _ = parseVarStore(b[off:])
 		}
 	}
@@ -877,6 +877,15 @@ func (t *colrTable) u32(at int) uint32 {
 		return 0
 	}
 	return font.Be32(t.b, at)
+}
+
+// off32 is u32 read as an offset or count, as font.Off32 reads one: an int
+// that stays positive where int is 32 bits (#989).
+func (t *colrTable) off32(at int) int {
+	if at < 0 {
+		return 0
+	}
+	return font.Off32(t.b, at)
 }
 
 // offset24 is the table an Offset24 at at+off names, relative to at, and -1
@@ -961,7 +970,7 @@ func (t *colrTable) basePaint(gid int) (int, bool) {
 	if list <= 0 || list+4 > len(t.b) {
 		return 0, false
 	}
-	n := int(t.u32(list))
+	n := t.off32(list)
 	lo, hi := 0, min(n, (len(t.b)-list-4)/6)-1
 	for lo <= hi {
 		mid := int(uint(lo+hi) >> 1)
@@ -972,7 +981,7 @@ func (t *colrTable) basePaint(gid int) (int, bool) {
 		case gid > g:
 			lo = mid + 1
 		default:
-			off := int(t.u32(rec + 2))
+			off := t.off32(rec + 2)
 			if off == 0 {
 				return -1, true
 			}
@@ -985,10 +994,10 @@ func (t *colrTable) basePaint(gid int) (int, bool) {
 // layerPaint is the i-th Paint of the LayerList, and a null one past its end.
 func (t *colrTable) layerPaint(i int) int {
 	list := t.layerList
-	if list <= 0 || i < 0 || i >= int(t.u32(list)) {
+	if list <= 0 || i < 0 || i >= t.off32(list) {
 		return -1
 	}
-	off := int(t.u32(list + 4 + 4*i))
+	off := t.off32(list + 4 + 4*i)
 	if off == 0 {
 		return -1
 	}
@@ -1025,7 +1034,7 @@ func (t *colrTable) clipBox(gid int) (clipRect, bool) {
 	if list <= 0 || list+5 > len(t.b) {
 		return clipRect{}, false
 	}
-	n := int(t.u32(list + 1))
+	n := t.off32(list + 1)
 	lo, hi := 0, min(n, (len(t.b)-list-5)/7)-1
 	for lo <= hi {
 		mid := int(uint(lo+hi) >> 1)
@@ -1145,7 +1154,7 @@ func (c *colrInk) glyfNumGlyphs() int {
 func (c *colrInk) glyfBytes(gid int) []byte {
 	var start, end int
 	if c.longLoca {
-		start, end = int(font.Be32(c.loca, 4*gid)), int(font.Be32(c.loca, 4*gid+4))
+		start, end = font.Off32(c.loca, 4*gid), font.Off32(c.loca, 4*gid+4)
 	} else {
 		start, end = 2*font.Be16(c.loca, 2*gid), 2*font.Be16(c.loca, 2*gid+2)
 	}

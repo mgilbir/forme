@@ -61,7 +61,7 @@ func readDeviceDeltas(gdef []byte, coords []float64) *deviceDeltas {
 	if !off || len(gdef) < 18 || font.Be16(gdef, 0) != 1 || font.Be16(gdef, 2) < 3 {
 		return nil
 	}
-	at := int(font.Be32(gdef, 14))
+	at := font.Off32(gdef, 14)
 	if at <= 0 || at >= len(gdef) {
 		return nil
 	}

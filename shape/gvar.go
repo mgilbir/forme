@@ -66,10 +66,10 @@ func parseGvar(t []byte, numGlyphs, axisCount int) (*gvarTable, error) {
 		return nil, fmt.Errorf("fonts: gvar states %d axes and fvar states %d", n, axisCount)
 	}
 	sharedCount := font.Be16(t, 6)
-	sharedOff := int(font.Be32(t, 8))
+	sharedOff := font.Off32(t, 8)
 	glyphCount := font.Be16(t, 12)
 	longOffsets := font.Be16(t, 14)&1 != 0
-	dataOff := int(font.Be32(t, 16))
+	dataOff := font.Off32(t, 16)
 
 	if glyphCount > numGlyphs {
 		return nil, fmt.Errorf("fonts: gvar carries data for %d glyphs and the font has %d", glyphCount, numGlyphs)
@@ -108,7 +108,7 @@ func parseGvar(t []byte, numGlyphs, axisCount int) (*gvarTable, error) {
 	data := t[dataOff:]
 	offset := func(i int) int {
 		if longOffsets {
-			return int(font.Be32(t, 20+4*i))
+			return font.Off32(t, 20+4*i)
 		}
 		return font.Be16(t, 20+2*i) * 2
 	}

@@ -1224,15 +1224,18 @@ func namedInstanceName(fvar, name []byte, axes []varAxis, want map[string]float6
 	if len(fvar) < 16 || len(name) == 0 {
 		return ""
 	}
-	at := font.Be16(fvar, 4) + font.Be16(fvar, 8)*font.Be16(fvar, 10)
+	// In int64: two sixteen-bit fields multiplied reach 2^32, which wraps
+	// negative where int is 32 bits and passes the check below (#989).
+	at64 := int64(font.Be16(fvar, 4)) + int64(font.Be16(fvar, 8))*int64(font.Be16(fvar, 10))
 	count := font.Be16(fvar, 12)
 	size := font.Be16(fvar, 14)
 	// A record is a subfamily name, flags, one coordinate per axis and — only
 	// if the record is long enough to hold it — a PostScript name.
 	minimum := 4 + 4*len(axes)
-	if size < minimum+2 || at+size*count > len(fvar) {
+	if size < minimum+2 || at64+int64(size)*int64(count) > int64(len(fvar)) {
 		return ""
 	}
+	at := int(at64) // inside fvar, so it fits
 	for i := 0; i < count; i++ {
 		rec := at + size*i
 		matches := true

@@ -103,13 +103,13 @@ func readLegacyKern(kern []byte) legacyKern {
 	// Apple's version 1.0: a 32-bit count, and each subtable a 32-bit length,
 	// a coverage byte whose bits are vertical (7), cross-stream (6) and
 	// variation (5), a format byte and a tuple index.
-	n := int(font.Be32(kern, 4))
+	n := font.Off32(kern, 4)
 	// HarfBuzz asks this version whether it is there by its version number,
 	// which is never zero.
 	out.has = true
 	off := 8
 	for i := 0; i < n && i < maxSubtables && off+8 <= len(kern); i++ {
-		length := int(font.Be32(kern, off))
+		length := font.Off32(kern, off)
 		coverage, format := kern[off+4], kern[off+5]
 		if length < 8 || length > len(kern)-off {
 			break

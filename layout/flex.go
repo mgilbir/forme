@@ -646,9 +646,12 @@ func orderOf(b *Box) int {
 		if s[i] < '0' || s[i] > '9' {
 			return 0
 		}
-		n = n*10 + int(s[i]-'0')
-		if n > bound {
+		// Held at the bound before it is multiplied, not after: where int is
+		// 32 bits, ten times the bound has already wrapped negative.
+		if d := int(s[i] - '0'); n > (bound-d)/10 {
 			n = bound
+		} else {
+			n = n*10 + d
 		}
 	}
 	return sign * n

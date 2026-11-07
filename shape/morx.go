@@ -177,7 +177,7 @@ func readMorph(b []byte, numGlyphs int, extended bool) *morxTable {
 	word := func(at int) int { return font.Be16(b, at) }
 	if extended {
 		size = 4
-		word = func(at int) int { return int(font.Be32(b, at)) }
+		word = func(at int) int { return font.Off32(b, at) }
 	}
 	chainHeader, subHeader := 8+2*size, 4+2*size
 	m := &morxTable{numGlyphs: numGlyphs}
@@ -187,7 +187,7 @@ func readMorph(b []byte, numGlyphs int, extended bool) *morxTable {
 		if len(b)-at < chainHeader {
 			return nil
 		}
-		length := int(font.Be32(b, at+4))
+		length := font.Off32(b, at+4)
 		features, count := word(at+8), word(at+8+size)
 		if length < chainHeader || length > len(b)-at || features > (length-chainHeader)/12 {
 			return nil
@@ -210,10 +210,17 @@ func readMorph(b []byte, numGlyphs int, extended bool) *morxTable {
 			if n < subHeader || n > end-sub {
 				return nil
 			}
-			coverage := word(sub + size)
+			// The coverage is flags, not a number: the kind in its low byte
+			// and the orientation in its high one, which in a morx's 32 bits
+			// is past what an int holds where int is 32 bits, and past what
+			// font.Off32 reads as itself. Read as the bits they are.
+			coverage := uint32(font.Be16(b, sub+size))
+			if extended {
+				coverage = font.Be32(b, sub+size)
+			}
 			s := morxSubtable{
-				kind:     coverage & 0xFF,
-				coverage: coverage >> (8*size - 8),
+				kind:     int(coverage & 0xFF),
+				coverage: int(coverage >> (8*size - 8)),
 				flags:    font.Be32(b, sub+2*size),
 				body:     b[sub+subHeader : sub+n : sub+n],
 				extended: extended,
@@ -398,7 +405,7 @@ func (m aatMachine) field(i int) int {
 		return 0
 	}
 	if m.extended {
-		return int(font.Be32(m.t, 4*i))
+		return font.Off32(m.t, 4*i)
 	}
 	return font.Be16(m.t, 2*i)
 }
@@ -1296,7 +1303,7 @@ func (c *aatContextual) lookup(i int) int {
 	if c.subs <= 0 || p < 0 || len(c.m.t)-p < 4 {
 		return -1
 	}
-	return c.subs + int(font.Be32(c.m.t, p))
+	return c.subs + font.Off32(c.m.t, p)
 }
 
 // substitute is what an entry's index makes a glyph: in a morx, the value of

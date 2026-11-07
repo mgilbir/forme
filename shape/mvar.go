@@ -110,7 +110,7 @@ func applyMVAR(out map[string][]byte, mvar []byte, coords []float64) error {
 	if count == 0 || storeOff == 0 {
 		return nil
 	}
-	if size < 8 || 12+size*count > len(mvar) {
+	if size < 8 || 12+int64(size)*int64(count) > int64(len(mvar)) { // int64: see #989
 		return errors.New("fonts: MVAR's value records lie outside it")
 	}
 	if storeOff >= len(mvar) {

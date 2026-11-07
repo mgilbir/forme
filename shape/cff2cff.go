@@ -1095,7 +1095,7 @@ func instanceCFF2Vertical(tables, out map[string][]byte, coords []float64, numGl
 			vAdvances[g] = max(vAdvances[g]+otRound(vvar.advanceDelta(g, coords)), 0)
 		}
 		if len(t) >= 24 {
-			if off := int(font.Be32(t, 20)); off != 0 {
+			if off := font.Off32(t, 20); off != 0 {
 				if off < 0 || off >= len(t) {
 					return errors.New("fonts: VVAR's origin mapping lies outside it")
 				}

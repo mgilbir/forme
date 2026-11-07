@@ -392,6 +392,11 @@ func TestATrackListIsRefusedAsItIsRead(t *testing.T) {
 		t.Fatal("four hundred thousand tracks were not refused")
 	}
 	tracks := uint64(4 * maxRepeatedTracks * int(unsafe.Sizeof(gridTrack{})))
+	// Parsing is the yardstick, and parsing is mostly pointers, which are half
+	// the size where int is 32 bits while what reading a track list keeps is
+	// not: 175 KB of parsing against 580 KB of reading there, 301 KB against
+	// 664 KB on a 64-bit platform. So it is held at its 64-bit size.
+	parsing = parsing * 8 / uint64(unsafe.Sizeof(uintptr(0)))
 	if reading > 2*parsing+tracks {
 		t.Errorf("refusing the list allocated %d bytes; parsing it is %d, and %d is "+
 			"four times the tracks the bound allows", reading, parsing, tracks)

@@ -748,7 +748,7 @@ func (c *colrInk) palette(index int) cpalPalette {
 		return cpalPalette{}
 	}
 	version, numColors, numPalettes, numRecords := font.Be16(b, 0), font.Be16(b, 2), font.Be16(b, 4), font.Be16(b, 6)
-	records := int(font.Be32(b, 8))
+	records := font.Off32(b, 8)
 	indices := 12
 	if records > len(b) || len(b)-records < 4*numRecords || len(b)-indices < 2*numPalettes {
 		return cpalPalette{}
@@ -761,7 +761,7 @@ func (c *colrInk) palette(index int) cpalPalette {
 			return cpalPalette{}
 		}
 		for i, n := range []int{4 * numPalettes, 2 * numPalettes, 2 * numColors} {
-			if off := int(font.Be32(b, v1+4*i)); off != 0 && (off > len(b) || len(b)-off < n) {
+			if off := font.Off32(b, v1+4*i); off != 0 && (off > len(b) || len(b)-off < n) {
 				return cpalPalette{}
 			}
 		}
