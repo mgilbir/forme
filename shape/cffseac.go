@@ -200,10 +200,16 @@ const maxCharstringDepth = 10
 // whole font — and a font that asks for more than it has is refused with the
 // budget's error rather than subsetted from what was read of it.
 func cffSeacClosure(cff []byte, keep []bool, budget *font.Budget) error {
-	charStrings, local, global, sidToGID, err := cffSeacTables(cff, len(keep))
-	if err != nil || charStrings == nil {
+	return cffSeacClosureFrom(newCFFReader(cff), keep, budget)
+}
+
+// cffSeacClosureFrom is cffSeacClosure of the table r reads.
+func cffSeacClosureFrom(r *cffReader, keep []bool, budget *font.Budget) error {
+	s, err := r.seacTables(len(keep))
+	if err != nil || s.charStrings == nil {
 		return err
 	}
+	charStrings, local, global, sidToGID := s.charStrings, s.local, s.global, s.sidToGID
 	var work []int
 	for gid, k := range keep {
 		if k {
@@ -246,24 +252,24 @@ func cffSeacClosure(cff []byte, keep []bool, budget *font.Budget) error {
 	return nil
 }
 
-// cffSeacTables reads what the walk above needs: the charstrings, the two
-// subroutine INDEXes, and the charset inverted so a SID names a glyph.
+// cffSeacTablesFrom reads what the walk above needs, through r: the
+// charstrings, the two subroutine INDEXes, and the charset inverted so a SID
+// names a glyph. The seac closure asks r.seacTables, which reads it once.
 //
 // A CID-keyed font has none of this to answer with — its charset holds CIDs
 // rather than names, and seac is a non-CID construct — so it comes back with
 // nothing and no error.
-func cffSeacTables(cff []byte, nGlyphs int) (charStrings, local, global [][]byte,
-	sidToGID map[int]int, err error) {
-
-	top, err := topDictOf(cff)
+func cffSeacTablesFrom(r *cffReader, nGlyphs int) (*cffSeacRead, error) {
+	cff := r.data
+	top, err := r.topDict()
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
 	csOff, charsetOff, privOff, privSize := -1, 0, -1, 0
 	for _, e := range top {
 		switch {
 		case e.op == opROS:
-			return nil, nil, nil, nil, nil // CID-keyed: no names, no seac
+			return &cffSeacRead{}, nil // CID-keyed: no names, no seac
 		case e.op == opCharStrings && len(e.operands) == 1:
 			csOff = e.operands[0]
 		case e.op == opCharset && len(e.operands) == 1:
@@ -273,64 +279,92 @@ func cffSeacTables(cff []byte, nGlyphs int) (charStrings, local, global [][]byte
 		}
 	}
 	if csOff <= 0 {
-		return nil, nil, nil, nil, errors.New("fonts: the CFF names no CharStrings")
+		return nil, errors.New("fonts: the CFF names no CharStrings")
 	}
-	cs, err := readCFFIndex(cff, csOff)
+	cs, err := r.index(csOff)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
+	s := &cffSeacRead{charStrings: cs.items}
 
 	// The global subroutines are the fourth INDEX of the header, which
-	// topDictOf has already walked past; finding them means walking the first
+	// topDict has already walked past; finding them means walking the first
 	// three again.
-	if g, err := cffGlobalSubrs(cff); err == nil {
-		global = g
+	if g, err := r.globalSubrs(); err == nil {
+		s.global = g
 	}
 	if privSize > 0 && privOff > 0 && privOff+privSize <= len(cff) {
 		privOps, _, err := parseCFFDict(cff[privOff : privOff+privSize])
 		if err == nil {
 			for _, e := range privOps {
 				if e.op == opSubrs && len(e.operands) == 1 && e.operands[0] > 0 {
-					if idx, err := readCFFIndex(cff, privOff+e.operands[0]); err == nil {
-						local = idx.items
+					if idx, err := r.index(privOff + e.operands[0]); err == nil {
+						s.local = idx.items
 					}
 				}
 			}
 		}
 	}
 
-	sids, err := cffCharsetSIDs(cff, charsetOff, nGlyphs)
+	sids, err := r.charsetSIDs(charsetOff, nGlyphs)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, err
 	}
-	sidToGID = make(map[int]int, len(sids))
+	s.sidToGID = make(map[int]int, len(sids))
 	for gid, sid := range sids {
-		if _, seen := sidToGID[sid]; !seen {
-			sidToGID[sid] = gid
+		if _, seen := s.sidToGID[sid]; !seen {
+			s.sidToGID[sid] = gid
 		}
 	}
-	return cs.items, local, global, sidToGID, nil
+	return s, nil
 }
 
 // cffGlobalSubrs is the fourth INDEX of a CFF: Name, Top DICT, String, Global
 // Subr.
 func cffGlobalSubrs(cff []byte) ([][]byte, error) {
+	return newCFFReader(cff).globalSubrs()
+}
+
+// globalSubrs is cffGlobalSubrs of the table r reads.
+func (r *cffReader) globalSubrs() ([][]byte, error) {
+	cff := r.data
 	if len(cff) < 4 {
 		return nil, errors.New("fonts: the CFF is too short to hold a header")
 	}
 	at := int(cff[2]) // hdrSize
 	for i := 0; i < 3; i++ {
-		idx, err := readCFFIndex(cff, at)
+		idx, err := r.index(at)
 		if err != nil {
 			return nil, err
 		}
 		at = idx.end
 	}
-	idx, err := readCFFIndex(cff, at)
+	idx, err := r.index(at)
 	if err != nil {
 		return nil, err
 	}
 	return idx.items, nil
+}
+
+// topDict is topDictOf of the table r reads.
+func (r *cffReader) topDict() ([]cffOp, error) {
+	cff := r.data
+	if len(cff) < 4 {
+		return nil, errors.New("fonts: CFF program is too short")
+	}
+	nameIndex, err := r.index(int(cff[2]))
+	if err != nil {
+		return nil, err
+	}
+	topIndex, err := r.index(nameIndex.end)
+	if err != nil {
+		return nil, err
+	}
+	if len(topIndex.items) != 1 {
+		return nil, errors.New("fonts: not a single-font CFF program")
+	}
+	top, _, err := parseCFFDict(topIndex.items[0])
+	return top, err
 }
 
 // cffCharsetSIDs is the charset read as what it is: the SID of each glyph.

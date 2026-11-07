@@ -19,6 +19,7 @@ func BenchmarkSubsetGlyphs(b *testing.B) {
 	}{
 		{"NotoSans-Regular", func(t testing.TB) []byte { return fonttest.NotoFile(t, "NotoSans-Regular.ttf") }},
 		{"SourceSans3-Regular", func(t testing.TB) []byte { return fonttest.CFFFile(t, "SourceSans3-Regular.otf") }},
+		{"NotoSansJP-Regular", func(t testing.TB) []byte { return fonttest.CJKFile(t, "NotoSansJP-Regular.otf") }},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			face, err := Load(tc.data(b))
