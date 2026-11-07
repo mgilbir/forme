@@ -487,7 +487,17 @@ func subsetCFF(data []byte, keep []bool, budget *font.Budget) ([]byte, []int, er
 	}
 	topBlob = rewrite(charsetAt, encodingAt, charStringsAt, privateAt, fdArrayAt, fdSelectAt)
 
-	out := make([]byte, 0, len(data))
+	// The layout above says how long the table comes to, so it is allocated
+	// at that length rather than at the font's whole CFF (#985). A layout that
+	// disagreed with what is written grows past it and is refused below.
+	size := privateAt + len(privBlob)
+	if isCID {
+		size = fdSelectAt + len(fdSelectBlob)
+		for _, b := range fdPrivBlobs {
+			size += len(b)
+		}
+	}
+	out := make([]byte, 0, size)
 	out = append(out, data[:hdrSize]...)
 	out = append(out, writeCFFIndex(nameIndex.items)...)
 	out = append(out, writeCFFIndex([][]byte{topBlob})...)
