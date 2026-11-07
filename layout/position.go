@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"math"
 	"strconv"
 
 	"github.com/mgilbir/forme/internal/ascii"
@@ -207,11 +208,17 @@ func zIndexOf(cs style.ComputedStyle) (int, bool) {
 	if raw == "" || ascii.EqualFold(raw, "auto") {
 		return 0, true
 	}
-	n, err := strconv.Atoi(raw)
+	// Read as 64 bits and held to what an int holds, rather than by Atoi: an
+	// integer one past 2^31 — z-index-012's, and -2^31-1, z-index-001's — is
+	// an int where int is 64 bits and an error from Atoi where it is 32, which
+	// read the declaration as auto there and stacked the box as if it had none.
+	// Held to the bound, it stays above or below every other z-index there
+	// (#989's 386 run).
+	v, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
 		return 0, true
 	}
-	return n, false
+	return int(max(min(v, math.MaxInt), math.MinInt)), false
 }
 
 // forcedGeometry is a box's width, margins and height decided by a caller rather
