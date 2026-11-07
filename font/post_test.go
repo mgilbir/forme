@@ -3,6 +3,9 @@ package font
 import (
 	"encoding/binary"
 	"maps"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/mgilbir/forme/fonttest"
@@ -331,4 +334,50 @@ func FuzzSFNTPost(f *testing.F) {
 			}
 		}
 	})
+}
+
+// TestParsingWithoutNamesReadsEverythingElse (#990): ParseSFNTTablesWithoutNames
+// is ParseSFNTTablesWithin with GlyphNames, GlyphByName and WidthByName left
+// nil, and every other field the same — for a post table of each version
+// that names glyphs, and for a real face where one is at hand.
+func TestParsingWithoutNamesReadsEverythingElse(t *testing.T) {
+	fonts := map[string][]byte{}
+	for _, v := range []struct {
+		name string
+		post []byte
+	}{
+		{"version 1", postHeader(0x00010000)},
+		{"version 2", postV2(3, []int{0, 258, 259}, "custom", "other")},
+		{"version 2.5", postV25(3, 0, 35, 36)},
+	} {
+		glyphs := []fonttest.Glyph{
+			{Rune: 'a', Advance: 500, HasShape: true},
+			{Rune: 'b', Advance: 600, HasShape: true},
+		}
+		fonts[v.name] = fonttest.SFNT(fonttest.SFNTOptions{Glyphs: glyphs, Extra: map[string][]byte{"post": v.post}})
+	}
+	if dir := os.Getenv("NOTO_FONTS"); dir != "" {
+		b, err := os.ReadFile(filepath.Join(dir, "NotoSans-Regular.ttf"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fonts["NotoSans-Regular"] = b
+	}
+	for name, data := range fonts {
+		with := ParseSFNTTablesWithin(SFNTTables(data), NewBudget(1<<24))
+		without := ParseSFNTTablesWithoutNames(SFNTTables(data), NewBudget(1<<24))
+		if with == nil || without == nil {
+			t.Fatalf("%s: a parse returned nil", name)
+		}
+		if len(with.GlyphNames) == 0 {
+			t.Fatalf("%s: the font names no glyphs, so this tests nothing", name)
+		}
+		if without.GlyphNames != nil || without.GlyphByName != nil || without.WidthByName != nil {
+			t.Errorf("%s: names were read", name)
+		}
+		with.GlyphNames, with.GlyphByName, with.WidthByName = nil, nil, nil
+		if !reflect.DeepEqual(with, without) {
+			t.Errorf("%s: the two parses differ in more than the names", name)
+		}
+	}
 }
