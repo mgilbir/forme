@@ -274,6 +274,25 @@ func ParseSFNTWithin(data []byte, b *Budget) *Program {
 // into its tables, as SFNTTables or CollectionTables takes it: a face of a
 // collection, whose tables are not a font program of their own.
 func ParseSFNTTablesWithin(tables map[string][]byte, b *Budget) *Program {
+	return parseSFNTTables(tables, b, true)
+}
+
+// ParseSFNTTablesWithoutNames is ParseSFNTTablesWithin without the glyph
+// names a post table gives: GlyphNames, GlyphByName and WidthByName are nil
+// for an sfnt whose outlines are glyf, as they are for one whose post names
+// no glyphs.
+//
+// It is what shape.Load reads a font with, for the reason ParseCFFGlyphs
+// leaves out a CFF's widths. A shaper reads glyphs by index and never by name,
+// and decoding a name for every glyph of the font was half of what loading
+// one took: 55% of the time and six thousand of the seven thousand
+// allocations of DejaVu Sans's Load (#990). The names are read under no
+// budget, so leaving them out changes nothing about which fonts are read.
+func ParseSFNTTablesWithoutNames(tables map[string][]byte, b *Budget) *Program {
+	return parseSFNTTables(tables, b, false)
+}
+
+func parseSFNTTables(tables map[string][]byte, b *Budget, names bool) *Program {
 	if tables == nil {
 		return nil
 	}
@@ -304,7 +323,9 @@ func ParseSFNTTablesWithin(tables map[string][]byte, b *Budget) *Program {
 	}
 
 	// post: the glyph names, after hmtx so that WidthByName can be filled.
-	readPost(fp, tables["post"])
+	if names {
+		readPost(fp, tables["post"])
+	}
 
 	// The cmap before the glyf walk, because the two share the budget and the
 	// cmap is the one a caller cannot do without: read first, it is whole

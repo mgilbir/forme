@@ -484,7 +484,10 @@ func loadTables(data []byte, tables map[string][]byte, coords []float64) (*Face,
 	// One budget for the whole font, shared by the sfnt and CFF readers, so
 	// that what is bounded is the font and not each of its parts.
 	budget := font.NewBudget(maxFontWork)
-	prog := font.ParseSFNTTablesWithin(tables, budget)
+	// Without the glyph names, which nothing here reads: a glyph is found by
+	// its index, and decoding a name for each was half of what Load took
+	// (#990).
+	prog := font.ParseSFNTTablesWithoutNames(tables, budget)
 	if prog == nil {
 		return nil, errors.New("fonts: the font program could not be parsed")
 	}
