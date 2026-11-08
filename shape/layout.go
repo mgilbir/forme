@@ -232,7 +232,7 @@ func readFeatureVariations(t []byte, coords []float64) featureSubst {
 	if len(t) < 14 || font.Be16(t, 0) != 1 || font.Be16(t, 2) < 1 {
 		return nil
 	}
-	off := int(font.Be32(t, 10))
+	off := font.Off32(t, 10)
 	if off <= 0 || off+8 > len(t) {
 		return nil
 	}
@@ -240,7 +240,7 @@ func readFeatureVariations(t []byte, coords []float64) featureSubst {
 	if font.Be16(fv, 0) != 1 {
 		return nil
 	}
-	n := int(font.Be32(fv, 4))
+	n := font.Off32(fv, 4)
 	if n > maxVariationRecords {
 		n = maxVariationRecords
 	}
@@ -249,10 +249,10 @@ func readFeatureVariations(t []byte, coords []float64) featureSubst {
 		if rec+8 > len(fv) {
 			break
 		}
-		if !conditionSetHolds(fv, int(font.Be32(fv, rec)), coords) {
+		if !conditionSetHolds(fv, font.Off32(fv, rec), coords) {
 			continue
 		}
-		return featureTableSubstitution(fv, int(font.Be32(fv, rec+4)))
+		return featureTableSubstitution(fv, font.Off32(fv, rec+4))
 	}
 	return nil
 }
@@ -280,7 +280,7 @@ func conditionSetHolds(fv []byte, off int, coords []float64) bool {
 		if 2+4*i+4 > len(cs) {
 			return false
 		}
-		co := int(font.Be32(cs, 2+4*i))
+		co := font.Off32(cs, 2+4*i)
 		if co <= 0 || co+2 > len(cs) {
 			return false
 		}
@@ -337,7 +337,7 @@ func featureTableSubstitution(fv []byte, off int) featureSubst {
 			break
 		}
 		index := font.Be16(ts, rec)
-		ao := int(font.Be32(ts, rec+2))
+		ao := font.Off32(ts, rec+2)
 		if ao <= 0 || ao+4 > len(ts) {
 			continue
 		}
@@ -1150,7 +1150,7 @@ func subtables(lookup []byte, extensionType int, budget *int) (kind, flags, mark
 				continue
 			}
 			kind = font.Be16(sub, 2)
-			delta := int(font.Be32(sub, 4))
+			delta := font.Off32(sub, 4)
 			if delta <= 0 || delta >= len(sub) {
 				continue
 			}
@@ -2045,7 +2045,7 @@ func (l *layout) readMarkGlyphSets(gdef []byte) {
 		if rec+4 > len(sets) {
 			break
 		}
-		co := int(font.Be32(sets, rec))
+		co := font.Off32(sets, rec)
 		if co <= 0 || co >= len(sets) {
 			// Kept, so that the indices of the sets after it do not shift; a
 			// zero offset covers nothing.

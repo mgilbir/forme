@@ -95,7 +95,7 @@ func newSbixInk(tables map[string][]byte, numGlyphs, upem int) *sbixInk {
 // least that large, or failing any the largest.
 func (s *sbixInk) strikeFor(requested int) (strike, ppem int) {
 	t := s.table
-	count := int(font.Be32(t, 4))
+	count := font.Off32(t, 4)
 	if count == 0 {
 		return 0, 0
 	}
@@ -103,7 +103,7 @@ func (s *sbixInk) strikeFor(requested int) (strike, ppem int) {
 		requested = 1 << 30
 	}
 	ppemOf := func(i int) int {
-		off := int(font.Be32(t, 8+4*i))
+		off := font.Off32(t, 8+4*i)
 		if off == 0 {
 			return 0 // the null strike, whose fields read as zero
 		}
@@ -116,7 +116,7 @@ func (s *sbixInk) strikeFor(requested int) (strike, ppem int) {
 			best, bestPPEM = i, ppem
 		}
 	}
-	return int(font.Be32(t, 8+4*best)), bestPPEM
+	return font.Off32(t, 8+4*best), bestPPEM
 }
 
 // sbixSane is sbix::sanitize: a header, a version of at least one, and every

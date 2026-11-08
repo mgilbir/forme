@@ -105,7 +105,7 @@ func TestTheBottomSetStaysBalanced(t *testing.T) {
 		{"ascending", func(i int) style.Unit { return style.Unit(i) }},
 		{"descending", func(i int) style.Unit { return style.Unit(n - i) }},
 		{"all equal", func(int) style.Unit { return 42 }},
-		{"shuffled", func(i int) style.Unit { return style.Unit(i * 2654435761 % n) }},
+		{"shuffled", func(i int) style.Unit { return style.Unit(int64(i) * 2654435761 % int64(n)) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var s bottomSet

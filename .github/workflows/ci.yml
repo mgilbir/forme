@@ -1,9 +1,10 @@
 name: CI
 
-# Every push to main and every pull request. The three jobs are the repository's
+# Every push to main and every pull request. The four jobs are the repository's
 # own gate, split by what they cost: "test" is the one that has to be fast enough
 # to wait for, "conformance" fetches a hundred megabytes of other people's test
-# suites, and "race" is the same tests five times slower.
+# suites, "race" is the same tests five times slower, and "thirtytwo" is the
+# same tests where int is 32 bits.
 on:
   push:
     branches: [main]
@@ -215,3 +216,47 @@ jobs:
             testdata/css-color-4
           key: corpora-4-${{ hashFiles('Makefile') }}
       - run: make race
+
+  thirtytwo:
+    name: the unit tests where int is 32 bits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-386-${{ runner.os }}-${{ hashFiles('go.mod') }}-${{ github.sha }}
+          restore-keys: go-386-${{ runner.os }}-${{ hashFiles('go.mod') }}-
+      # A 32-bit offset in a font read as an int comes out negative where int
+      # is 32 bits, and a check that it lies inside its table passes it to a
+      # slice that panics (#989). A 64-bit run cannot see that. GOARCH=386 runs
+      # natively here; `make test-386` says why, and what it runs.
+      - name: Restore the fetched corpora
+        uses: actions/cache@v6
+        with:
+          path: |
+            testdata/wpt
+            testdata/fonts-noto
+            testdata/css-parsing-tests
+            testdata/unicode-bidi
+            testdata/unicode-grapheme
+            testdata/notocjk
+            testdata/cff-fonts
+            testdata/emoji-fonts
+            testdata/ucd
+            testdata/html
+            testdata/icu-dictionaries
+            testdata/budoux
+            testdata/hyphen
+            testdata/afm
+            testdata/brotli-source
+            testdata/agl
+            testdata/css-color-4
+          key: corpora-4-${{ hashFiles('Makefile') }}
+      - run: make test-386

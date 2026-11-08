@@ -86,6 +86,20 @@ test-corpora:
 race:
 	$(CORPUS_ENV) go test -count=1 -race -timeout $(RACE_TIMEOUT) ./...
 
+# The same suite where int is 32 bits, which is where a 32-bit offset read out
+# of a font as an int can come out negative (#989).
+#
+# On a 64-bit platform every such value fits, so a font that states an offset
+# of 2^31 is refused as lying outside its table; where int is 32 bits it read as
+# a negative number, passed the check that it lay inside, and the slice it
+# guarded panicked. Nothing on a 64-bit machine can see that, and the platforms
+# it happens on — 386, 32-bit ARM, wasm32 — are ones forme is built for. 386 runs
+# natively on the CI's amd64 runners, so this is the suite as it is, not under
+# an emulator. With every corpus, because the readers are reached by real fonts.
+.PHONY: test-386
+test-386:
+	$(CORPUS_ENV) GOARCH=386 CGO_ENABLED=0 go test -count=1 -timeout $(RACE_TIMEOUT) ./...
+
 # Every fetch in this file goes through FETCH rather than through a bare curl.
 #
 # The corpora come from a dozen hosts and one of them is always the slow one.
@@ -2047,7 +2061,7 @@ wpt-breakdown: wpt noto-fonts
 clean-wpt:
 	rm -rf $(WPT_DIR)
 
-# What test-corpora and race need, declared here at the end and not on their own
+# What test-corpora, race and test-386 need, declared here at the end and not on their own
 # rules above.
 #
 # make expands a rule's prerequisites when it reads the rule, and CORPORA names
@@ -2056,6 +2070,6 @@ clean-wpt:
 # suite with TABLE_INPUTS=required and without fetching a single table input,
 # and every table whose input is fetched failed as "not here". Declared after
 # every variable they use, they expand to all of them. cmd/makefile_test.go
-# asks make itself what these two depend on, so the order cannot quietly come
+# asks make itself what these depend on, so the order cannot quietly come
 # back.
-test-corpora race: $(CORPORA)
+test-corpora race test-386: $(CORPORA)

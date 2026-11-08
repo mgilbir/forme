@@ -90,7 +90,7 @@ func (c *cbdtInk) pngIn(gid, strike int) (data []byte, width, height int, ok boo
 	if format == 18 {
 		at = 8
 	}
-	n := int(font.Be32(m, at))
+	n := font.Off32(m, at)
 	data = m[at+4:]
 	if n < len(data) {
 		data = data[:n]
@@ -117,8 +117,8 @@ func (c *cbdtInk) metrics(gid, ppem int) (m []byte, format, ppemX, ppemY int, ok
 // CBLC, which the caller has checked is one of the table's.
 func (c *cbdtInk) metricsIn(gid, strike int) (m []byte, format, ppemX, ppemY int, ok bool) {
 	ppemX, ppemY = int(c.cblc[strike+44]), int(c.cblc[strike+45])
-	array := int(font.Be32(c.cblc, strike))
-	count := int(font.Be32(c.cblc, strike+8))
+	array := font.Off32(c.cblc, strike)
+	count := font.Off32(c.cblc, strike+8)
 	if array <= 0 || array > len(c.cblc) {
 		return nil, 0, 0, 0, false
 	}
@@ -161,12 +161,12 @@ func (c *cbdtInk) strikeFor(requested int) (int, bool) {
 // format: IndexSubtable::get_image_data for the two index formats HarfBuzz
 // reads, 1 and 3, whose offsets are four and two bytes.
 func (c *cbdtInk) imageData(array, rec, gid int) (offset, length, format int, ok bool) {
-	sub := array + int(font.Be32(c.cblc, rec+4))
+	sub := array + font.Off32(c.cblc, rec+4)
 	if sub+8 > len(c.cblc) {
 		return 0, 0, 0, false
 	}
 	index, format := font.Be16(c.cblc, sub), font.Be16(c.cblc, sub+2)
-	base := int(font.Be32(c.cblc, sub+4))
+	base := font.Off32(c.cblc, sub+4)
 	i := gid - font.Be16(c.cblc, rec)
 	var lo, hi int
 	switch index {
@@ -175,7 +175,7 @@ func (c *cbdtInk) imageData(array, rec, gid int) (offset, length, format int, ok
 		if at+8 > len(c.cblc) {
 			return 0, 0, 0, false
 		}
-		lo, hi = int(font.Be32(c.cblc, at)), int(font.Be32(c.cblc, at+4))
+		lo, hi = font.Off32(c.cblc, at), font.Off32(c.cblc, at+4)
 	case 3:
 		at := sub + 8 + 2*i
 		if at+4 > len(c.cblc) {

@@ -169,7 +169,7 @@ func readFeat(b []byte) aatFeat {
 	}
 	for i := range n {
 		rec := 12 + 12*i
-		settings, count := int(font.Be32(b, rec+4)), font.Be16(b, rec+2)
+		settings, count := font.Off32(b, rec+4), font.Be16(b, rec+2)
 		if settings > len(b) || len(b)-settings < 4*count {
 			return nil
 		}
@@ -392,7 +392,7 @@ func readLtag(b []byte) []aatLanguage {
 	if len(b) < 12 || font.Be32(b, 0) < 1 {
 		return nil
 	}
-	n := int(font.Be32(b, 8))
+	n := font.Off32(b, 8)
 	if n > (len(b)-12)/4 {
 		return nil
 	}

@@ -60,7 +60,7 @@ func trackDataFits(t []byte, at int) bool {
 		return false
 	}
 	tracks, sizes := font.Be16(t, at), font.Be16(t, at+2)
-	if sizeTable := int(font.Be32(t, at+4)); sizeTable > len(t) || len(t)-sizeTable < 4*sizes {
+	if sizeTable := font.Off32(t, at+4); sizeTable > len(t) || len(t)-sizeTable < 4*sizes {
 		return false
 	}
 	if len(t)-at-8 < 8*tracks {
@@ -131,7 +131,7 @@ func trackingAt(t []byte, at int, ptem float32) (float32, int) {
 	if n == 0 {
 		return 0, 0
 	}
-	sizes := &trackSizes{t: t, at: int(font.Be32(t, at+4)), n: font.Be16(t, at+2)}
+	sizes := &trackSizes{t: t, at: font.Off32(t, at+4), n: font.Be16(t, at+2)}
 	entry := func(i int) int { return at + 8 + 8*i }
 	trackValue := func(i int) float32 {
 		p := entry(i)

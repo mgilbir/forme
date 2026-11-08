@@ -163,6 +163,37 @@ func Be32(b []byte, off int) uint32 {
 	return binary.BigEndian.Uint32(b[off:])
 }
 
+// Off32 reads a 32-bit offset, length or count as an int, for a reader that
+// goes on to compare it with a table's length, add it to another, or slice by
+// it (#989).
+//
+// Off32(...) is that on a platform whose int is 64 bits, and Off32 is
+// exactly it there. Where int is 32 bits, a value of 2^31 or more converts to a
+// negative number, which a check that it lies inside the table passes and the
+// slice it guards then panics on; and an offset short of that, added to a
+// length, can wrap the same way. So there a value past MaxProgram32 is read
+// as maxOff32: past every table of a font that can be read on that platform
+// (SFNTTables refuses a larger one), so it is refused as lying outside it, as
+// the value it stands for is on a 64-bit platform, and small enough that a few
+// such values summed stay positive.
+func Off32(b []byte, off int) int {
+	v := Be32(b, off)
+	if strconv.IntSize == 32 && v > maxOff32 {
+		return maxOff32
+	}
+	return int(v)
+}
+
+const (
+	// MaxProgram32 is the largest font program read where int is 32 bits:
+	// 256 MiB, past any font published. See Off32.
+	MaxProgram32 = 1 << 28
+	// maxOff32 is what Off32 reads a larger value as there: twice
+	// MaxProgram32, and short enough of 2^31 that three of it and a table's
+	// length sum to an int.
+	maxOff32 = 1 << 29
+)
+
 // MarkComposite, given one glyph's glyf bytes, marks every glyph index it
 // references as a component (when the glyph is composite, numberOfContours == -1).
 //
@@ -2051,11 +2082,15 @@ func parseLeadingInt(s string) (int, bool) {
 		if c < '0' || c > '9' {
 			break
 		}
-		v = v*10 + int(c-'0')
-		n++
-		if v > math.MaxInt32 {
+		// Refused before it is multiplied, not after: where int is 32 bits
+		// the product past MaxInt32 has already wrapped negative, and a check
+		// after it passed a length of 2^31 that the slice then panicked on.
+		d := int(c - '0')
+		if v > (math.MaxInt32-d)/10 {
 			return 0, false
 		}
+		v = v*10 + d
+		n++
 	}
 	return v, n > 0
 }
@@ -2213,6 +2248,11 @@ func sfntTablesAt(data []byte, at int) map[string][]byte {
 	if at < 0 || at > len(data) || len(data)-at < 12 {
 		return nil
 	}
+	// Where int is 32 bits, a font larger than MaxProgram32 is refused: the
+	// offsets its tables are read by would not all fit one (see Off32).
+	if strconv.IntSize == 32 && len(data) > MaxProgram32 {
+		return nil
+	}
 	switch Be32(data, at) {
 	case 0x00010000, 0x74727565, 0x4F54544F: // 1.0, 'true', 'OTTO'
 	default:
@@ -2265,7 +2305,7 @@ func CollectionOffsets(data []byte) []int {
 	}
 	offsets := make([]int, n)
 	for i := range offsets {
-		offsets[i] = int(Be32(data, 12+4*i))
+		offsets[i] = Off32(data, 12+4*i)
 	}
 	return offsets
 }
@@ -2296,5 +2336,5 @@ func CollectionTables(data []byte, index int) map[string][]byte {
 	if index < 0 || index >= collectionSize(data) {
 		return nil
 	}
-	return sfntTablesAt(data, int(Be32(data, 12+4*index)))
+	return sfntTablesAt(data, Off32(data, 12+4*index))
 }

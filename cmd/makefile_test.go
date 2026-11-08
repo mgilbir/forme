@@ -50,8 +50,8 @@ func makeValue(t *testing.T, v string, overrides ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// TestTheCorpusTargetsFetchEveryCorpus asks make what test-corpora and race
-// depend on, and requires every corpus CORPORA names to be among it.
+// TestTheCorpusTargetsFetchEveryCorpus asks make what test-corpora, race and
+// test-386 depend on, and requires every corpus CORPORA names to be among it.
 //
 // make expands a rule's prerequisites when it reads the rule, so a rule written
 // above the variables it names depends on nothing they will later hold. That is
@@ -75,7 +75,7 @@ func TestTheCorpusTargetsFetchEveryCorpus(t *testing.T) {
 	// nothing: it answers whether the target is up to date, which it is not, so
 	// the exit status is ignored and only the database is read.
 	out, _ := makeCommand("-p", "-q", "test-corpora").Output()
-	deps := map[string]map[string]bool{"test-corpora": {}, "race": {}}
+	deps := map[string]map[string]bool{"test-corpora": {}, "race": {}, "test-386": {}}
 	for _, line := range strings.Split(string(out), "\n") {
 		name, rest, ok := strings.Cut(line, ":")
 		if _, want := deps[name]; !ok || !want || strings.HasPrefix(rest, "=") {

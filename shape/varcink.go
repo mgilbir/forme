@@ -107,7 +107,7 @@ func varcFaceWork(tables map[string][]byte) int64 {
 func (v *varcFace) glyfEntry(gid int) []byte {
 	var start, end int
 	if v.longLoca {
-		start, end = int(font.Be32(v.loca, 4*gid)), int(font.Be32(v.loca, 4*gid+4))
+		start, end = font.Off32(v.loca, 4*gid), font.Off32(v.loca, 4*gid+4)
 	} else {
 		start, end = 2*font.Be16(v.loca, 2*gid), 2*font.Be16(v.loca, 2*gid+2)
 	}

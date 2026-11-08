@@ -34,14 +34,17 @@ func (f *Face) NamedInstance(match func(name string) bool) (coords map[string]fl
 	if err != nil {
 		return nil, false
 	}
-	at := font.Be16(fvar, 4) + font.Be16(fvar, 8)*font.Be16(fvar, 10)
+	// In int64: two sixteen-bit fields multiplied reach 2^32, which wraps
+	// negative where int is 32 bits and passes the check below (#989).
+	at64 := int64(font.Be16(fvar, 4)) + int64(font.Be16(fvar, 8))*int64(font.Be16(fvar, 10))
 	count := font.Be16(fvar, 12)
 	size := font.Be16(fvar, 14)
 	// A record is a subfamily name ID, flags, and a coordinate per axis, and
 	// may carry a PostScript name ID after them.
-	if size < 4+4*len(axes) || at+size*count > len(fvar) {
+	if size < 4+4*len(axes) || at64+int64(size)*int64(count) > int64(len(fvar)) {
 		return nil, false
 	}
+	at := int(at64) // inside fvar, so it fits
 	names := nameStrings(tables["name"])
 	// Each name ID is judged once, however many records name it, so the work
 	// is the name table's size plus fvar's and not their product: a hostile

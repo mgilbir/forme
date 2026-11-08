@@ -107,12 +107,12 @@ func readKerx(tables map[string][]byte, numGlyphs int) *kerxTable {
 	}
 	k := &kerxTable{numGlyphs: numGlyphs, ankr: readAnkr(tables["ankr"])}
 	at := 8
-	count := int(font.Be32(b, 4))
+	count := font.Off32(b, 4)
 	for i := range count {
 		if len(b)-at < kerxHeader {
 			return nil
 		}
-		n := int(font.Be32(b, at))
+		n := font.Off32(b, at)
 		if n < kerxHeader || n > len(b)-at {
 			return nil
 		}
@@ -127,7 +127,7 @@ func readKerx(tables map[string][]byte, numGlyphs int) *kerxTable {
 			t:          b[at:end:end],
 			format:     int(coverage & 0xFF),
 			coverage:   coverage,
-			tupleCount: int(font.Be32(b, at+8)),
+			tupleCount: font.Off32(b, at+8),
 		}
 		if s.format == 1 || s.format == 4 {
 			if len(s.t) < kerxHeader+20 {
@@ -159,7 +159,7 @@ func readKerx(tables map[string][]byte, numGlyphs int) *kerxTable {
 
 // readAnkr is an ankr HarfBuzz's sanitizer admits, and nil for any other.
 func readAnkr(b []byte) []byte {
-	if len(b) < 12 || font.Be16(b, 0) != 0 || int(font.Be32(b, 8)) > len(b) {
+	if len(b) < 12 || font.Be16(b, 0) != 0 || font.Off32(b, 8) > len(b) {
 		return nil
 	}
 	return b
@@ -171,12 +171,12 @@ func ankrAnchor(t []byte, gid, i, numGlyphs int) (x, y int) {
 	if t == nil {
 		return 0, 0
 	}
-	off, ok := aatLookup(t, int(font.Be32(t, 4)), gid, numGlyphs)
+	off, ok := aatLookup(t, font.Off32(t, 4), gid, numGlyphs)
 	if !ok {
 		return 0, 0
 	}
-	a := int(font.Be32(t, 8)) + off
-	if a < 0 || len(t)-a < 4 || i < 0 || i >= int(font.Be32(t, a)) {
+	a := font.Off32(t, 8) + off
+	if a < 0 || len(t)-a < 4 || i < 0 || i >= font.Off32(t, a) {
 		return 0, 0
 	}
 	p := a + 4 + 4*i
@@ -190,8 +190,8 @@ func ankrAnchor(t []byte, gid, i, numGlyphs int) (x, y int) {
 func (s *kerxSubtable) machine(numGlyphs int) aatMachine {
 	t := s.t[kerxHeader:]
 	return aatMachine{
-		t: t, extended: true, size: 4, nClasses: int(font.Be32(t, 0)),
-		classTable: int(font.Be32(t, 4)), stateArray: int(font.Be32(t, 8)), entryTable: int(font.Be32(t, 12)),
+		t: t, extended: true, size: 4, nClasses: font.Off32(t, 0),
+		classTable: font.Off32(t, 4), stateArray: font.Off32(t, 8), entryTable: font.Off32(t, 12),
 		entrySize: 6, numGlyphs: numGlyphs,
 	}
 }
@@ -274,16 +274,16 @@ func (s *kerxSubtable) pairSides(left, right, numGlyphs int) bool {
 	case 0:
 		return s.lefts[left] && s.rights[right]
 	case 2:
-		_, l := aatValue(t, int(font.Be32(t, 16)), left, numGlyphs, 2, false)
-		_, r := aatValue(t, int(font.Be32(t, 20)), right, numGlyphs, 2, false)
+		_, l := aatValue(t, font.Off32(t, 16), left, numGlyphs, 2, false)
+		_, r := aatValue(t, font.Off32(t, 20), right, numGlyphs, 2, false)
 		return l && r
 	case 6:
 		size := 2
 		if font.Be32(t, 12)&1 != 0 {
 			size = 4
 		}
-		_, l := aatValue(t, int(font.Be32(t, 20)), left, numGlyphs, size, true)
-		_, r := aatValue(t, int(font.Be32(t, 24)), right, numGlyphs, size, true)
+		_, l := aatValue(t, font.Off32(t, 20), left, numGlyphs, size, true)
+		_, r := aatValue(t, font.Off32(t, 24), right, numGlyphs, size, true)
 		return l && r
 	}
 	return false
@@ -306,7 +306,7 @@ func (s *kerxSubtable) pairCount() int {
 	if len(s.t) < kerxHeader+16 {
 		return 0
 	}
-	n := int(font.Be32(s.t, kerxHeader))
+	n := font.Off32(s.t, kerxHeader)
 	if room := (len(s.t) - kerxHeader - 16) / 6; n > room {
 		n = room
 	}
@@ -351,9 +351,9 @@ func (s *kerxSubtable) kerning(left, right, numGlyphs int) int {
 		}
 		return s.tuple(signed16(font.Be16(t, kerxHeader+16+6*i+4)), 0)
 	case 2:
-		l, _ := aatValue(t, int(font.Be32(t, 16)), left, numGlyphs, 2, false)
-		r, _ := aatValue(t, int(font.Be32(t, 20)), right, numGlyphs, 2, false)
-		p := int(font.Be32(t, 24)) + 2*(l+r)
+		l, _ := aatValue(t, font.Off32(t, 16), left, numGlyphs, 2, false)
+		r, _ := aatValue(t, font.Off32(t, 20), right, numGlyphs, 2, false)
+		p := font.Off32(t, 24) + 2*(l+r)
 		if p < 0 || len(t)-p < 2 {
 			return 0
 		}
@@ -364,10 +364,10 @@ func (s *kerxSubtable) kerning(left, right, numGlyphs int) int {
 		if long {
 			size = 4
 		}
-		l, _ := aatValue(t, int(font.Be32(t, 20)), left, numGlyphs, size, true)
-		r, _ := aatValue(t, int(font.Be32(t, 24)), right, numGlyphs, size, true)
-		p := int(font.Be32(t, 28)) + size*(l+r)
-		vector := int(font.Be32(t, 32))
+		l, _ := aatValue(t, font.Off32(t, 20), left, numGlyphs, size, true)
+		r, _ := aatValue(t, font.Off32(t, 24), right, numGlyphs, size, true)
+		p := font.Off32(t, 28) + size*(l+r)
+		vector := font.Off32(t, 32)
 		if p < 0 || len(t)-p < size {
 			return 0
 		}
@@ -399,14 +399,14 @@ func (s *kerxSubtable) startsAt(gid, numGlyphs int) bool {
 	case 0:
 		return s.lefts[gid]
 	case 2:
-		_, ok := aatValue(s.t, int(font.Be32(s.t, 16)), gid, numGlyphs, 2, false)
+		_, ok := aatValue(s.t, font.Off32(s.t, 16), gid, numGlyphs, 2, false)
 		return ok
 	case 6:
 		size := 2
 		if font.Be32(s.t, 12)&1 != 0 {
 			size = 4
 		}
-		_, ok := aatValue(s.t, int(font.Be32(s.t, 20)), gid, numGlyphs, size, true)
+		_, ok := aatValue(s.t, font.Off32(s.t, 20), gid, numGlyphs, size, true)
 		return ok
 	case 1, 4:
 		m := s.machine(numGlyphs)
@@ -557,7 +557,7 @@ func (sh shaper) applyKerx(buf []Glyph, pairs bool) bool {
 		case 1:
 			if pairs || cross {
 				m := s.machine(k.numGlyphs)
-				t := &kerxFormat1{sh: sh, s: s, m: m, actions: int(font.Be32(m.t, 16)), cross: cross, pairs: pairs, run: run}
+				t := &kerxFormat1{sh: sh, s: s, m: m, actions: font.Off32(m.t, 16), cross: cross, pairs: pairs, run: run}
 				sh.driveKerx(buf, m, t, aat)
 			}
 		case 4:

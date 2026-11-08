@@ -196,7 +196,7 @@ func (v *verticalTables) glyfBytes(gid int) ([]byte, bool) {
 		if 4*gid+8 > len(v.loca) {
 			return nil, false
 		}
-		start, end = int(font.Be32(v.loca, 4*gid)), int(font.Be32(v.loca, 4*gid+4))
+		start, end = font.Off32(v.loca, 4*gid), font.Off32(v.loca, 4*gid+4)
 	} else {
 		if 2*gid+4 > len(v.loca) {
 			return nil, false
